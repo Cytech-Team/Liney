@@ -129,23 +129,27 @@ fn notify_message(
                     .summary(&title)
                     .body(&body)
                     .appname("Liney")
-                    // KDE emits ActionInvoked for the default action. Keep the
-                    // handle alive until the user acts; otherwise the D-Bus
-                    // connection is dropped when the toast expires.
-                    .timeout(notify_rust::Timeout::Never)
+                    // Auto-dismiss so toasts don't stack forever; a short enough
+                    // window to read but long enough to be clickable. Once the
+                    // toast closes, __closed ends the wait and frees the thread.
+                    .timeout(notify_rust::Timeout::Milliseconds(8_000))
                     .action("default", "เปิดใน Liney");
                 if sound {
                     notification.sound_name("message-new-instant");
                 }
+                // The thread sleeps inside wait_for_action until the toast is
+                // clicked or expires; app_for_thread keeps the D-Bus connection
+                // alive so a click can still reach the window on the KDE daemon.
+                let app_for_thread = app.clone();
                 let Ok(handle) = notification.show() else { return };
                 handle.wait_for_action(move |action| {
                     if action == "__closed" { return; }
                     // Deliver the chat target application-wide first. The main
                     // window can have a different label in future builds, but
                     // a notification action must never be discarded for that.
-                    let _ = app.emit("liney://notification-open", target.clone());
+                    let _ = app_for_thread.emit("liney://notification-open", target.clone());
                     eprintln!("Liney notification action={action} chat={}", target.chat_id);
-                    if let Some(window) = app.get_webview_window("main") {
+                    if let Some(window) = app_for_thread.get_webview_window("main") {
                         let _ = window.show();
                         let _ = window.set_focus();
                     }
