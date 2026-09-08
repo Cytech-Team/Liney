@@ -1182,7 +1182,7 @@ function MainApp() {
     }
   }
 
-  async function loadLiveFriends() {
+  async function loadLiveFriends(allowRetry = true) {
     const requestGeneration = ++liveFriendsLoadGenerationRef.current;
     try {
       const result = await lineyEngine.request<LiveChatResult[]>("friends.list", {}, 60_000);
@@ -1210,7 +1210,15 @@ function MainApp() {
       setLiveFriends(next);
     } catch (error) {
       if (liveFriendsLoadGenerationRef.current !== requestGeneration) return;
-      setAuthError(`โหลดรายชื่อเพื่อนไม่สำเร็จ: ${error instanceof Error ? error.message : String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      // The sidecar may still be restoring the session right after the app
+      // flipped to the authenticated view. Retry a couple times once auth is
+      // actually confirmed, instead of hard-failing on a transient race.
+      if (allowRetry && /not authenticated/i.test(message)) {
+        window.setTimeout(() => { if (liveFriendsLoadGenerationRef.current === requestGeneration) void loadLiveFriends(false); }, 1_200);
+        return;
+      }
+      setAuthError(`โหลดรายชื่อเพื่อนไม่สำเร็จ: ${message}`);
     }
   }
 
