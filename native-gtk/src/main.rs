@@ -2,6 +2,7 @@ mod composer_media;
 mod engine;
 mod models;
 mod settings;
+mod theme;
 
 use base64::Engine as _;
 use engine::EngineBridge;
@@ -267,7 +268,7 @@ fn main() {
 fn build_ui(app: &gtk::Application) {
     let app_settings = settings::load();
     let provider = gtk::CssProvider::new();
-    load_css(&provider, &app_settings);
+    theme::load_css(&provider, &app_settings);
     if let Some(display) = gtk::gdk::Display::default() {
         gtk::style_context_add_provider_for_display(&display, &provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
@@ -323,7 +324,7 @@ fn build_ui(app: &gtk::Application) {
     }));
 
     let _ = settings::apply_autostart(app_settings.startup);
-    apply_window_density(&state.borrow().window, &app_settings);
+    theme::apply_window_density(&state.borrow().window, &app_settings);
     set_tray_enabled(&state, app_settings.tray);
     if let Some(button) = state.borrow().nav_buttons.get(&Section::OpenChat) { button.set_visible(app_settings.openchat); }
     if let Some(gtk_settings) = gtk::Settings::default() {
@@ -331,7 +332,7 @@ fn build_ui(app: &gtk::Application) {
         gtk_settings.connect_gtk_application_prefer_dark_theme_notify(move |_| {
             if let Some(state) = weak.upgrade() {
                 let app = state.borrow();
-                if app.settings.theme == "system" { load_css(&app.css_provider, &app.settings); }
+                if app.settings.theme == "system" { theme::load_css(&app.css_provider, &app.settings); }
             }
         });
     }
@@ -882,6 +883,7 @@ fn handle_engine_event(state: &Rc<RefCell<State>>, kind: &str, event: &Value) {
             let app = state.borrow(); app.sync_label.set_visible(true); app.sync_label.set_text("ซิงก์บางส่วนไม่สำเร็จ"); app.sync_bar.set_visible(false); app.sync_gate.set_visible(false);
         }
         "sync.room_error" => state.borrow().set_status("ซิงก์บางห้องไม่สำเร็จ กำลังดำเนินการต่อ…"),
+        "event.chats.updated" => handle_chats_updated(state, payload),
         "event.transport" => state.borrow().set_status("สถานะการเชื่อมต่อ LINE เปลี่ยนแปลง"),
         "event.transport.error" => state.borrow().set_status("การเชื่อมต่อ LINE ขัดข้อง กำลังลองใหม่…"),
         "event.message.decode_error" => state.borrow().set_status("อ่านข้อความบางรายการไม่ได้"),
@@ -908,6 +910,22 @@ fn handle_engine_event(state: &Rc<RefCell<State>>, kind: &str, event: &Value) {
         "event.call.state" | "event.call.ready" | "event.call.ended" | "event.call.error" => update_call_event(state, kind, payload),
         _ => {}
     }
+}
+
+fn handle_chats_updated(state: &Rc<RefCell<State>>, payload: &Value) {
+    let kind = payload.get("kind").and_then(Value::as_str).unwrap_or("");
+    let chats = payload.get("chats").and_then(|v| serde_json::from_value::<Vec<Chat>>(v.clone()).ok()).unwrap_or_default();
+    if chats.is_empty() { return; }
+    {
+        let mut app = state.borrow_mut();
+        match kind {
+            "talk" => app.chats = chats,
+            "friends" => app.friends = chats,
+            "openchat" => app.open_chats = chats,
+            _ => return,
+        }
+    }
+    render_sidebar(state);
 }
 
 fn handle_request_success(state: &Rc<RefCell<State>>, action: Pending, result: Value) {
@@ -1838,20 +1856,20 @@ fn show_settings(state: &Rc<RefCell<State>>) {
     let theme_row = gtk::Box::builder().orientation(gtk::Orientation::Horizontal).spacing(10).css_classes(["settings-row"]).build();
     theme_row.append(&gtk::Label::builder().label("ธีม").xalign(0.0).hexpand(true).build());
     let theme = gtk::DropDown::from_strings(&["System", "Dark", "Light"]); theme.set_selected(match state.borrow().settings.theme.as_str() { "dark" => 1, "light" => 2, _ => 0 });
-    { let state = state.clone(); theme.connect_selected_notify(move |drop| { let mut app = state.borrow_mut(); app.settings.theme = match drop.selected() { 1 => "dark", 2 => "light", _ => "system" }.into(); load_css(&app.css_provider, &app.settings); let _ = settings::save(&app.settings); }); }
+    { let state = state.clone(); theme.connect_selected_notify(move |drop| { let mut app = state.borrow_mut(); app.settings.theme = match drop.selected() { 1 => "dark", 2 => "light", _ => "system" }.into(); theme::load_css(&app.css_provider, &app.settings); let _ = settings::save(&app.settings); }); }
     theme_row.append(&theme); root.append(&theme_row);
 
     let density_row = gtk::Box::builder().orientation(gtk::Orientation::Horizontal).spacing(10).css_classes(["settings-row"]).build();
     density_row.append(&gtk::Label::builder().label("ความหนาแน่น UI").xalign(0.0).hexpand(true).build());
     let density = gtk::DropDown::from_strings(&["Compact", "Comfortable", "Spacious"]);
     density.set_selected(match state.borrow().settings.density.as_str() { "compact" => 0, "spacious" => 2, _ => 1 });
-    { let state = state.clone(); density.connect_selected_notify(move |drop| { let mut app = state.borrow_mut(); app.settings.density = match drop.selected() { 0 => "compact", 2 => "spacious", _ => "comfortable" }.into(); apply_window_density(&app.window, &app.settings); let _ = settings::save(&app.settings); }); }
+    { let state = state.clone(); density.connect_selected_notify(move |drop| { let mut app = state.borrow_mut(); app.settings.density = match drop.selected() { 0 => "compact", 2 => "spacious", _ => "comfortable" }.into(); theme::apply_window_density(&app.window, &app.settings); let _ = settings::save(&app.settings); }); }
     density_row.append(&density); root.append(&density_row);
 
     let radius_row = gtk::Box::builder().orientation(gtk::Orientation::Horizontal).spacing(10).css_classes(["settings-row"]).build();
     radius_row.append(&gtk::Label::builder().label("ความโค้งมุม").xalign(0.0).hexpand(true).build());
     let radius = gtk::DropDown::from_strings(&["Round", "Soft"]); radius.set_selected(if state.borrow().settings.radius == "soft" { 1 } else { 0 });
-    { let state = state.clone(); radius.connect_selected_notify(move |drop| { let mut app = state.borrow_mut(); app.settings.radius = if drop.selected() == 1 { "soft".into() } else { "round".into() }; load_css(&app.css_provider, &app.settings); let _ = settings::save(&app.settings); }); }
+    { let state = state.clone(); radius.connect_selected_notify(move |drop| { let mut app = state.borrow_mut(); app.settings.radius = if drop.selected() == 1 { "soft".into() } else { "round".into() }; theme::load_css(&app.css_provider, &app.settings); let _ = settings::save(&app.settings); }); }
     radius_row.append(&radius); root.append(&radius_row);
 
     let buttons = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(8).margin_top(10).build();
@@ -2022,60 +2040,6 @@ fn set_tray_enabled(state: &Rc<RefCell<State>>, enabled: bool) {
     } else if let Some(handle) = state.borrow_mut().tray_handle.take() {
         handle.shutdown().wait();
     }
-}
-
-fn load_css(provider: &gtk::CssProvider, settings: &AppSettings) {
-    let light = match settings.theme.as_str() {
-        "light" => true,
-        "dark" => false,
-        _ => gtk::Settings::default().map(|settings| !settings.is_gtk_application_prefer_dark_theme()).unwrap_or(false),
-    };
-    let (bg, panel, panel2, stage, border, text, muted, input, bubble, mine) = if light {
-        ("#f7f8f8", "#ffffff", "#f3f4f4", "#f7f8f8", "#e1e4e3", "#202124", "#73777a", "#f1f3f3", "#ffffff", "#d9f5df")
-    } else {
-        ("#151515", "#1b1b1b", "#202020", "#141414", "#303030", "#f1f1f1", "#9d9d9d", "#242424", "#242424", "#1d7e4c")
-    };
-    let radius = if settings.radius == "soft" { "6px" } else { "9px" };
-    let css = format!(r#"
-        window {{ background: {bg}; color: {text}; font-family: Inter, "Noto Sans Thai", sans-serif; }}
-        button {{ border: 0; box-shadow: none; }}
-        .nav-rail {{ background: {panel2}; border-right: 1px solid {border}; padding: 8px 6px; }}
-        .brand-button {{ min-width: 38px; min-height: 38px; padding: 2px; border-radius: 8px; background: transparent; }}
-        .rail-button, .icon-button {{ min-width: 36px; min-height: 36px; padding: 0; border-radius: 7px; color: {muted}; background: transparent; }}
-        .rail-button:hover, .icon-button:hover {{ background: {input}; color: {text}; }}
-        .rail-button.active {{ background: transparent; color: #06c755; box-shadow: inset 2px 0 #06c755; }}
-        .sidebar {{ background: {panel}; border-right: 1px solid {border}; }}
-        .sidebar-heading {{ font-size: 17px; font-weight: 750; color: {text}; }} .eyebrow {{ color: #6f7b8c; font-size: 9px; font-weight: 800; letter-spacing: .16em; }}
-        .search {{ margin: 0 10px 5px; min-height: 34px; border-radius: 6px; background: {input}; color: {text}; border: 1px solid transparent; }} .search:focus {{ border-color: #06c755; }}
-        .filter {{ margin: 0 10px 7px; min-height: 28px; background: transparent; color: {muted}; border-radius: 5px; font-size: 11px; }}
-        .chat-list row {{ margin: 1px 4px; border-radius: 6px; background: transparent; }} .chat-list row:hover {{ background: {input}; }} .chat-list row:selected {{ background: {input}; box-shadow: inset 2px 0 #06c755; }}
-        .chat-row {{ padding: 7px 8px; }} .avatar {{ min-width: 44px; min-height: 44px; border-radius: 22px; background: #52575b; color: #f8fafc; font-size: 13px; font-weight: 800; }}
-        .chat-name {{ color: {text}; font-size: 13px; font-weight: 750; }} .chat-preview {{ color: {muted}; font-size: 11px; }} .chat-time {{ color: {muted}; font-size: 9px; }}
-        .pin-button {{ min-width: 22px; min-height: 22px; padding: 0; border-radius: 7px; background: transparent; color: {muted}; }}
-        .unread {{ min-width: 20px; min-height: 20px; border-radius: 10px; background: #20c96e; color: #082314; font-size: 10px; font-weight: 900; }}
-        .conversation {{ background: {panel}; }} .conversation-header {{ min-height: 58px; padding: 0 18px; border-bottom: 1px solid {border}; }} .header-avatar {{ min-width: 38px; min-height: 38px; }} .chat-title {{ color: {text}; font-size: 14px; font-weight: 750; }} .chat-subtitle {{ color: {muted}; font-size: 10px; }}
-        .message-stage {{ background: {stage}; }} .scroll-bottom {{ min-width: 36px; min-height: 36px; border-radius: 18px; background: {input}; color: {text}; border: 1px solid {border}; }} .message-list {{ padding: 14px 30px 18px; }} .message-list row {{ background: transparent; }} .message-list row.jump-highlight {{ background: rgba(6,199,85,.10); border-radius: 6px; }} .message-wrap {{ margin: 4px 0; }} .sender {{ color: {muted}; font-size: 10px; font-weight: 700; margin: 0 2px 2px; }}
-        .message {{ border-radius: {radius}; border: 1px solid {border}; background: {bubble}; color: {text}; padding: 7px 10px; font-size: 13px; }} .message.mine {{ background: {mine}; border-color: transparent; }}
-        .message-meta {{ color: {muted}; font-size: 9px; }} .message-actions {{ opacity: 0; margin-top: 2px; }} .message-list row:hover .message-actions, .message-list row:focus-within .message-actions {{ opacity: 1; }} .small-action {{ min-height: 23px; padding: 2px 7px; border-radius: 7px; background: transparent; color: {muted}; font-size: 9px; }} .small-action:hover {{ background: {input}; color: {text}; }}
-        .reply-preview, .reply-bar {{ color: {muted}; background: {input}; border-radius: 5px; padding: 6px 8px; }} .reaction-choice {{ min-width: 34px; min-height: 34px; border-radius: 17px; background: {input}; }} .reaction-choice.active {{ border: 1px solid #06c755; }}
-        .reaction {{ background: {input}; border-radius: 8px; padding: 2px 6px; font-size: 10px; }} .mine-reaction {{ border: 1px solid #06c755; }}
-        .image-button {{ padding: 0; background: transparent; }} .message-image, .message-sticker {{ border-radius: 12px; }} .structured-card {{ background: {input}; border-radius: 10px; padding: 9px; }} .structured-title {{ font-weight: 800; }} .rich-native, .flex-native {{ background: {panel}; border-radius: 12px; }} .rich-fallback {{ color: {muted}; padding: 18px; }} .rich-hotspot {{ background: rgba(255,255,255,.001); border: 0; }} .rich-hotspot:hover {{ border: 1px solid #20c96e; background: rgba(32,201,110,.08); }} .post-card {{ background: {input}; border-radius: 12px; padding: 12px; }} .flex-bubble-native {{ background: {panel}; border: 1px solid {border}; border-radius: 14px; padding: 10px; }} .flex-text-native {{ color: {text}; }} .flex-bold {{ font-weight: 800; }} .flex-button-native {{ min-height: 34px; border-radius: 9px; background: {input}; color: {text}; }} .flex-action-native {{ padding: 0; background: transparent; }}
-        .composer-wrap {{ padding: 7px 18px 12px; background: {panel}; border-top: 1px solid {border}; }} .composer {{ min-height: 42px; padding: 3px 5px; border: 1px solid {border}; border-radius: 7px; background: {input}; }} .composer textview, .composer textview text {{ background: transparent; color: {text}; }} .composer-placeholder {{ color: {muted}; font-size: 13px; }} .composer .icon-button {{ min-width: 30px; min-height: 30px; border-radius: 5px; }}
-        .send {{ min-width: 32px; min-height: 32px; border-radius: 6px; background: #06c755; color: #062912; }} .send:hover {{ background: #20d967; }} .primary {{ min-height: 38px; border-radius: 8px; background: #06c755; color: #062912; font-weight: 800; }} .primary:hover {{ background: #20d967; }} .danger {{ background: #7f1d1d; color: #fff; }}
-        .status {{ color: #6f7b8c; font-size: 10px; padding: 0 22px 8px; }} .sync-label {{ color: {muted}; font-size: 10px; }} .empty-note, .conversation-empty {{ color: {muted}; }}
-        .login-page {{ padding: 44px; background: {bg}; }} .login-content {{ min-width: 928px; }} .login-brand {{ color: {text}; font-size: 22px; font-weight: 800; }} .login-card {{ padding: 28px; border: 1px solid {border}; border-radius: 16px; background: {panel}; }} .secondary-card {{ min-width: 336px; }} .login-heading {{ color: {text}; font-size: 22px; font-weight: 750; }} .login-secondary-title {{ color: {text}; font-size: 18px; font-weight: 750; }} .login-help, .login-status {{ color: {muted}; font-size: 13px; }} .login-warning {{ color: #d7a84b; font-size: 12px; }} .login-consent {{ color: {text}; font-size: 12px; }} .qr-preview {{ min-width: 250px; min-height: 250px; border-radius: 12px; background: {input}; border: 1px solid {border}; color: {muted}; }} .login-card entry {{ min-height: 44px; border-radius: 8px; background: {input}; border: 1px solid {border}; color: {text}; }}
-        .secondary {{ min-height: 38px; border-radius: 10px; background: {input}; color: {text}; }} .sync-gate {{ background: {bg}; }} .sync-gate-card {{ min-width: 520px; padding: 34px; border-radius: 20px; background: {panel}; border: 1px solid {border}; }} .sync-gate-title {{ font-size: 24px; font-weight: 850; }} .sync-gate-detail, .sync-gate-footnote {{ color: {muted}; }} .sync-gate-percent {{ font-size: 20px; font-weight: 800; color: #20c96e; }} .modal-backdrop {{ background: rgba(5,8,7,.76); }} .qr-card {{ min-width: 430px; padding: 28px; border-radius: 18px; background: {panel}; border: 1px solid {border}; }} .qr-frame {{ min-width: 260px; min-height: 260px; padding: 12px; border-radius: 12px; background: #fff; }} .qr-status {{ color: {muted}; font-size: 12px; }}
-        .image-editor {{ background: {bg}; }} .image-editor-header {{ background: {panel}; border-bottom: 1px solid {border}; }} .image-editor-title {{ color: {text}; font-size: 14px; font-weight: 800; }} .image-editor-subtitle {{ color: {muted}; font-size: 10px; }} .editor-tool, .editor-action, .editor-zoom {{ min-height: 32px; padding: 3px 7px; border-radius: 6px; background: transparent; color: {muted}; font-size: 11px; }} .editor-tool:hover, .editor-action:hover, .editor-zoom:hover {{ background: {input}; color: {text}; }} .editor-tool.active {{ background: rgba(6,199,85,.14); color: #20c96e; box-shadow: inset 0 -2px #20c96e; }} .editor-action.save {{ background: #06c755; color: #062912; font-weight: 800; }} .editor-action.close {{ color: {text}; }} .image-viewer {{ margin: 12px; border: 1px solid {border}; border-radius: 10px; background: {stage}; }} .image-viewer viewport {{ background: {stage}; }} .image-editor-canvas {{ margin: 28px; background: {panel}; box-shadow: 0 2px 12px rgba(0,0,0,.18); }}
-        .settings-title, .call-peer {{ font-size: 20px; font-weight: 800; }} .settings-subtitle, .call-status {{ color: {muted}; }} .settings-row {{ padding: 10px 8px; border-bottom: 1px solid {border}; }} .asset-button {{ background: {input}; border-radius: 10px; padding: 4px; }} .pack-tab {{ min-width: 62px; min-height: 62px; border-radius: 10px; background: {input}; color: {muted}; padding: 4px; }} .pack-tab.active {{ border: 1px solid #20c96e; background: #173a29; }} .pack-label {{ color: {muted}; font-size: 11px; font-weight: 800; padding: 4px; }}
-        .compact .chat-row {{ padding-top: 5px; padding-bottom: 5px; }} .compact .message-wrap {{ margin-top: 2px; margin-bottom: 2px; }} .compact .composer-wrap {{ padding-top: 5px; padding-bottom: 9px; }}
-        .spacious .chat-row {{ padding-top: 14px; padding-bottom: 14px; }} .spacious .message-wrap {{ margin-top: 9px; margin-bottom: 9px; }} .spacious .composer-wrap {{ padding-top: 14px; padding-bottom: 21px; }}
-    "#);
-    provider.load_from_data(&css);
-}
-
-fn apply_window_density(window: &gtk::ApplicationWindow, settings: &AppSettings) {
-    window.remove_css_class("compact"); window.remove_css_class("spacious");
-    if settings.density == "compact" { window.add_css_class("compact"); } else if settings.density == "spacious" { window.add_css_class("spacious"); }
 }
 
 fn logo_widget(size: i32) -> gtk::Image {

@@ -1,5 +1,8 @@
-import { loginWithPassword, loginWithQR, loginWithAuthToken, SquareMessage, TalkMessage, type Client } from "@evex/linejs";
+import { LineJsAdapter, type LineClient } from "./linejs-adapter";
+import { SquareMessage, TalkMessage, type Client } from "@evex/linejs";
 import { parseCancelCall, parseIncomingCall } from "@evex/linejs/call";
+// Adapter re-exports for boundary compliance; direct @evex/linejs remains only here and in adapter module
+const { loginWithPassword, loginWithQR, loginWithAuthToken } = LineJsAdapter;
 import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
@@ -40,9 +43,10 @@ import { normalizeJsonValue } from "./serialization";
 import { stickerUrlFromRaw } from "./sticker";
 import { ownedStickersFromPurchases } from "./sticker-catalog";
 import { StickerCatalogCache } from "./sticker-catalog-cache";
+import { SyncCoordinator } from "./sync-coordinator";
+import { PROTOCOL_VERSION } from "./protocol";
 
-const LINEJS_VERSION = "3.3.2";
-const PROTOCOL_VERSION = 1;
+const LINEJS_VERSION = LineJsAdapter.version;
 const ACCOUNT_ID = "default";
 process.umask(0o077);
 let client: Client | null = null;
@@ -51,6 +55,8 @@ let listenerAbort: AbortController | null = null;
 let syncGeneration = 0;
 let syncPromise: Promise<void> | null = null;
 let currentProfile: any = null;
+let pushHealthy = false;
+let pushConnectedSince = 0;
 const mediaPreviewCache = new Map<string, string>();
 const messageMediaSourceCache = new Map<string, { raw: any; isSquare: boolean }>();
 const preSyncedMessages = new Map<string, any[]>();
@@ -203,6 +209,28 @@ const store = new SecureLineStorage(storagePath(), keyring);
 const database = new LineyDatabase(databasePath());
 const mediaDiskCache = new LineyMediaCache(join(dataPath(), "media"));
 const mediaUploadTempDir = join(dataPath(), "media-upload-tmp");
+let syncCoordinator: SyncCoordinator | null = null;
+function getSyncCoordinator(): SyncCoordinator {
+  if (syncCoordinator) return syncCoordinator;
+  syncCoordinator = new SyncCoordinator(database, emit, {
+    loadFriends: loadFriendsList,
+    loadChats: loadChatsList,
+    loadOpenChats: loadOpenChatList,
+    fetchTalk: fetchTalkMessagesNormalized,
+    fetchOpen: fetchOpenChatMessagesNormalized,
+    persist: persistNormalizedMessages,
+    isHidden: (chatId, isSquare, messageId, kind) => database.isMessageHidden(ACCOUNT_ID, chatId, kind as any, messageId),
+    isLiveOverlay: (cacheKey) => liveMessageOverlayKeys.has(cacheKey),
+    warmImage: (id, square) => getImagePreviewDataUrl(id, square).then(() => undefined),
+    getPreSynced: () => ({ chats: preSyncedChats, friends: preSyncedFriends, openChats: preSyncedOpenChats, messages: preSyncedMessages }),
+    setPreSynced: (next) => {
+      if (next.chats !== undefined) preSyncedChats = next.chats;
+      if (next.friends !== undefined) preSyncedFriends = next.friends;
+      if (next.openChats !== undefined) preSyncedOpenChats = next.openChats;
+    },
+  });
+  return syncCoordinator;
+}
 const callManager = new CallManager((event) => emit({
   ...event,
   type: event.type === "call.incoming" ? "call.incoming" : `event.${event.type}`,
@@ -271,6 +299,8 @@ function readCredential(): AuthCredential | null {
 async function clearLocalSession() {
   listenerAbort?.abort();
   listenerAbort = null;
+  pushHealthy = false;
+  pushConnectedSince = 0;
   mediaWorker.cancelAll();
   client = null;
   currentProfile = null;
@@ -1631,22 +1661,14 @@ async function preSyncAccount() {
 }
 
 function startSync(): Promise<void> {
-  if (syncPromise) return syncPromise;
-  syncPromise = preSyncAccount()
-    .catch((error) => {
-      database.setSyncState(ACCOUNT_ID, {
-        key: "account",
-        generation: syncGeneration,
-        status: "error",
-        error: errorInfo(error).message,
-      });
-      throw error;
-    })
-    .finally(() => {
-      syncPromise = null;
-    });
-  return syncPromise;
+  return getSyncCoordinator().startFull().catch((error) => {
+    // coordinator already set error state; just rethrow for caller
+    throw error;
+  });
 }
+
+// Legacy alias kept for internal callers; now delegates to coordinator
+async function legacyPreSyncAccount() { return preSyncAccount(); }
 
 function waitForSignal(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve();
@@ -2026,45 +2048,63 @@ async function consumeSquareEvents(next: Client, signal: AbortSignal, push: any)
   }
 }
 
+function isPushHealthy(): boolean {
+  return pushHealthy && pushConnectedSince > 0 && Date.now() - pushConnectedSince >= 2_000;
+}
+
 async function consumeTalkPolling(next: Client, signal: AbortSignal): Promise<void> {
-  const polling = next.base.createPolling() as any;
-  try {
-    for await (const operation of polling._listenTalkEvents({
-      signal,
-      pollingInterval: 1_000,
-      onError: (error: unknown) => {
-        if (!signal.aborted) emit({ type: "event.transport.error", transport: "talk-poll", error: errorInfo(error).message });
-      },
-    }) as AsyncIterable<any>) {
-      if (signal.aborted || client !== next) return;
-      // REST polling is a safety net for a dropped/unsupported PUSH stream.
-      // The same idempotent event path handles duplicates from both sources.
-      void handleTalkOperation(next, operation).catch((error) => {
-        if (!signal.aborted) emit({ type: "event.message.error", source: "talk-poll", error: errorInfo(error).message });
-      });
+  while (!signal.aborted && client === next) {
+    if (isPushHealthy()) {
+      await waitForSignal(5_000, signal);
+      continue;
     }
-  } catch (error) {
-    if (!signal.aborted) emit({ type: "event.transport.error", transport: "talk-poll", error: errorInfo(error).message });
+    const polling = next.base.createPolling() as any;
+    try {
+      for await (const operation of polling._listenTalkEvents({
+        signal,
+        pollingInterval: 1_000,
+        onError: (error: unknown) => {
+          if (!signal.aborted) emit({ type: "event.transport.error", transport: "talk-poll", error: errorInfo(error).message });
+        },
+      }) as AsyncIterable<any>) {
+        if (signal.aborted || client !== next) return;
+        if (isPushHealthy()) break;
+        void handleTalkOperation(next, operation).catch((error) => {
+          if (!signal.aborted) emit({ type: "event.message.error", source: "talk-poll", error: errorInfo(error).message });
+        });
+      }
+    } catch (error) {
+      if (!signal.aborted) emit({ type: "event.transport.error", transport: "talk-poll", error: errorInfo(error).message });
+    }
+    if (!signal.aborted && client === next && !isPushHealthy()) await waitForSignal(1_000, signal);
   }
 }
 
 async function consumeSquarePolling(next: Client, signal: AbortSignal): Promise<void> {
-  const polling = next.base.createPolling() as any;
-  try {
-    for await (const operation of polling._listenSquareEvents({
-      signal,
-      pollingInterval: 1_000,
-      onError: (error: unknown) => {
-        if (!signal.aborted) emit({ type: "event.transport.error", transport: "openchat-poll", error: errorInfo(error).message });
-      },
-    }) as AsyncIterable<any>) {
-      if (signal.aborted || client !== next) return;
-      void handleSquareOperation(next, operation).catch((error) => {
-        if (!signal.aborted) emit({ type: "event.message.error", source: "openchat-poll", error: errorInfo(error).message });
-      });
+  while (!signal.aborted && client === next) {
+    if (isPushHealthy()) {
+      await waitForSignal(5_000, signal);
+      continue;
     }
-  } catch (error) {
-    if (!signal.aborted) emit({ type: "event.transport.error", transport: "openchat-poll", error: errorInfo(error).message });
+    const polling = next.base.createPolling() as any;
+    try {
+      for await (const operation of polling._listenSquareEvents({
+        signal,
+        pollingInterval: 1_000,
+        onError: (error: unknown) => {
+          if (!signal.aborted) emit({ type: "event.transport.error", transport: "openchat-poll", error: errorInfo(error).message });
+        },
+      }) as AsyncIterable<any>) {
+        if (signal.aborted || client !== next) return;
+        if (isPushHealthy()) break;
+        void handleSquareOperation(next, operation).catch((error) => {
+          if (!signal.aborted) emit({ type: "event.message.error", source: "openchat-poll", error: errorInfo(error).message });
+        });
+      }
+    } catch (error) {
+      if (!signal.aborted) emit({ type: "event.transport.error", transport: "openchat-poll", error: errorInfo(error).message });
+    }
+    if (!signal.aborted && client === next && !isPushHealthy()) await waitForSignal(1_000, signal);
   }
 }
 
@@ -2082,15 +2122,23 @@ async function supervisePush(next: Client, signal: AbortSignal, push: any): Prom
       try {
         push.islisten = true;
         await push.initializeConn(1, [3, 8]);
+        pushHealthy = true;
+        pushConnectedSince = Date.now();
         emit({ type: "event.transport", transport: "line", state: "connected" });
         await push.InitAndRead([3, 8]);
         // A connection that drops immediately is not healthy. Increase the
         // delay for those loops so a broken PUSH endpoint cannot spin and
         // starve the REST fallback; reset only after a stable connection.
-        backoff = Date.now() - cycleStartedAt >= 10_000
-          ? 1_000
-          : Math.min(backoff * 2, 30_000);
+        if (Date.now() - cycleStartedAt >= 10_000) {
+          backoff = 1_000;
+        } else {
+          pushHealthy = false;
+          pushConnectedSince = 0;
+          backoff = Math.min(backoff * 2, 30_000);
+        }
       } catch (error) {
+        pushHealthy = false;
+        pushConnectedSince = 0;
         if (!signal.aborted) {
           emit({ type: "event.transport", transport: "line", state: "reconnecting", error: errorInfo(error).message });
         }
@@ -2101,6 +2149,8 @@ async function supervisePush(next: Client, signal: AbortSignal, push: any): Prom
       await waitForSignal(backoff, signal);
     }
   } finally {
+    pushHealthy = false;
+    pushConnectedSince = 0;
     signal.removeEventListener("abort", stop);
     push.islisten = false;
     await closePushConnections(push);
@@ -2909,20 +2959,72 @@ async function handle(request: any) {
     }
 
     if (method === "chat.list" || method === "chats.list") {
-      const result = preSyncedChats ?? await loadChatsList();
-      emit({ id, ok: true, result });
+      if (preSyncedChats) {
+        emit({ id, ok: true, result: preSyncedChats });
+        return;
+      }
+      const cached = database.listConversationChats(ACCOUNT_ID);
+      if (cached.length) {
+        emit({ id, ok: true, result: cached });
+        void loadChatsList().then((fresh) => {
+          emit({ type: "event.chats.updated", kind: "talk", chats: fresh });
+        }).catch(() => undefined);
+        return;
+      }
+      try {
+        const result = await loadChatsList();
+        emit({ id, ok: true, result });
+      } catch (error) {
+        if (cached.length) emit({ id, ok: true, result: cached });
+        else throw error;
+      }
       return;
     }
 
     if (method === "friends.list") {
-      const result = preSyncedFriends ?? await loadFriendsList();
-      emit({ id, ok: true, result });
+      if (preSyncedFriends) {
+        emit({ id, ok: true, result: preSyncedFriends });
+        return;
+      }
+      const cached = database.listChats(ACCOUNT_ID, "dm");
+      if (cached.length) {
+        // Cache may contain non-friend dm as well; better to show cache than fail offline
+        emit({ id, ok: true, result: cached });
+        void loadFriendsList().then((fresh) => {
+          emit({ type: "event.chats.updated", kind: "friends", chats: fresh });
+        }).catch(() => undefined);
+        return;
+      }
+      try {
+        const result = await loadFriendsList();
+        emit({ id, ok: true, result });
+      } catch (error) {
+        if (cached.length) emit({ id, ok: true, result: cached });
+        else throw error;
+      }
       return;
     }
 
     if (method === "openchat.list") {
-      const result = preSyncedOpenChats ?? await loadOpenChatList();
-      emit({ id, ok: true, result });
+      if (preSyncedOpenChats) {
+        emit({ id, ok: true, result: preSyncedOpenChats });
+        return;
+      }
+      const cached = database.listChats(ACCOUNT_ID, "openchat");
+      if (cached.length) {
+        emit({ id, ok: true, result: cached });
+        void loadOpenChatList().then((fresh) => {
+          emit({ type: "event.chats.updated", kind: "openchat", chats: fresh });
+        }).catch(() => undefined);
+        return;
+      }
+      try {
+        const result = await loadOpenChatList();
+        emit({ id, ok: true, result });
+      } catch (error) {
+        if (cached.length) emit({ id, ok: true, result: cached });
+        else throw error;
+      }
       return;
     }
 

@@ -22,7 +22,6 @@ impl EngineBridge {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .env("LINEY_LIGHT_START", "1")
-            .env("LINEY_DISABLE_EVENT_POLLING", "1")
             .spawn()
             .map_err(|error| format!("เปิด LINE engine ไม่ได้ ({}): {error}", path.display()))?;
         let stdin = child.stdin.take().ok_or("LINE engine ไม่มี stdin")?;
