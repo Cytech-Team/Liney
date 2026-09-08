@@ -1,3 +1,10 @@
+pub mod auth;
+pub mod connection;
+pub mod navigation;
+pub mod preferences;
+pub mod selection;
+pub mod sync;
+
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
