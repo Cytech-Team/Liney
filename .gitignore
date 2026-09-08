@@ -38,7 +38,10 @@ release/
 *.real
 # Local engine state (never commit credentials)
 .liney-data-test/
-# Legacy React/Tauri WebView UI (reference only — NOT the product path; see app/)
-/src/
-/src-tauri/
 /website/node_modules/
+# Build outputs / release sidecars (never commit)
+/src-tauri/target/
+/dist/
+
+# Bundled engine sidecar (built from engine/, not committed)
+/src-tauri/binaries/

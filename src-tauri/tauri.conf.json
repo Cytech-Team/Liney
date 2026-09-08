@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeDevCommand": "bun run dev --host 127.0.0.1 --port 1420",
-    "beforeBuildCommand": "bun run build"
+    "beforeDevCommand": "bun run legacy:web:dev --host 127.0.0.1 --port 1420",
+    "beforeBuildCommand": "bun run legacy:web:build"
   },
   "app": {
     "windows": [
