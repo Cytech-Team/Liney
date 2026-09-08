@@ -1,0 +1,117 @@
+name: release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  linux-native:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture:
+          - x86_64-unknown-linux-gnu
+    env:
+      TARGET: ${{ matrix.architecture }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.1'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install native Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-4-dev libpipewire-0.3-dev \
+            gstreamer1.0-tools gstreamer1.0-plugins-base \
+            desktop-file-utils libssl-dev
+      - run: bun install --frozen-lockfile
+      - run: bun test
+      - run: bun run lint
+      - run: bun run engine:build
+      - run: cargo check --manifest-path native-gtk/Cargo.toml
+      - run: cargo build --release --manifest-path native-gtk/Cargo.toml
+      - name: Prove the desktop binary is GTK4 and not WebKit
+        run: |
+          ldd native-gtk/target/release/liney | tee /tmp/liney-ldd.txt
+          grep -q 'libgtk-4' /tmp/liney-ldd.txt
+          ! grep -Eiq 'webkit|javascriptcoregtk' /tmp/liney-ldd.txt
+      - name: Build portable native archive
+        run: LINEY_OUTPUT_DIR=dist sh scripts/package-tar.sh
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/liney-0.1.0.sbom.spdx.json
+      - name: Hash and verify native bundle
+        run: |
+          sha256sum dist/Liney-*.tar.gz > dist/liney-0.1.0.sha256
+          LINEY_HASH_FILE=dist/liney-0.1.0.sha256 \
+          LINEY_SBOM_PATH=dist/liney-0.1.0.sbom.spdx.json \
+            sh scripts/verify-release.sh dist/Liney-*.tar.gz
+      - name: Prepare Arch inputs
+        run: |
+          mkdir -p dist/arch-input
+          cp native-gtk/target/release/liney dist/arch-input/liney
+          cp build/liney-engine-* dist/arch-input/liney-engine
+      - uses: actions/upload-artifact@v4
+        with:
+          name: liney-linux-native-${{ matrix.architecture }}
+          path: |
+            dist/Liney-*.tar.gz
+            dist/liney-0.1.0.sha256
+            dist/liney-0.1.0.sbom.spdx.json
+            dist/arch-input/**
+
+  arch-package:
+    needs: linux-native
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: liney-linux-native-*
+          path: dist/downloaded
+          merge-multiple: true
+      - name: Build Arch package from the native binaries
+        run: |
+          APP_BINARY=$(find dist/downloaded -path '*/arch-input/liney' -print -quit)
+          ENGINE_BINARY=$(find dist/downloaded -path '*/arch-input/liney-engine' -print -quit)
+          test -n "$APP_BINARY"
+          test -n "$ENGINE_BINARY"
+          docker run --rm \
+            -e "LINEY_APP_BINARY=/src/$APP_BINARY" \
+            -e "LINEY_ENGINE_BINARY=/src/$ENGINE_BINARY" \
+            -v "$GITHUB_WORKSPACE:/src" \
+            -w /src \
+            archlinux:latest \
+            bash -euc '
+              pacman -Syu --noconfirm --needed base-devel zstd gtk4 gstreamer gst-plugins-base pipewire
+              useradd -m builder
+              chown -R builder:builder /src
+              su builder -c "env LINEY_APP_BINARY=\"$LINEY_APP_BINARY\" LINEY_ENGINE_BINARY=\"$LINEY_ENGINE_BINARY\" sh scripts/package-arch.sh"
+            '
+      - name: Validate and hash Arch package
+        run: |
+          sha256sum dist/arch/*.pkg.tar.zst > dist/arch/liney-0.1.0.sha256
+          MEMBERS=$(tar --use-compress-program=unzstd -tf dist/arch/*.pkg.tar.zst)
+          printf '%s\n' "$MEMBERS" | grep -q 'usr/lib/liney/liney-bin'
+          printf '%s\n' "$MEMBERS" | grep -q 'usr/lib/liney/liney-engine'
+          if printf '%s\n' "$MEMBERS" | grep -Eiq '(^|/)(auth\.json|linejs-session\.json)$'; then
+            echo 'credential/session file present in Arch package' >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: liney-arch-package
+          path: |
+            dist/arch/*.pkg.tar.zst
+            dist/arch/liney-0.1.0.sha256

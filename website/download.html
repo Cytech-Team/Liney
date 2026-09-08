@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="ดาวน์โหลด Liney และดูข้อกำหนดระบบสำหรับ Linux">
+    <meta name="theme-color" content="#080c0d">
+    <title>ดาวน์โหลดและ FAQ — Liney</title>
+    <link rel="icon" type="image/svg+xml" href="assets/liney-mark.svg">
+    <link rel="stylesheet" href="styles.css">
+    <script src="site-config.js"></script>
+    <script src="site.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">ข้ามไปยังเนื้อหา</a>
+    <header class="site-header">
+      <div class="container nav-shell">
+        <a class="brand" href="index.html" aria-label="Liney หน้าแรก"><img src="assets/liney-mark.svg" alt=""><span class="brand-name">Liney</span><span class="brand-note">LINE for Linux</span></a>
+        <nav class="site-nav" aria-label="เมนูหลัก">
+          <a href="index.html">หน้าแรก</a>
+          <a href="download.html" aria-current="page">ดาวน์โหลด</a>
+          <a href="notice.html">ข้อควรรู้</a>
+          <a href="privacy.html">Privacy</a>
+          <a href="terms.html">Terms</a>
+          <a href="license.html">License</a>
+          <a class="nav-cta" data-release-link data-unconfigured-label="GitHub Releases" href="download.html">ดาวน์โหลด</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main-content">
+      <section class="page-hero">
+        <div class="container">
+          <p class="eyebrow">Download / FAQ</p>
+          <h1>ติดตั้ง Liney บน Linux</h1>
+          <p class="lead">ไฟล์ release ควรดาวน์โหลดจาก GitHub Releases เท่านั้น เพื่อให้ตรวจสอบ hash, SBOM และ source ที่ใช้ build ได้</p>
+          <div class="button-row">
+            <a class="button" data-release-link data-unconfigured-label="ตั้งค่า GitHub Releases ก่อน" href="download.html">ไปยัง GitHub Releases</a>
+            <a class="button secondary" href="notice.html">อ่านข้อควรรู้ก่อนติดตั้ง</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-muted" aria-labelledby="formats-title">
+        <div class="container">
+          <div class="section-heading">
+            <div><p class="eyebrow">Linux packages</p><h2 id="formats-title">รูปแบบที่เตรียมไว้</h2></div>
+            <p>ลิงก์ด้านล่างจะเปิดหน้า release ของ repository เมื่อเว็บไซต์ถูก deploy บน GitHub Pages</p>
+          </div>
+          <div class="download-grid">
+            <article class="download-card"><span class="format">APPIMAGE</span><h3>AppImage</h3><p>ไฟล์ portable สำหรับทดลองใช้โดยไม่ต้องติดตั้งลงระบบ</p><a class="button secondary" data-release-link data-unconfigured-label="รอตั้งค่า Releases" href="download.html">ดู release</a></article>
+            <article class="download-card"><span class="format">DEB</span><h3>Debian / Ubuntu</h3><p>แพ็กเกจสำหรับระบบที่ใช้ Debian package manager</p><a class="button secondary" data-release-link data-unconfigured-label="รอตั้งค่า Releases" href="download.html">ดู release</a></article>
+            <article class="download-card"><span class="format">RPM</span><h3>Fedora / RPM</h3><p>แพ็กเกจ RPM สำหรับดิสโทรที่รองรับรูปแบบนี้</p><a class="button secondary" data-release-link data-unconfigured-label="รอตั้งค่า Releases" href="download.html">ดู release</a></article>
+            <article class="download-card"><span class="format">ARCH</span><h3>Arch package</h3><p>แพ็กเกจ <code>pkg.tar.zst</code> ที่ build จาก binary ชุดเดียวกับ release</p><a class="button secondary" data-release-link data-unconfigured-label="รอตั้งค่า Releases" href="download.html">ดู release</a></article>
+            <article class="download-card"><span class="format">TAR.GZ</span><h3>Portable archive</h3><p>tar archive สำหรับระบบที่ต้องการจัดวางไฟล์ด้วยตนเอง</p><a class="button secondary" data-release-link data-unconfigured-label="รอตั้งค่า Releases" href="download.html">ดู release</a></article>
+            <article class="download-card"><span class="format">SOURCE</span><h3>Source code</h3><p>ดู source, license และ workflow ที่ใช้สร้าง artifact ทั้งหมด</p><a class="button secondary" data-repo-link href="download.html">ดู repository</a></article>
+          </div>
+          <div class="callout warning"><p><strong>อย่าดาวน์โหลดไฟล์จาก mirror ที่ไม่ทราบที่มา</strong></p><p>ตรวจชื่อ artifact, SHA256 และ SBOM ใน release ให้ตรงกับไฟล์ที่ดาวน์โหลด และอย่าใส่ credential ลงใน bug report หรือ issue</p></div>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="requirements-title">
+        <div class="container">
+          <div class="section-heading"><div><p class="eyebrow">Before install</p><h2 id="requirements-title">ข้อกำหนดระบบ</h2></div><p>ความสามารถบางอย่างขึ้นกับ runtime และ desktop session ของแต่ละดิสโทร</p></div>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>รายการ</th><th>รายละเอียด</th></tr></thead>
+              <tbody>
+                <tr><td>ระบบปฏิบัติการ</td><td>Linux desktop ที่มี WebKitGTK 4.1 และ GTK3</td></tr>
+                <tr><td>Media / audio</td><td>GStreamer และ PipeWire สำหรับฟังก์ชันที่เกี่ยวข้อง</td></tr>
+                <tr><td>Credential wallet</td><td>Secret Service หรือ KWallet สำหรับ restore แบบ persistent; ถ้าใช้ไม่ได้จะเป็น session-only</td></tr>
+                <tr><td>สถาปัตยกรรม</td><td>release ปัจจุบันเตรียมสำหรับ x86_64; ตรวจ artifact ของ release ทุกครั้ง</td></tr>
+                <tr><td>ข้อมูลในเครื่อง</td><td>ประวัติข้อความเก็บใน local SQLite จนกว่าจะสั่งล้าง และไม่ใช่การลบข้อความจาก LINE</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-muted" aria-labelledby="faq-title">
+        <div class="container">
+          <div class="section-heading"><div><p class="eyebrow">Questions</p><h2 id="faq-title">คำถามที่พบบ่อย</h2></div></div>
+          <div class="faq-list">
+            <details><summary>Liney เป็นแอป Official ของ LINE หรือไม่?</summary><p>ไม่ใช่ Liney เป็นโปรเจกต์อิสระ ไม่ได้สังกัด ได้รับอนุญาต หรือรับรองโดย LY Corporation และไม่ได้ใช้ official branding หรือ SDK ในฐานะผลิตภัณฑ์ของ LINE</p></details>
+            <details><summary>ทำไมต้องอ่านประกาศก่อน Login?</summary><p>เพราะการใช้ implementation ที่ไม่เป็นทางการอาจไม่สอดคล้องหรืออาจขัดกับ TOS ของ LINE และมีความเสี่ยงต่อบัญชี ผู้ใช้ต้องตัดสินใจด้วยตนเองก่อนดำเนินการต่อ</p></details>
+            <details><summary>Liney เก็บรหัสผ่านหรือส่งผ่านเซิร์ฟเวอร์ของ Liney ไหม?</summary><p>Liney ไม่มี central relay server และไม่เก็บรหัสผ่านไว้ใน localStorage, session file หรือ wallet หลังเริ่ม login แบบ email/password อย่างไรก็ตาม credential จะถูกส่งไปยังบริการปลายทางตาม flow ของ LINEJS จากเครื่องของคุณ</p></details>
+            <details><summary>Logout ลบประวัติข้อความด้วยหรือไม่?</summary><p>ไม่ การ logout ล้าง session และ credential ส่วนประวัติในเครื่องต้องล้างผ่านคำสั่งล้างประวัติแยกต่างหาก การล้าง local history ไม่ได้ลบข้อความบน LINE</p></details>
+            <details><summary>มี video call หรือ group call แล้วหรือยัง?</summary><p>ยังไม่โฆษณาเป็นฟีเจอร์พร้อมใช้ ขอบเขตเสียง 1:1 จะเปิดเมื่อผ่าน live validation จริงบนระบบเป้าหมาย ส่วน video, group call และ LiveTalk ยังไม่เปิดใช้งาน</p></details>
+            <details><summary>แจ้งปัญหาอย่างไรให้ปลอดภัย?</summary><p>ส่งรายละเอียดที่ทำซ้ำได้, เวอร์ชัน, ดิสโทร และ log ที่ redacted เท่านั้น ห้ามแนบ password, QR, PIN, token, session file, auth.json หรือ linejs-session.json</p></details>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer"><div class="container footer-grid"><div><a class="footer-brand" href="index.html"><img src="assets/liney-mark.svg" alt="">Liney</a><p>© <span data-current-year></span> Cytech Team Development. ซอฟต์แวร์อิสระสำหรับ Linux</p><p class="footer-contact">ติดต่อ: <a class="text-link" data-contact-email href="mailto:namnarak@namnarak.in.th">namnarak@namnarak.in.th</a></p></div><nav class="footer-nav" aria-label="ลิงก์เอกสาร"><a href="notice.html">Safety Notice</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="license.html">License</a><a data-repo-link href="download.html">GitHub</a></nav></div></footer>
+  </body>
+</html>

@@ -1,0 +1,49 @@
+{
+  "name": "liney",
+  "private": true,
+  "version": "0.1.0",
+  "license": "LicenseRef-TLL-1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run desktop:dev",
+    "build": "bun run desktop:build",
+    "lint": "oxlint",
+    "test": "bun test",
+    "test:unit": "bun test engine/*.test.ts",
+    "engine:build": "sh scripts/build-sidecar.sh",
+    "native:check": "cargo check --manifest-path native-gtk/Cargo.toml",
+    "native:build": "cargo build --release --manifest-path native-gtk/Cargo.toml",
+    "desktop:dev": "bun run engine:build && cargo run --manifest-path native-gtk/Cargo.toml",
+    "desktop:build": "bun run engine:build && cargo build --release --manifest-path native-gtk/Cargo.toml",
+    "verify:release": "sh scripts/verify-release.sh",
+    "package:arch": "sh scripts/package-arch.sh",
+    "package:tar": "sh scripts/package-tar.sh",
+    "legacy:web:dev": "vite",
+    "legacy:web:build": "tsc -b && vite build",
+    "legacy:web:preview": "vite preview",
+    "install:local": "sh scripts/install-local.sh"
+  },
+  "dependencies": {
+    "@evex/linejs": "npm:@jsr/evex__linejs@3.3.2",
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-notification": "^2",
+    "@tauri-apps/plugin-shell": "~2",
+    "lucide-react": "^1.41.0",
+    "motion": "^13.2.0",
+    "qrcode.react": "^4.2.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.1.0",
+    "oxlint": "^1.79.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.2"
+  }
+}

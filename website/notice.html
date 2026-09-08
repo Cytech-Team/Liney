@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Safety notice และข้อจำกัดสำคัญของ Liney">
+    <meta name="theme-color" content="#080c0d">
+    <title>Safety Notice — Liney</title>
+    <link rel="icon" type="image/svg+xml" href="assets/liney-mark.svg">
+    <link rel="stylesheet" href="styles.css">
+    <script src="site-config.js"></script>
+    <script src="site.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">ข้ามไปยังเนื้อหา</a>
+    <header class="site-header"><div class="container nav-shell"><a class="brand" href="index.html" aria-label="Liney หน้าแรก"><img src="assets/liney-mark.svg" alt=""><span class="brand-name">Liney</span><span class="brand-note">LINE for Linux</span></a><nav class="site-nav" aria-label="เมนูหลัก"><a href="index.html">หน้าแรก</a><a href="download.html">ดาวน์โหลด</a><a href="notice.html" aria-current="page">ข้อควรรู้</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="license.html">License</a><a class="nav-cta" data-release-link data-unconfigured-label="GitHub Releases" href="download.html">ดาวน์โหลด</a></nav></div></header>
+
+    <main id="main-content">
+      <section class="page-hero compact"><div class="container"><p class="eyebrow">Read before login</p><h1>Safety Notice</h1><p class="lead">ประกาศนี้เป็นส่วนหนึ่งของการใช้งาน Liney ทุกคนควรอ่านและประเมินความเสี่ยงก่อนเข้าสู่ระบบ</p></div></section>
+      <div class="container legal-layout">
+        <aside class="legal-nav"><strong>ในหน้านี้</strong><div><a href="#status">สถานะของ Liney</a><a href="#account">ความเสี่ยงบัญชี</a><a href="#safe-use">การใช้งานอย่างปลอดภัย</a><a href="#support">เมื่อเกิดปัญหา</a></div></aside>
+        <article class="legal-card">
+          <div class="callout warning"><p><strong>คำเตือนสำคัญ</strong></p><p>Liney ไม่ใช่แอป Official ของ LINE และไม่ได้รับการรับรองจาก LY Corporation การใช้ LINEJS อาจไม่สอดคล้องหรืออาจขัดกับ Terms of Service (TOS) ของ LINE บัญชีอาจถูกจำกัด ระงับ หรือใช้งานไม่ได้ ใช้งานด้วยความระมัดระวังและความเสี่ยงของคุณเอง</p></div>
+          <p class="meta-line">อัปเดตเอกสาร: <span data-effective-date>2026-09-05</span></p>
+
+          <h2 id="status">1. สถานะของซอฟต์แวร์</h2>
+          <p>Liney เป็น native Linux desktop client ที่พัฒนาโดย Cytech Team Development เป็นโปรเจกต์อิสระ ไม่ได้เป็นตัวแทน ไม่ได้สังกัด และไม่ได้แสดงตัวว่าเป็นผลิตภัณฑ์ของ LINE หรือ LY Corporation</p>
+          <p>Liney ใช้ LINEJS เป็นชั้น protocol และบริการของ LINE อาจเปลี่ยนแปลงได้ตลอดเวลา ฟังก์ชันอาจหยุดทำงาน ถูกจำกัด หรือมีพฤติกรรมแตกต่างจาก official client โดยไม่มีการรับประกันล่วงหน้า</p>
+
+          <h2 id="account">2. ความเสี่ยงต่อบัญชีและข้อมูล</h2>
+          <ul>
+            <li>การใช้ client หรือ protocol ที่ไม่เป็นทางการอาจขัดกับ TOS, policy หรือข้อกำหนดอื่นของ LINE</li>
+            <li>LINE อาจตรวจพบการใช้งานและจำกัด ระงับ หรือยุติบัญชีได้ Liney ไม่รับประกันว่าบัญชีจะปลอดจากการดำเนินการดังกล่าว</li>
+            <li>อย่าใช้บัญชีที่คุณไม่สามารถยอมรับการสูญเสียการเข้าถึงได้ โดยเฉพาะบัญชีงาน บัญชีธุรกิจ หรือบัญชีที่มีข้อมูลสำคัญเพียงชุดเดียว</li>
+            <li>QR, PIN, password, session และ token เป็นข้อมูลลับ ห้ามส่งให้ผู้พัฒนา หรือโพสต์ใน issue, screenshot, log และแชตสาธารณะ</li>
+          </ul>
+
+          <h2 id="safe-use">3. แนวทางการใช้งานอย่างปลอดภัย</h2>
+          <ul class="check-list">
+            <li>ใช้เฉพาะบัญชีและห้องสนทนาที่คุณมีสิทธิ์ใช้งาน</li>
+            <li>ตรวจสอบ source และ checksum ของ release ก่อนติดตั้ง</li>
+            <li>ใช้ password login เฉพาะเมื่อเข้าใจว่า credential ถูกใช้กับ flow ของ LINEJS จากเครื่องของคุณ</li>
+            <li>เปิด persistent session เฉพาะบนเครื่องที่คุณควบคุมและมี user account ที่ปลอดภัย</li>
+            <li>อัปเดตจาก release ที่ตรวจสอบได้ และหยุดใช้ทันทีหากเห็นพฤติกรรมผิดปกติ</li>
+            <li>ใช้แชตตามปกติอย่างรับผิดชอบ ไม่ทำ spam หรือส่งข้อความจำนวนมากแบบอัตโนมัติ</li>
+          </ul>
+
+          <h2>4. การใช้งานที่โครงการไม่สนับสนุน</h2>
+          <p>ห้ามใช้ Liney เพื่อ spam, mass messaging, account farming, credential harvesting, bypass security controls, รบกวนบริการ LINE, หลอกลวงผู้ใช้, ส่ง malware หรือทำสิ่งที่ผิดกฎหมายและผิดสิทธิ์ของผู้อื่น</p>
+
+          <h2 id="support">5. เมื่อเกิดปัญหา</h2>
+          <p>หาก login ไม่ได้, บัญชีมีความผิดปกติ, หรือพบพฤติกรรมที่อาจกระทบความปลอดภัย ให้หยุดใช้ Liney และตรวจสอบผ่านช่องทาง official ของ LINE ก่อน อย่าพยายามแก้ด้วยการส่ง credential หรือ session ให้บุคคลอื่น</p>
+          <p>การรายงานปัญหาควรใส่เฉพาะเวอร์ชัน, ดิสโทร, ขั้นตอนทำซ้ำ และ log ที่ลบข้อมูลลับแล้ว ติดต่อได้ที่ <a class="text-link" data-contact-email href="mailto:namnarak@namnarak.in.th">namnarak@namnarak.in.th</a></p>
+
+          <div class="callout info"><p><strong>เอกสารนี้ไม่ใช่คำแนะนำทางกฎหมาย</strong></p><p>เป็นประกาศความเสี่ยงของซอฟต์แวร์เท่านั้น หากการใช้งานไม่ถูกต้องตามกฎหมายหรือข้อตกลงที่ใช้กับคุณ ให้หยุดใช้งานและปรึกษาผู้เชี่ยวชาญที่เหมาะสม</p></div>
+        </article>
+      </div>
+    </main>
+
+    <footer class="footer"><div class="container footer-grid"><div><a class="footer-brand" href="index.html"><img src="assets/liney-mark.svg" alt="">Liney</a><p>© <span data-current-year></span> Cytech Team Development. Liney ไม่ใช่ Official LINE</p><p class="footer-contact">ติดต่อ: <a class="text-link" data-contact-email href="mailto:namnarak@namnarak.in.th">namnarak@namnarak.in.th</a></p></div><nav class="footer-nav" aria-label="ลิงก์เอกสาร"><a href="download.html">Download / FAQ</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="license.html">License</a><a data-repo-link href="download.html">GitHub</a></nav></div></footer>
+  </body>
+</html>

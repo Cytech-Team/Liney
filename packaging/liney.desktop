@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Liney
+Comment=LINE desktop client for Linux
+GenericName=LINE Client
+Exec=liney
+Icon=liney
+Terminal=false
+Type=Application
+Categories=Network;InstantMessaging;Chat;
+StartupNotify=true
+StartupWMClass=dev.liney.desktop
+Keywords=LINE;chat;messaging;

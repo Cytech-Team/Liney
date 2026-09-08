@@ -1,0 +1,23 @@
+pkgname=liney
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Native GTK4 LINE desktop client'
+arch=('x86_64')
+url='https://github.com/Cytech-Team/Liney'
+license=('custom')
+depends=('gtk4' 'gstreamer' 'gst-plugins-base' 'pipewire')
+optdepends=('libsecret: Secret Service credential storage')
+source=()
+sha256sums=()
+
+package() {
+  install -Dm755 "$startdir/liney-bin" "$pkgdir/usr/lib/liney/liney-bin"
+  install -Dm755 "$startdir/liney-engine" "$pkgdir/usr/lib/liney/liney-engine"
+  install -Dm755 "$startdir/liney-launcher" "$pkgdir/usr/bin/liney"
+  install -Dm644 "$startdir/liney.desktop" "$pkgdir/usr/share/applications/liney.desktop"
+  install -Dm644 "$startdir/liney.png" "$pkgdir/usr/share/icons/hicolor/512x512/apps/liney.png"
+  install -Dm644 "$startdir/README.md" "$pkgdir/usr/share/doc/liney/README.md"
+  install -Dm644 "$startdir/branding-README.md" "$pkgdir/usr/share/doc/liney/branding/README.md"
+  install -Dm644 "$startdir/LICENSE" "$pkgdir/usr/share/licenses/liney/LICENSE"
+  install -Dm644 "$startdir/liney-logo.jpg" "$pkgdir/usr/share/doc/liney/branding/liney-logo.jpg"
+}

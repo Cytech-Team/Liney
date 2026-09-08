@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Privacy notice ของ Liney — การเชื่อมต่อโดยตรงและการจัดเก็บข้อมูลในเครื่อง">
+    <meta name="theme-color" content="#080c0d">
+    <title>Privacy Notice — Liney</title>
+    <link rel="icon" type="image/svg+xml" href="assets/liney-mark.svg">
+    <link rel="stylesheet" href="styles.css">
+    <script src="site-config.js"></script>
+    <script src="site.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">ข้ามไปยังเนื้อหา</a>
+    <header class="site-header"><div class="container nav-shell"><a class="brand" href="index.html" aria-label="Liney หน้าแรก"><img src="assets/liney-mark.svg" alt=""><span class="brand-name">Liney</span><span class="brand-note">LINE for Linux</span></a><nav class="site-nav" aria-label="เมนูหลัก"><a href="index.html">หน้าแรก</a><a href="download.html">ดาวน์โหลด</a><a href="notice.html">ข้อควรรู้</a><a href="privacy.html" aria-current="page">Privacy</a><a href="terms.html">Terms</a><a href="license.html">License</a><a class="nav-cta" data-release-link data-unconfigured-label="GitHub Releases" href="download.html">ดาวน์โหลด</a></nav></div></header>
+
+    <main id="main-content">
+      <section class="page-hero compact"><div class="container"><p class="eyebrow">Local-first data policy</p><h1>Privacy Notice</h1><p class="lead">อธิบายว่า Liney จัดการ credential, ข้อความ, media cache และข้อมูลการใช้งานอย่างไร</p></div></section>
+      <div class="container legal-layout">
+        <aside class="legal-nav"><strong>ในหน้านี้</strong><div><a href="#summary">สรุปสั้น ๆ</a><a href="#data">ข้อมูลที่เกี่ยวข้อง</a><a href="#retention">การเก็บรักษา</a><a href="#control">การควบคุมของผู้ใช้</a><a href="#contact">ติดต่อ</a></div></aside>
+        <article class="legal-card">
+          <p class="meta-line">วันที่มีผล: <span data-effective-date>2026-09-05</span></p>
+          <div class="callout info"><p><strong>สรุปในประโยคเดียว</strong></p><p>Liney ไม่มี central relay server ของโครงการ ข้อมูล LINE ถูกเชื่อมต่อจากเครื่องของคุณไปยังบริการ LINE โดยตรง และข้อมูล local จะอยู่ในเครื่องจนกว่าคุณจะล้างหรือถอนการติดตั้ง</p></div>
+
+          <h2 id="summary">1. ขอบเขตของประกาศนี้</h2>
+          <p>ประกาศนี้ครอบคลุมแอป Liney, engine และเว็บไซต์เอกสารแบบ static นี้ โดยอธิบายการจัดการข้อมูลที่ Liney ควบคุมได้ ไม่ใช่ประกาศความเป็นส่วนตัวของ LINE, LY Corporation, GitHub, Secret Service, KWallet หรือบริการภายนอกอื่น</p>
+          <p>เมื่อคุณใช้บริการ LINE ผ่าน Liney การเก็บ ใช้ และส่งข้อมูลโดย LINE อยู่ภายใต้นโยบายและข้อกำหนดของ LINE เอง โปรดอ่านเอกสารของบริการนั้นด้วย</p>
+
+          <h2 id="data">2. ข้อมูลที่ Liney เกี่ยวข้อง</h2>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>ข้อมูล</th><th>อยู่ที่ไหน / ใช้ทำอะไร</th><th>พฤติกรรมสำคัญ</th></tr></thead>
+              <tbody>
+                <tr><td>Refresh credential</td><td>Secret Service หรือ KWallet เมื่อ wallet ใช้ได้ เพื่อ restore session</td><td>ไม่ตั้งใจเก็บลง plaintext session file หรือ log</td></tr>
+                <tr><td>Password</td><td>ใช้ชั่วคราวใน flow email/password จาก UI ไปยัง local engine</td><td>Liney ล้างจาก UI ทันที และไม่เก็บใน localStorage, session file หรือ wallet</td></tr>
+                <tr><td>Session / sync state</td><td>ไฟล์ private หรือ SQLite ใน data directory ของผู้ใช้</td><td>สร้างด้วยสิทธิ์จำกัดและเขียนแบบ atomic เมื่อทำได้</td></tr>
+                <tr><td>ข้อความและ metadata</td><td>SQLite ในเครื่อง เพื่อแสดง history, unread และ sync state</td><td>เก็บจนกว่าผู้ใช้จะสั่งล้าง local history</td></tr>
+                <tr><td>Preview media</td><td>LRU disk cache แยกจาก database</td><td>ไฟล์ต้นฉบับไม่เก็บถาวรเว้นแต่ผู้ใช้สั่งบันทึก</td></tr>
+                <tr><td>Diagnostic logs</td><td>เครื่องของผู้ใช้ตามการตั้งค่าระบบ</td><td>ควร redact ก่อนแชร์ และ Liney ไม่ควรใส่ token/password ลง log</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h2>3. การส่งข้อมูลไปยังบริการอื่น</h2>
+          <p>Liney ไม่ทำหน้าที่เป็น proxy หรือ message relay กลาง ข้อมูลที่จำเป็นต่อการ login, sync, ส่งข้อความ หรือ media จะเดินทางระหว่างเครื่องของคุณกับบริการ LINE ตามการทำงานของ LINEJS และบริการปลายทาง</p>
+          <p>ถ้าคุณเลือกเปิดไฟล์, notification, audio route หรือการเชื่อมต่อภายนอก ระบบปฏิบัติการและบริการที่คุณเลือกอาจประมวลผลข้อมูลเพิ่มตามสิทธิ์และการตั้งค่าของระบบนั้น</p>
+
+          <h2 id="retention">4. การเก็บรักษาและการลบ</h2>
+          <ul>
+            <li><strong>Logout:</strong> ล้าง session ในเครื่องและ credential ใน wallet แต่ไม่ล้างประวัติข้อความโดยอัตโนมัติ</li>
+            <li><strong>Clear history:</strong> ลบข้อความ, outbox และ media cache ในเครื่องตามคำสั่งของผู้ใช้ แต่ไม่ลบข้อความบน LINE</li>
+            <li><strong>Wallet unavailable:</strong> ใช้ session-only และไม่เขียน refresh credential ลงไฟล์ plaintext</li>
+            <li><strong>ถอนการติดตั้ง:</strong> อาจไม่ลบ data directory โดยอัตโนมัติ ผู้ใช้ควรตรวจและลบข้อมูลในเครื่องตามความต้องการ</li>
+          </ul>
+
+          <h2 id="control">5. การควบคุมของผู้ใช้</h2>
+          <p>คุณควรควบคุมเครื่อง, user account, data directory และ wallet ของตนเอง ใช้ logout, clear history และถอนการติดตั้งเมื่อไม่ต้องการให้ข้อมูลอยู่ในเครื่องอีกต่อไป สำรองข้อมูลเฉพาะที่จำเป็นและเก็บ backup อย่างปลอดภัย</p>
+          <p>อย่าแชร์ไฟล์ <code>auth.json</code>, <code>linejs-session.json</code>, database, token, QR หรือ PIN ใน issue, screenshot, archive หรือช่องทางสาธารณะ</p>
+
+          <h2>6. การวิเคราะห์การใช้งาน</h2>
+          <p>เว็บไซต์เอกสารนี้ไม่มีโฆษณา ไม่มีระบบ analytics ของ Liney และไม่มี telemetry ที่โครงการตั้งใจส่งไปยัง central backend โดยค่าเริ่มต้น หาก release ใดมีการเพิ่มบริการวัดผลหรือ third-party integration จะต้องอธิบายไว้ในเอกสารและการตั้งค่าที่เกี่ยวข้องก่อน</p>
+
+          <h2 id="contact">7. การเปลี่ยนแปลงและการติดต่อ</h2>
+          <p>ประกาศนี้อาจเปลี่ยนเมื่อสถาปัตยกรรมหรือฟังก์ชันของ Liney เปลี่ยน วันที่มีผลจะแสดงไว้ด้านบน สำหรับคำถามเรื่อง privacy ติดต่อ <a class="text-link" data-contact-email href="mailto:namnarak@namnarak.in.th">namnarak@namnarak.in.th</a> และอย่าส่ง credential หรือข้อมูลแชตจริงมาด้วย</p>
+          <div class="callout warning"><p><strong>หมายเหตุทางกฎหมาย</strong></p><p>นี่เป็น privacy notice ของซอฟต์แวร์ ไม่ใช่คำปรึกษาทางกฎหมายและไม่ใช่นโยบายของ LINE หากเผยแพร่ใช้งานจริง ควรให้ผู้เชี่ยวชาญตรวจความสอดคล้องกับกฎหมายคุ้มครองข้อมูลในพื้นที่ของคุณ</p></div>
+        </article>
+      </div>
+    </main>
+
+    <footer class="footer"><div class="container footer-grid"><div><a class="footer-brand" href="index.html"><img src="assets/liney-mark.svg" alt="">Liney</a><p>© <span data-current-year></span> Cytech Team Development. Local-first, unofficial software</p><p class="footer-contact">ติดต่อ: <a class="text-link" data-contact-email href="mailto:namnarak@namnarak.in.th">namnarak@namnarak.in.th</a></p></div><nav class="footer-nav" aria-label="ลิงก์เอกสาร"><a href="download.html">Download / FAQ</a><a href="notice.html">Safety Notice</a><a href="terms.html">Terms</a><a href="license.html">License</a><a data-repo-link href="download.html">GitHub</a></nav></div></footer>
+  </body>
+</html>
