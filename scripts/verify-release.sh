@@ -10,9 +10,9 @@ PATH=$(dirname "$BUN"):$PATH
 export PATH
 
 grep -q '"version": "0.1.0"' "$ROOT/package.json" || fail 'package.json version is not 0.1.0'
-grep -q 'name = "liney"' "$ROOT/native-gtk/Cargo.toml" || fail 'native Cargo package is not named liney'
-grep -q 'version = "0.1.0"' "$ROOT/native-gtk/Cargo.toml" || fail 'native Cargo version is not 0.1.0'
-grep -q 'dev.liney.desktop' "$ROOT/native-gtk/src/main.rs" || fail 'native application id is wrong'
+grep -q 'name = "liney"' "$ROOT/app/Cargo.toml" || fail 'native Cargo package is not named liney'
+grep -q 'version = "0.1.0"' "$ROOT/app/Cargo.toml" || fail 'native Cargo version is not 0.1.0'
+grep -q 'dev.liney.desktop' "$ROOT/app/src/main.rs" || fail 'native application id is wrong'
 test -f "$ROOT/packaging/liney.desktop" || fail 'desktop entry is missing'
 test -f "$ROOT/packaging/liney.png" || fail 'PNG icon is missing'
 test -f "$ROOT/README.md" || fail 'README is missing'
@@ -31,16 +31,16 @@ for key in ('dev', 'build', 'desktop:dev', 'desktop:build'):
     value = scripts.get(key, '')
     if 'tauri' in value.lower() or 'vite' in value.lower():
         raise SystemExit(f'{key} still routes to a WebView/web dev path: {value}')
-if 'native-gtk' not in scripts.get('desktop:dev', '') or 'native-gtk' not in scripts.get('desktop:build', ''):
+if 'app' not in scripts.get('desktop:dev', '') or 'app' not in scripts.get('desktop:build', ''):
     raise SystemExit('desktop commands do not route to native GTK4')
 PY
 
 "$BUN" run test:unit
-cargo check --manifest-path "$ROOT/native-gtk/Cargo.toml"
+cargo check --manifest-path "$ROOT/app/Cargo.toml"
 "$BUN" run engine:build
-cargo build --release --manifest-path "$ROOT/native-gtk/Cargo.toml"
+cargo build --release --manifest-path "$ROOT/app/Cargo.toml"
 
-APP="$ROOT/native-gtk/target/release/liney"
+APP="$ROOT/app/target/release/liney"
 test -x "$APP" || fail 'native release binary is missing'
 DEPS=$(ldd "$APP" 2>/dev/null || true)
 printf '%s\n' "$DEPS" | grep -q 'libgtk-4' || fail 'native binary is not linked to GTK4'

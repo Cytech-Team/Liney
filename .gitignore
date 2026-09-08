@@ -27,6 +27,12 @@ dist-ssr
 /build
 # Rust
 /target
+app/target/
+# Release artifacts (built by CI / package scripts, never committed)
+release/
+# Local tooling state
+.opencode/
+.manifest/
 # Legacy presync backups (quarantined, never shipped)
 *.bak-presync
 *.real

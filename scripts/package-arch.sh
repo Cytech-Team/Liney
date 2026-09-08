@@ -15,8 +15,8 @@ if test -z "$APP_BINARY" || test -z "$ENGINE_BINARY"; then
   PATH=$(dirname "$BUN"):$PATH
   export PATH
   "$BUN" run engine:build
-  cargo build --release --manifest-path "$ROOT/native-gtk/Cargo.toml"
-  APP_BINARY=${APP_BINARY:-$ROOT/native-gtk/target/release/liney}
+  cargo build --release --manifest-path "$ROOT/app/Cargo.toml"
+  APP_BINARY=${APP_BINARY:-$ROOT/app/target/release/liney}
   if test -z "$ENGINE_BINARY"; then
     ENGINE_BINARY=$(find "$ROOT/build" -maxdepth 1 -type f -name 'liney-engine-*' -perm -0100 -print -quit)
   fi

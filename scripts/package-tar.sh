@@ -13,9 +13,9 @@ test -x "$BUN" || { echo 'bun is required to build Liney' >&2; exit 1; }
 PATH=$(dirname "$BUN"):$PATH
 export PATH
 "$BUN" run engine:build
-cargo build --release --manifest-path "$ROOT/native-gtk/Cargo.toml"
+cargo build --release --manifest-path "$ROOT/app/Cargo.toml"
 
-APP_BINARY=${LINEY_APP_BINARY:-$ROOT/native-gtk/target/release/liney}
+APP_BINARY=${LINEY_APP_BINARY:-$ROOT/app/target/release/liney}
 ENGINE_BINARY=${LINEY_ENGINE_BINARY:-}
 if test -z "$ENGINE_BINARY"; then
   ENGINE_BINARY=$(find "$ROOT/build" -maxdepth 1 -type f -name 'liney-engine-*' -perm -0100 -print -quit)

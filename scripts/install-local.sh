@@ -14,7 +14,7 @@ PATH=$(dirname "$BUN"):$PATH
 export PATH
 "$BUN" run desktop:build
 
-APP_BINARY="$ROOT/native-gtk/target/release/liney"
+APP_BINARY="$ROOT/app/target/release/liney"
 ENGINE_BINARY=${LINEY_ENGINE_BINARY:-$ROOT/build/liney-engine-$TARGET}
 test -x "$APP_BINARY" || { echo "native Liney binary is missing: $APP_BINARY" >&2; exit 1; }
 test -x "$ENGINE_BINARY" || { echo "engine sidecar is missing: $ENGINE_BINARY" >&2; exit 1; }

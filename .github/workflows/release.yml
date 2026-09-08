@@ -36,11 +36,11 @@ jobs:
       - run: bun test
       - run: bun run lint
       - run: bun run engine:build
-      - run: cargo check --manifest-path native-gtk/Cargo.toml
-      - run: cargo build --release --manifest-path native-gtk/Cargo.toml
+      - run: cargo check --manifest-path app/Cargo.toml
+      - run: cargo build --release --manifest-path app/Cargo.toml
       - name: Prove the desktop binary is GTK4 and not WebKit
         run: |
-          ldd native-gtk/target/release/liney | tee /tmp/liney-ldd.txt
+          ldd app/target/release/liney | tee /tmp/liney-ldd.txt
           grep -q 'libgtk-4' /tmp/liney-ldd.txt
           ! grep -Eiq 'webkit|javascriptcoregtk' /tmp/liney-ldd.txt
       - name: Build portable native archive
@@ -60,7 +60,7 @@ jobs:
       - name: Prepare Arch inputs
         run: |
           mkdir -p dist/arch-input
-          cp native-gtk/target/release/liney dist/arch-input/liney
+          cp app/target/release/liney dist/arch-input/liney
           cp build/liney-engine-* dist/arch-input/liney-engine
       - uses: actions/upload-artifact@v4
         with:

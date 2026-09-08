@@ -1,4 +1,4 @@
-import { LineJsAdapter, type LineClient } from "./linejs-adapter";
+import { LineJsAdapter, type LineClient } from "./linejs/adapter";
 import { SquareMessage, TalkMessage, type Client } from "@evex/linejs";
 import { parseCancelCall, parseIncomingCall } from "@evex/linejs/call";
 // Adapter re-exports for boundary compliance; direct @evex/linejs remains only here and in adapter module
@@ -43,8 +43,8 @@ import { normalizeJsonValue } from "./serialization";
 import { stickerUrlFromRaw } from "./sticker";
 import { ownedStickersFromPurchases } from "./sticker-catalog";
 import { StickerCatalogCache } from "./sticker-catalog-cache";
-import { SyncCoordinator } from "./sync-coordinator";
-import { PROTOCOL_VERSION } from "./protocol";
+import { SyncCoordinator } from "./sync/coordinator";
+import { PROTOCOL_VERSION } from "./protocol/protocol";
 
 const LINEJS_VERSION = LineJsAdapter.version;
 const ACCOUNT_ID = "default";
