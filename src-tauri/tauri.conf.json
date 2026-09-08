@@ -1,0 +1,60 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Liney",
+  "version": "0.1.0",
+  "identifier": "dev.liney.desktop",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeDevCommand": "bun run dev --host 127.0.0.1 --port 1420",
+    "beforeBuildCommand": "bun run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Liney",
+        "width": 1280,
+        "height": 820,
+        "resizable": true,
+        "fullscreen": false,
+        "minWidth": 960,
+        "minHeight": 640,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' https://*.line.me https://*.line-scdn.net wss://*.line.me wss://*.line-scdn.net; img-src 'self' data: blob: https: asset: http://asset.localhost; media-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; object-src 'none'",
+      "assetProtocol": { "enable": true, "scope": ["$APPDATA/image-viewer/**"] }
+    }
+  },
+  "plugins": {
+    "shell": {
+      "open": "(?:https?://[^\\s]+|line://[^\\s]+|mailto:[^\\s]+|tel:[^\\s]+)"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "copyright": "Copyright © 2026 Cytech Team Development and Liney contributors",
+    "license": "LicenseRef-TLL-1.0",
+    "licenseFile": "../LICENSE",
+    "resources": {
+      "../README.md": "README.md",
+      "../LICENSE": "LICENSE",
+      "../branding/liney-logo.jpg": "branding/liney-logo.jpg"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    },
+    "externalBin": [
+      "binaries/liney-engine"
+    ]
+  }
+}
