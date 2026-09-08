@@ -18,8 +18,8 @@ use ui::shell::build_ui;
 use ui::helpers::{
     avatar_widget, composer_text, flex_spacing, icon_button, is_arranged_sticker_url,
     is_safe_external_uri, logo_widget, media_type, message_time, new_local_id, now_ms, numeric_leq,
-    open_safe_uri, picture_from_data_url, pixbuf_from_data_url, reaction_icon, small_button,
-    sticker_candidate_urls, SEND_SEQUENCE,
+    open_safe_uri, picture_from_data_url, pixbuf_from_data_url, reaction_icon, set_image_async,
+    set_picture_async, small_button, sticker_candidate_urls, SEND_SEQUENCE,
 };
 
 use engine::EngineBridge;
@@ -324,20 +324,23 @@ fn handle_request_success(state: &Rc<RefCell<State>>, action: Pending, result: V
         }
         Pending::AssetButton { button } => {
             if let Some(data) = result.get("dataUrl").and_then(Value::as_str) {
-                if let Some(picture) = picture_from_data_url(data, 72, 72) { button.set_child(Some(&picture)); }
+                let picture = gtk::Picture::new();
+                picture.set_can_shrink(true);
+                set_picture_async(&picture, data, 72, 72);
+                button.set_child(Some(&picture));
             }
         }
         Pending::AssetImage { image, url, size, guard_chat_id } => {
             if let Some(data) = result.get("dataUrl").and_then(Value::as_str) {
                 let allowed = guard_chat_id.is_empty() || state.borrow().active_chat_id == guard_chat_id;
                 state.borrow_mut().asset_cache.insert(url, data.to_owned());
-                if allowed { if let Some(pixbuf) = pixbuf_from_data_url(data, size, size) { image.set_from_pixbuf(Some(&pixbuf)); } }
+                if allowed { set_image_async(&image, data, size, size); }
             }
         }
         Pending::AssetPicture { picture, url, max_width, max_height } => {
             if let Some(data) = result.get("dataUrl").and_then(Value::as_str) {
                 state.borrow_mut().asset_cache.insert(url, data.to_owned());
-                if let Some(pixbuf) = pixbuf_from_data_url(data, max_width, max_height) { picture.set_pixbuf(Some(&pixbuf)); }
+                set_picture_async(&picture, data, max_width, max_height);
             }
         }
         Pending::Stickers { grid, tabs } => {
@@ -521,7 +524,7 @@ fn populate_sticker_packs(state: &Rc<RefCell<State>>, grid: &gtk::FlowBox, tabs:
             let image = gtk::Image::new(); image.set_pixel_size(52); button.set_child(Some(&image));
             let url = first.url();
             let cached = { state.borrow().asset_cache.get(&url).cloned() };
-            if let Some(data) = cached { if let Some(pixbuf) = pixbuf_from_data_url(&data, 52, 52) { image.set_from_pixbuf(Some(&pixbuf)); } }
+            if let Some(data) = cached { let image2 = image.clone(); set_image_async(&image2, &data, 52, 52); }
             else { state.borrow_mut().request_timeout("asset.preview", json!({ "url": url }), Pending::AssetImage { image, url, size: 52, guard_chat_id: String::new() }, Duration::from_secs(30)); }
         }
         let state2 = state.clone(); let grid2 = grid.clone(); let package2 = package_id.clone(); let items2 = items.clone(); let tabs2 = tabs.clone(); let button2 = button.clone();
@@ -561,7 +564,7 @@ fn populate_emoji_packs(state: &Rc<RefCell<State>>, grid: &gtk::FlowBox, tabs: &
             let image = gtk::Image::new(); image.set_pixel_size(48); button.set_child(Some(&image));
             let url = first.url();
             let cached = { state.borrow().asset_cache.get(&url).cloned() };
-            if let Some(data) = cached { if let Some(pixbuf) = pixbuf_from_data_url(&data, 48, 48) { image.set_from_pixbuf(Some(&pixbuf)); } }
+            if let Some(data) = cached { let image2 = image.clone(); set_image_async(&image2, &data, 48, 48); }
             else { state.borrow_mut().request_timeout("asset.preview", json!({ "url": url }), Pending::AssetImage { image, url, size: 48, guard_chat_id: String::new() }, Duration::from_secs(30)); }
         }
         let state2 = state.clone(); let grid2 = grid.clone(); let product2 = product_id.clone(); let items2 = items.clone(); let tabs2 = tabs.clone(); let button2 = button.clone();

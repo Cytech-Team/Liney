@@ -3,8 +3,8 @@ use crate::models::{Chat, Message};
 use crate::state::{Pending, State};
 use crate::ui::helpers::{
     avatar_widget, flex_spacing, is_arranged_sticker_url, is_safe_external_uri, message_time,
-    open_safe_uri, picture_from_data_url, pixbuf_from_data_url, reaction_icon, small_button,
-    sticker_candidate_urls,
+    open_safe_uri, picture_from_data_url, pixbuf_from_data_url, reaction_icon, set_image_async,
+    set_picture_async, small_button, sticker_candidate_urls,
 };
 use gtk4 as gtk;
 use gtk::glib;
@@ -81,18 +81,23 @@ pub(crate) fn message_row(state: &Rc<RefCell<State>>, chat: &Chat, message: &Mes
     if is_arranged_sticker_url(&message.sticker_url) {
         bubble.append(&gtk::Label::builder().label("สติกเกอร์แบบจัดวางจาก LINE · รูปแบบนี้ไม่มีไฟล์ภาพเดี่ยวให้แสดง").wrap(true).xalign(0.0).css_classes(["structured-card"]).build());
     } else if !message.image_data_url.is_empty() {
-        if let Some(picture) = picture_from_data_url(&message.image_data_url, 460, 340) {
-            picture.add_css_class("message-image");
-            let viewer = gtk::Button::builder().child(&picture).css_classes(["image-button"]).build();
-            let state2 = state.clone(); let parent = state.borrow().window.clone(); let data_url = message.image_data_url.clone();
-            viewer.connect_clicked(move |_| {
-                let state = state2.clone();
-                composer_media::show_image_viewer(&parent, &data_url, move |message| state.borrow().set_status(message));
-            });
-            bubble.append(&viewer);
-        }
+        let picture = gtk::Picture::new();
+        picture.set_can_shrink(true);
+        picture.add_css_class("message-image");
+        set_picture_async(&picture, &message.image_data_url, 460, 340);
+        let viewer = gtk::Button::builder().child(&picture).css_classes(["image-button"]).build();
+        let state2 = state.clone(); let parent = state.borrow().window.clone(); let data_url = message.image_data_url.clone();
+        viewer.connect_clicked(move |_| {
+            let state = state2.clone();
+            composer_media::show_image_viewer(&parent, &data_url, move |message| state.borrow().set_status(message));
+        });
+        bubble.append(&viewer);
     } else if !message.asset_data_url.is_empty() {
-        if let Some(picture) = picture_from_data_url(&message.asset_data_url, 240, 200) { picture.add_css_class("message-sticker"); bubble.append(&picture); }
+        let picture = gtk::Picture::new();
+        picture.set_can_shrink(true);
+        picture.add_css_class("message-sticker");
+        set_picture_async(&picture, &message.asset_data_url, 240, 200);
+        bubble.append(&picture);
     } else if !message.rich.is_null() {
         bubble.append(&rich_message_widget(state, &message.rich));
     } else if !message.flex.is_null() {
@@ -189,7 +194,16 @@ pub(crate) fn rich_message_widget(state: &Rc<RefCell<State>>, value: &Value) -> 
     let fallback = gtk::Label::builder().label(alt).wrap(true).justify(gtk::Justification::Center).halign(gtk::Align::Center).valign(gtk::Align::Center).css_classes(["rich-fallback"]).build(); overlay.add_overlay(&fallback);
     if !url.is_empty() {
         let cached = { state.borrow().asset_cache.get(&url).cloned() };
-        if let Some(data) = cached { if let Some(pixbuf) = pixbuf_from_data_url(&data, display_width as i32, display_height as i32) { picture.set_pixbuf(Some(&pixbuf)); fallback.set_visible(false); } }
+        if let Some(data) = cached {
+            let picture2 = picture.clone();
+            let fallback2 = fallback.clone();
+            crate::ui::helpers::load_pixbuf_async(data, display_width as i32, display_height as i32, move |pixbuf| {
+                if let Some(pixbuf) = pixbuf {
+                    picture2.set_pixbuf(Some(&pixbuf));
+                    fallback2.set_visible(false);
+                }
+            });
+        }
         else { state.borrow_mut().request_timeout("asset.preview", json!({ "url": url }), Pending::AssetPicture { picture: picture.clone(), url: url.clone(), max_width: display_width as i32, max_height: display_height as i32 }, Duration::from_secs(30)); }
     }
     let fixed = gtk::Fixed::new(); fixed.set_size_request(display_width as i32, display_height as i32);
@@ -259,7 +273,7 @@ pub(crate) fn flex_node_widget(state: &Rc<RefCell<State>>, node: &Value) -> gtk:
             let picture = gtk::Picture::new(); picture.set_can_shrink(true); picture.set_size_request(size, if kind == "icon" { 42 } else { 180 });
             if let Some(url) = node.get("url").and_then(Value::as_str).filter(|url| url.starts_with("https://")) {
                 let url = url.to_owned(); let cached = { state.borrow().asset_cache.get(&url).cloned() };
-                if let Some(data) = cached { if let Some(pixbuf) = pixbuf_from_data_url(&data, size, 240) { picture.set_pixbuf(Some(&pixbuf)); } }
+                if let Some(data) = cached { set_picture_async(&picture, &data, size, 240); }
                 else { state.borrow_mut().request_timeout("asset.preview", json!({ "url": url }), Pending::AssetPicture { picture: picture.clone(), url, max_width: size, max_height: 240 }, Duration::from_secs(30)); }
             }
             wrap_flex_action(state, node.get("action"), picture.upcast())

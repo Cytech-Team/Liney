@@ -1,6 +1,6 @@
 use crate::models::Chat;
 use crate::state::{ListFilter, Pending, Section, State};
-use crate::ui::helpers::{message_time, now_ms, pixbuf_from_data_url};
+use crate::ui::helpers::{message_time, now_ms, set_image_async};
 use gtk4 as gtk;
 use gtk::glib;
 use gtk::prelude::*;
@@ -79,7 +79,7 @@ pub(crate) fn open_chat(state: &Rc<RefCell<State>>, id: &str) {
         app.chat_title.set_text(&chat.name); app.chat_subtitle.set_text(&chat.subtitle());
         app.header_avatar.set_icon_name(Some("avatar-default-symbolic")); app.header_avatar.set_pixel_size(38);
         if !chat.avatar_url.is_empty() {
-            if let Some(data) = app.asset_cache.get(&chat.avatar_url).cloned() { if let Some(pixbuf) = pixbuf_from_data_url(&data, 38, 38) { app.header_avatar.set_from_pixbuf(Some(&pixbuf)); } }
+            if let Some(data) = app.asset_cache.get(&chat.avatar_url).cloned() { let image = app.header_avatar.clone(); set_image_async(&image, &data, 38, 38); }
             else { let image = app.header_avatar.clone(); app.request_timeout("asset.preview", json!({ "url": chat.avatar_url }), Pending::AssetImage { image, url: chat.avatar_url.clone(), size: 38, guard_chat_id: chat.id.clone() }, Duration::from_secs(30)); }
         }
         app.reply_target = None; crate::set_composer_enabled(&app, true, chat.kind == "dm" && app.capabilities.call_enabled); app.mark_read(&chat);
@@ -118,7 +118,7 @@ pub(crate) fn chat_row(state: &Rc<RefCell<State>>, chat: &Chat) -> gtk::Box {
     if !chat.avatar_url.is_empty() {
         let image = gtk::Image::new(); image.set_pixel_size(44); avatar_box.add_overlay(&image);
         let cached = state.borrow().asset_cache.get(&chat.avatar_url).cloned();
-        if let Some(data) = cached { if let Some(pixbuf) = pixbuf_from_data_url(&data, 44, 44) { image.set_from_pixbuf(Some(&pixbuf)); } }
+        if let Some(data) = cached { set_image_async(&image, &data, 44, 44); }
         else { state.borrow_mut().request_timeout("asset.preview", json!({ "url": chat.avatar_url }), Pending::AssetImage { image, url: chat.avatar_url.clone(), size: 44, guard_chat_id: String::new() }, Duration::from_secs(30)); }
     }
     root.append(&avatar_box);

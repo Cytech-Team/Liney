@@ -2,7 +2,7 @@ use crate::settings;
 use crate::state::{Pending, Section, State};
 use crate::theme;
 use crate::ui::chat_list::render_sidebar;
-use crate::ui::helpers::{avatar_widget, new_local_id, pixbuf_from_data_url};
+use crate::ui::helpers::{avatar_widget, new_local_id, set_image_async};
 use crate::ui::message_list::hydrate_message_assets;
 use crate::set_tray_enabled;
 use gtk4 as gtk;
@@ -42,7 +42,7 @@ pub(crate) fn show_settings(state: &Rc<RefCell<State>>) {
         let image = gtk::Image::new(); image.set_pixel_size(54);
         let url = if profile.picture_status.starts_with("http://") || profile.picture_status.starts_with("https://") { profile.picture_status.clone() } else { format!("https://profile.line-scdn.net/{}", profile.picture_status.trim_start_matches('/')) };
         let cached = { state.borrow().asset_cache.get(&url).cloned() };
-        if let Some(data) = cached { if let Some(pixbuf) = pixbuf_from_data_url(&data, 54, 54) { image.set_from_pixbuf(Some(&pixbuf)); } }
+        if let Some(data) = cached { set_image_async(&image, &data, 54, 54); }
         else { state.borrow_mut().request_timeout("asset.preview", json!({ "url": url }), Pending::AssetImage { image: image.clone(), url, size: 54, guard_chat_id: String::new() }, Duration::from_secs(30)); }
         profile_header.append(&image);
     }

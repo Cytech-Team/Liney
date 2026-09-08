@@ -1,16 +1,150 @@
 use super::super::state::State;
-use gdk_pixbuf::{InterpType, PixbufLoader};
+use gdk_pixbuf::{Colorspace, InterpType, Pixbuf, PixbufLoader};
 use gtk4 as gtk;
+use gtk::glib;
 use gtk::prelude::*;
 use std::{
     cell::RefCell,
+    collections::HashMap,
     env,
     path::PathBuf,
     rc::Rc,
-    sync::atomic::{AtomicU64, Ordering},
-    time::{SystemTime, UNIX_EPOCH},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc::{self, TryRecvError},
+        Mutex, OnceLock,
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use base64::Engine as _;
+
+/// A decoded image shipped across the thread as raw RGBA bytes (Send + Sync),
+/// rebuilt into a Pixbuf cheaply on the main thread (no re-decode there).
+struct Decoded {
+    width: i32,
+    height: i32,
+    rowstride: i32,
+    channels: i32,
+    bits: i32,
+    has_alpha: bool,
+    bytes: glib::Bytes,
+}
+
+type DecodedCache = Mutex<HashMap<String, std::sync::Arc<Decoded>>>;
+fn decoded_cache() -> &'static DecodedCache {
+    static CACHE: OnceLock<DecodedCache> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn decoded_key(data_url: &str, max_width: i32, max_height: i32) -> String {
+    format!("{max_width}:{max_height}:{data_url}")
+}
+
+fn decode_pixbuf(data_url: &str, max_width: i32, max_height: i32) -> Option<Pixbuf> {
+    let (_, encoded) = data_url.split_once(',')?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(encoded.as_bytes()).ok()?;
+    let loader = PixbufLoader::new();
+    loader.write(&bytes).ok()?;
+    loader.close().ok()?;
+    let pixbuf = loader.pixbuf()?;
+    let (width, height) = (pixbuf.width(), pixbuf.height());
+    let scale = (max_width as f64 / width.max(1) as f64).min(max_height as f64 / height.max(1) as f64).min(1.0);
+    if scale < 1.0 {
+        pixbuf.scale_simple((width as f64 * scale) as i32, (height as f64 * scale) as i32, InterpType::Bilinear)
+    } else {
+        Some(pixbuf)
+    }
+}
+
+fn to_decoded(pixbuf: &Pixbuf) -> Decoded {
+    Decoded {
+        width: pixbuf.width(),
+        height: pixbuf.height(),
+        rowstride: pixbuf.rowstride(),
+        channels: pixbuf.n_channels(),
+        bits: pixbuf.bits_per_sample(),
+        has_alpha: pixbuf.has_alpha(),
+        bytes: pixbuf.read_pixel_bytes(),
+    }
+}
+
+fn pixbuf_from_decoded(d: &Decoded) -> Pixbuf {
+    Pixbuf::from_bytes(
+        &d.bytes,
+        Colorspace::Rgb,
+        d.has_alpha,
+        d.bits,
+        d.width,
+        d.height,
+        d.rowstride,
+    )
+}
+
+/// Decode an image off the main thread (synchronous decode blocks the GTK loop
+/// and causes "Not Responding"). Applies the result on the main thread via a
+/// short timeout poll so no widget is ever touched off-thread.
+pub(crate) fn load_pixbuf_async<F>(data_url: String, max_width: i32, max_height: i32, apply: F)
+where
+    F: FnOnce(Option<Pixbuf>) + 'static,
+{
+    let key = decoded_key(&data_url, max_width, max_height);
+    if let Some(d) = decoded_cache().lock().ok().and_then(|m| m.get(&key).cloned()) {
+        apply(Some(pixbuf_from_decoded(&d)));
+        return;
+    }
+    let (tx, rx) = mpsc::channel::<Option<std::sync::Arc<Decoded>>>();
+    let key2 = key.clone();
+    std::thread::spawn(move || {
+        let result = decode_pixbuf(&data_url, max_width, max_height)
+            .map(|p| {
+                let d = std::sync::Arc::new(to_decoded(&p));
+                if let Ok(mut m) = decoded_cache().lock() {
+                    m.insert(key2, d.clone());
+                }
+                d
+            });
+        let _ = tx.send(result);
+    });
+    let mut rx = rx;
+    let mut apply = Some(apply);
+    gtk::glib::timeout_add_local(Duration::from_millis(16), move || match rx.try_recv() {
+        Ok(d) => {
+            if let Some(f) = apply.take() {
+                f(d.map(|d| pixbuf_from_decoded(&d)));
+            }
+            gtk::glib::ControlFlow::Break
+        }
+        Err(TryRecvError::Empty) => gtk::glib::ControlFlow::Continue,
+        Err(TryRecvError::Disconnected) => {
+            if let Some(f) = apply.take() {
+                f(None);
+            }
+            gtk::glib::ControlFlow::Break
+        }
+    });
+}
+
+/// Set a GtkImage from a base64 data URL without blocking the main thread.
+pub(crate) fn set_image_async(image: &gtk::Image, data_url: &str, max_width: i32, max_height: i32) {
+    let image = image.clone();
+    let url = data_url.to_owned();
+    load_pixbuf_async(url, max_width, max_height, move |pixbuf| {
+        if let Some(pixbuf) = pixbuf {
+            image.set_from_pixbuf(Some(&pixbuf));
+        }
+    });
+}
+
+/// Set a GtkPicture from a base64 data URL without blocking the main thread.
+pub(crate) fn set_picture_async(picture: &gtk::Picture, data_url: &str, max_width: i32, max_height: i32) {
+    let picture = picture.clone();
+    let url = data_url.to_owned();
+    load_pixbuf_async(url, max_width, max_height, move |pixbuf| {
+        if let Some(pixbuf) = pixbuf {
+            picture.set_pixbuf(Some(&pixbuf));
+        }
+    });
+}
 
 pub static LOCAL_ID: AtomicU64 = AtomicU64::new(1);
 pub static SEND_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -113,22 +247,10 @@ pub(crate) fn sticker_candidate_urls(url: &str) -> Vec<String> {
     out
 }
 pub(crate) fn pixbuf_from_data_url(data_url: &str, max_width: i32, max_height: i32) -> Option<gdk_pixbuf::Pixbuf> {
-    let (_, encoded) = data_url.split_once(',')?;
-    let bytes = base64::engine::general_purpose::STANDARD.decode(encoded.as_bytes()).ok()?;
-    let loader = PixbufLoader::new();
-    loader.write(&bytes).ok()?;
-    loader.close().ok()?;
-    let pixbuf = loader.pixbuf()?;
-    let (width, height) = (pixbuf.width(), pixbuf.height());
-    let scale = (max_width as f64 / width.max(1) as f64).min(max_height as f64 / height.max(1) as f64).min(1.0);
-    if scale < 1.0 {
-        pixbuf.scale_simple((width as f64 * scale) as i32, (height as f64 * scale) as i32, InterpType::Bilinear)
-    } else {
-        Some(pixbuf)
-    }
+    decode_pixbuf(data_url, max_width, max_height)
 }
 pub(crate) fn picture_from_data_url(data_url: &str, max_width: i32, max_height: i32) -> Option<gtk::Picture> {
-    let pixbuf = pixbuf_from_data_url(data_url, max_width, max_height)?;
+    let pixbuf = decode_pixbuf(data_url, max_width, max_height)?;
     let picture = gtk::Picture::for_pixbuf(&pixbuf);
     picture.set_can_shrink(true);
     Some(picture)
@@ -202,9 +324,8 @@ pub(crate) fn avatar_widget(state: &Rc<RefCell<State>>, name: &str, url: &str, s
         overlay.add_overlay(&image);
         let cached = { state.borrow().asset_cache.get(url).cloned() };
         if let Some(data) = cached {
-            if let Some(pixbuf) = pixbuf_from_data_url(&data, size, size) {
-                image.set_from_pixbuf(Some(&pixbuf));
-            }
+            // Decode off the main thread so the ListView bind never blocks.
+            set_image_async(&image, &data, size, size);
         } else {
             state.borrow_mut().request_timeout(
                 "asset.preview",
