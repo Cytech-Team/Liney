@@ -1,1 +1,0 @@
-//! Sync state — SyncCoordinator wrapper

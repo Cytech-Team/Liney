@@ -6,10 +6,11 @@
 
 <p align="center"><strong>LINE for Linux.</strong><br>Chat closer on Linux.</p>
 
-Liney is an independent native Linux desktop client for LINE. It is built
-with GTK4, Rust, Bun, TypeScript, SQLite, and LINEJS. The application
-connects to LINE directly from the user's device; Liney does not operate a
-relay server or collect messages through a central backend.
+Liney is an independent Linux desktop client for LINE. The UI is built with
+React + Tauri (WebView), the protocol engine is a standalone TypeScript/Bun
+sidecar, and it uses SQLite + LINEJS. The application connects to LINE
+directly from the user's device; Liney does not operate a relay server or
+collect messages through a central backend.
 
 Liney is developed and maintained under **Cytech Team Development**.
 
@@ -51,7 +52,7 @@ intended to be a spam tool, mass-messaging system, account farm, or general
 automation framework.
 
 ```text
-Liney UI (native GTK4)
+Liney UI (React + Tauri WebView)
         |
         | versioned JSONL IPC
         v
@@ -134,22 +135,28 @@ archives.
 
 ## Development requirements
 
-- Linux with GTK4, GStreamer, and PipeWire runtime libraries.
+- Linux with WebKitGTK, GStreamer, and PipeWire runtime libraries.
 - Bun 1.4 or newer.
 - Rust 1.77.2 or newer.
 - A working Secret Service or KWallet integration for persistent credentials.
 - `secret-tool` is useful for checking the wallet from a terminal.
 
-Install dependencies and start the native GTK4 desktop app:
+Install dependencies and start the desktop app (React + Tauri WebView):
 
 ```sh
 bun install
-bun run desktop:dev
+bun run dev
 ```
 
-The old React/Tauri UI is retained only for migration/reference work and is
-available explicitly through `legacy:web:*` and `legacy:tauri:*` scripts. It is
-not used by the normal Liney build or release packages.
+Build a release bundle:
+
+```sh
+bun run build
+```
+
+The internals stay cleanly separated: `src/` (React UI) talks to the
+`liney-engine` sidecar over versioned JSONL, and the engine owns all LINEJS,
+SQLite, sync, and media logic.
 
 ## Engine RPC
 
@@ -183,7 +190,6 @@ bun test
 bun run lint
 bun run build
 bun run engine:build
-cargo check --manifest-path native-gtk/Cargo.toml
 ```
 
 The repository includes unit tests for storage migration, SQLite behavior,
@@ -192,29 +198,21 @@ and the engine RPC contract.
 
 ## Build and release
 
-The release workflow builds the native GTK4 UI and engine from the same
-source tree. It verifies desktop metadata, scans artifacts for legacy
-credential files, computes SHA256 hashes, generates an SPDX SBOM, and builds
-the Arch package from the same binaries.
-
-Current native release targets are:
-
-- Arch `pkg.tar.zst`
-- Portable Linux tar archive
+The release workflow boots the engine sidecar, builds the React + Tauri (WebView)
+app with `bun run build`, and uploads the resulting `liney` + `liney-engine`
+binaries. It verifies the binary is the WebKit (Tauri) build, then hashes and
+stages the artifacts.
 
 Local helpers:
 
 ```sh
-bun run desktop:build
-bun run package:tar
-bun run package:arch
-bun run verify:release
+bun run dev        # live dev (vite + tauri)
+bun run build      # release bundle
+bun run web:build  # build the frontend only
+bun run engine:build  # compile the engine sidecar
 ```
 
-The portable archive includes the runtime binaries, desktop entry, full PNG
-logo, compact SVG mark, README, license, and branding artwork. Release bundles
-must never contain
-credentials or a user's session.
+Release bundles must never contain credentials or a user's session.
 
 ## Public website / GitHub Pages
 
