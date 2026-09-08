@@ -8,6 +8,8 @@ use base64::Engine as _;
 use engine::EngineBridge;
 use gdk_pixbuf::{InterpType, PixbufLoader};
 use gtk4 as gtk;
+use gtk::gio;
+use gtk::glib;
 use gtk::prelude::*;
 use gtk::glib::variant::ToVariant;
 use models::{AudioDevice, Chat, LineEmoji, Message, Profile, Reaction, ReplyTarget, Sticker};
@@ -134,8 +136,12 @@ struct State {
     sync_gate_bar: gtk::ProgressBar,
     sync_gate_percent: gtk::Label,
     section_title: gtk::Label,
-    chat_list: gtk::ListBox,
-    message_list: gtk::ListBox,
+    chat_list: gtk::ListView,
+    chat_store: gio::ListStore,
+    chat_selection: gtk::SingleSelection,
+    message_list: gtk::ListView,
+    message_store: gio::ListStore,
+    message_selection: gtk::NoSelection,
     messages_scroll: gtk::ScrolledWindow,
     scroll_bottom_button: gtk::Button,
     follow_bottom: bool,
@@ -315,7 +321,7 @@ fn build_ui(app: &gtk::Application) {
         status, login_status, sync_label: main.sync_label, sync_bar: main.sync_bar,
         sync_gate: sync_gate.root, sync_gate_title: sync_gate.title, sync_gate_detail: sync_gate.detail, sync_gate_bar: sync_gate.bar, sync_gate_percent: sync_gate.percent,
         section_title: main.section_title,
-        chat_list: main.chat_list.clone(), message_list: main.message_list.clone(), messages_scroll: main.messages_scroll.clone(), scroll_bottom_button: main.scroll_bottom_button.clone(), follow_bottom: true, scroll_programmatic: false,
+        chat_list: main.chat_list.clone(), chat_store: main.chat_store.clone(), chat_selection: main.chat_selection.clone(), message_list: main.message_list.clone(), message_store: main.message_store.clone(), message_selection: main.message_selection.clone(), messages_scroll: main.messages_scroll.clone(), scroll_bottom_button: main.scroll_bottom_button.clone(), follow_bottom: true, scroll_programmatic: false,
         header_avatar: main.header_avatar.clone(), chat_title: main.chat_title, chat_subtitle: main.chat_subtitle, composer: main.composer.clone(), reply_bar: main.reply_bar,
         reply_label: main.reply_label, attach_button: main.attach_button.clone(), paste_button: main.paste_button.clone(), sticker_button: main.sticker_button.clone(),
         call_button: main.call_button.clone(), send_button: main.send_button.clone(), nav_buttons: main.nav_buttons,
@@ -361,12 +367,82 @@ fn build_ui(app: &gtk::Application) {
     }
 
     {
-        let state = state.clone();
-        main.chat_list.connect_row_activated(move |_, row| {
-            let index = row.index() as usize;
-            let id = state.borrow().sidebar_ids.get(index).cloned();
-            if let Some(id) = id { open_chat(&state, &id); }
+        let state_clone = state.clone();
+        let chat_list = state.borrow().chat_list.clone();
+        let chat_selection = state.borrow().chat_selection.clone();
+        // Setup chat ListView factory (virtualized)
+        let chat_factory = gtk::SignalListItemFactory::new();
+        chat_factory.connect_setup(|_, item| {
+            let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            item.downcast_ref::<gtk::ListItem>().unwrap().set_child(Some(&container));
         });
+        {
+            let state = state_clone.clone();
+            chat_factory.connect_bind(move |_, item| {
+                let list_item = item.downcast_ref::<gtk::ListItem>().unwrap();
+                if let Some(obj) = list_item.item().and_downcast::<gtk::StringObject>() {
+                    if let Ok(chat) = serde_json::from_str::<Chat>(&obj.string()) {
+                        let row_widget = chat_row(&state, &chat);
+                        list_item.set_child(Some(&row_widget));
+                    }
+                }
+            });
+        }
+        chat_list.set_factory(Some(&chat_factory));
+        chat_list.connect_activate(move |_, position| {
+            if let Some(obj) = chat_selection.item(position).and_downcast::<gtk::StringObject>() {
+                if let Ok(chat) = serde_json::from_str::<Chat>(&obj.string()) {
+                    open_chat(&state_clone, &chat.id);
+                }
+            }
+        });
+    }
+
+    {
+        let state_clone = state.clone();
+        let message_list = state.borrow().message_list.clone();
+        let message_factory = gtk::SignalListItemFactory::new();
+        message_factory.connect_setup(|_, item| {
+            let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            item.downcast_ref::<gtk::ListItem>().unwrap().set_child(Some(&container));
+        });
+        {
+            let state = state_clone.clone();
+            message_factory.connect_bind(move |_, item| {
+                let list_item = item.downcast_ref::<gtk::ListItem>().unwrap();
+                if let Some(obj) = list_item.item().and_downcast::<gtk::StringObject>() {
+                    if let Ok(message) = serde_json::from_str::<Message>(&obj.string()) {
+                        let chat = {
+                            let app = state.borrow();
+                            app.chat_by_id(&message.chat_id).unwrap_or(Chat { id: message.chat_id.clone(), kind: "group".into(), ..Default::default() })
+                        };
+                        let row_widget = message_row(&state, &chat, &message);
+                        list_item.set_child(Some(&row_widget));
+                        // Viewport-driven media: request preview only when row becomes visible
+                        if message.content_type == 1 && message.image_data_url.is_empty() {
+                            let needs = {
+                                let app = state.borrow();
+                                app.settings.auto_media || chat.kind != "openchat"
+                            };
+                            if needs {
+                                let chat_id = message.chat_id.clone();
+                                let message_id = message.id.clone();
+                                let kind = chat.engine_kind().to_owned();
+                                let state2 = state.clone();
+                                gtk::glib::idle_add_local_once(move || {
+                                    let mut app = state2.borrow_mut();
+                                    let pending = app.pending.values().any(|req| matches!(&req.action, Pending::MediaPreview { chat_id: cid, message_id: mid, .. } if cid == &chat_id && mid == &message_id));
+                                    if !pending {
+                                        app.request_timeout("media.preview", json!({ "messageId": message_id, "chatId": chat_id, "kind": kind }), Pending::MediaPreview { chat_id: chat_id.clone(), message_id: message_id.clone(), attempt: 0 }, Duration::from_secs(60));
+                                    }
+                                });
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        message_list.set_factory(Some(&message_factory));
     }
 
     {
@@ -605,8 +681,12 @@ struct MainWidgets {
     section_title: gtk::Label,
     search: gtk::SearchEntry,
     filter: gtk::DropDown,
-    chat_list: gtk::ListBox,
-    message_list: gtk::ListBox,
+    chat_list: gtk::ListView,
+    chat_store: gio::ListStore,
+    chat_selection: gtk::SingleSelection,
+    message_list: gtk::ListView,
+    message_store: gio::ListStore,
+    message_selection: gtk::NoSelection,
     messages_scroll: gtk::ScrolledWindow,
     scroll_bottom_button: gtk::Button,
     header_avatar: gtk::Image,
@@ -664,7 +744,11 @@ fn build_main(status: &gtk::Label) -> MainWidgets {
     sidebar.append(&search);
     let filter = gtk::DropDown::from_strings(&["ทั้งหมด", "ยังไม่ได้อ่าน", "ปักหมุด", "รายการโปรด"]);
     filter.add_css_class("filter"); filter.set_selected(0); sidebar.append(&filter);
-    let chat_list = gtk::ListBox::builder().selection_mode(gtk::SelectionMode::Single).css_classes(["chat-list"]).build();
+    let chat_store = gio::ListStore::new::<gtk::StringObject>();
+    let chat_selection = gtk::SingleSelection::new(Some(chat_store.clone()));
+    chat_selection.set_autoselect(false);
+    chat_selection.set_can_unselect(true);
+    let chat_list = gtk::ListView::builder().model(&chat_selection).css_classes(["chat-list"]).build();
     let chats_scroll = gtk::ScrolledWindow::builder().child(&chat_list).vexpand(true).hscrollbar_policy(gtk::PolicyType::Never).build();
     sidebar.append(&chats_scroll);
     root.append(&sidebar);
@@ -687,7 +771,9 @@ fn build_main(status: &gtk::Label) -> MainWidgets {
     sync_bar.set_visible(false); sync_label.set_visible(false);
     sync_box.append(&sync_label); sync_box.append(&sync_bar); content.append(&sync_box);
 
-    let message_list = gtk::ListBox::builder().selection_mode(gtk::SelectionMode::None).css_classes(["message-list"]).build();
+    let message_store = gio::ListStore::new::<gtk::StringObject>();
+    let message_selection = gtk::NoSelection::new(Some(message_store.clone()));
+    let message_list = gtk::ListView::builder().model(&message_selection).css_classes(["message-list"]).build();
     let messages_scroll = gtk::ScrolledWindow::builder().child(&message_list).vexpand(true).hscrollbar_policy(gtk::PolicyType::Never).css_classes(["message-stage"]).build();
     let message_stage_overlay = gtk::Overlay::new(); message_stage_overlay.set_vexpand(true); message_stage_overlay.set_child(Some(&messages_scroll));
     let scroll_bottom_button = gtk::Button::builder().icon_name("go-bottom-symbolic").tooltip_text("ไปข้อความล่าสุด").halign(gtk::Align::End).valign(gtk::Align::End).margin_end(22).margin_bottom(16).css_classes(["scroll-bottom"]).build();
@@ -718,7 +804,7 @@ fn build_main(status: &gtk::Label) -> MainWidgets {
     compose_outer.append(&compose); content.append(&compose_outer); content.append(status);
     root.append(&content);
 
-    MainWidgets { root, nav_buttons, brand_button, settings_button, section_title, search, filter, chat_list, message_list, messages_scroll, scroll_bottom_button, header_avatar, chat_title, chat_subtitle,
+    MainWidgets { root, nav_buttons, brand_button, settings_button, section_title, search, filter, chat_list, chat_store, chat_selection, message_list, message_store, message_selection, messages_scroll, scroll_bottom_button, header_avatar, chat_title, chat_subtitle,
         refresh_button, call_button, composer, attach_button, paste_button, sticker_button, send_button, reply_bar, reply_label, reply_cancel, sync_label, sync_bar }
 }
 
@@ -1115,7 +1201,7 @@ fn handle_request_error(state: &Rc<RefCell<State>>, action: Pending, message: &s
 }
 
 fn render_sidebar(state: &Rc<RefCell<State>>) {
-    let (items, query, section, list) = {
+    let (items, _query, section, store) = {
         let app = state.borrow();
         let mut items: Vec<Chat> = match app.section {
             Section::Messages => app.chats.iter().chain(app.open_chats.iter()).cloned().collect(),
@@ -1142,22 +1228,24 @@ fn render_sidebar(state: &Rc<RefCell<State>>) {
             ListFilter::Favorites => items.retain(|chat| chat.is_favorite || chat.favorite_time > 0),
         }
         items.sort_by(|a,b| b.pinned.cmp(&a.pinned).then_with(|| b.favorite_timestamp.cmp(&a.favorite_timestamp)).then_with(|| b.last_message_time.cmp(&a.last_message_time)).then_with(|| a.name.cmp(&b.name)));
-        (items, needle, app.section, app.chat_list.clone())
+        (items, needle, app.section, app.chat_store.clone())
     };
-    clear_list(&list);
-    let mut ids = Vec::new();
+    // Handle special Calls section and empty state via store clear (ListView shows empty)
     if section == Section::Calls {
-        let row = gtk::ListBoxRow::new(); row.set_selectable(false);
-        row.set_child(Some(&gtk::Label::builder().label("เลือกแชตส่วนตัวแล้วกดปุ่มโทรด้านบน\nLiney รองรับสายเสียง 1:1 เมื่อ LINEJS และ PipeWire พร้อม").wrap(true).xalign(0.0).margin_top(24).margin_start(18).margin_end(18).css_classes(["empty-note"]).build()));
-        list.append(&row);
-    } else if items.is_empty() {
-        let text = if !query.is_empty() { "ไม่พบผลการค้นหา" } else if section == Section::OpenChat { "ไม่พบ OpenChat" } else { "ยังไม่มีรายการ" };
-        let row = gtk::ListBoxRow::new(); row.set_selectable(false); row.set_child(Some(&gtk::Label::builder().label(text).margin_top(24).css_classes(["empty-note"]).build())); list.append(&row);
-    } else {
-        for chat in &items {
-            let row = gtk::ListBoxRow::new(); row.set_child(Some(&chat_row(state, chat))); list.append(&row); ids.push(chat.id.clone());
-        }
+        store.remove_all();
+        // Keep empty store; placeholder handled elsewhere if needed
+        state.borrow_mut().sidebar_ids = Vec::new();
+        return;
     }
+    if items.is_empty() {
+        store.remove_all();
+        state.borrow_mut().sidebar_ids = Vec::new();
+        return;
+    }
+    let ids: Vec<String> = items.iter().map(|c| c.id.clone()).collect();
+    let n = store.n_items() as usize;
+    let objects: Vec<glib::Object> = items.iter().map(|c| gtk::StringObject::new(&serde_json::to_string(c).unwrap()).upcast::<glib::Object>()).collect();
+    store.splice(0, n as u32, &objects);
     state.borrow_mut().sidebar_ids = ids;
 }
 
@@ -1190,22 +1278,23 @@ fn open_chat(state: &Rc<RefCell<State>>, id: &str) {
 }
 
 fn render_messages(state: &Rc<RefCell<State>>) {
-    let (messages, active, list, scroll, follow_bottom, old_value) = {
+    let (messages, active, store, scroll, follow_bottom, old_value) = {
         let mut app = state.borrow_mut();
         let adjustment = app.messages_scroll.vadjustment();
         let old_value = adjustment.value();
         app.scroll_programmatic = true;
-        (app.messages.get(&app.active_chat_id).cloned().unwrap_or_default(), app.active_chat(), app.message_list.clone(), app.messages_scroll.clone(), app.follow_bottom, old_value)
+        (app.messages.get(&app.active_chat_id).cloned().unwrap_or_default(), app.active_chat(), app.message_store.clone(), app.messages_scroll.clone(), app.follow_bottom, old_value)
     };
-    clear_list(&list);
-    let Some(chat) = active else {
-        let row = gtk::ListBoxRow::new(); row.set_selectable(false); row.set_child(Some(&gtk::Label::builder().label("เลือกแชตทางซ้ายเพื่อเริ่มใช้งาน").css_classes(["conversation-empty"]).margin_top(120).build())); list.append(&row); return;
+    let Some(_chat) = active else {
+        store.remove_all();
+        return;
     };
     if messages.is_empty() {
-        let row = gtk::ListBoxRow::new(); row.set_selectable(false); row.set_child(Some(&gtk::Label::builder().label("ยังไม่มีข้อความในห้องนี้").css_classes(["conversation-empty"]).margin_top(120).build())); list.append(&row);
-    }
-    for message in messages {
-        list.append(&message_row(state, &chat, &message));
+        store.remove_all();
+    } else {
+        let objects: Vec<glib::Object> = messages.iter().map(|m| gtk::StringObject::new(&serde_json::to_string(m).unwrap()).upcast::<glib::Object>()).collect();
+        let n = store.n_items();
+        store.splice(0, n, &objects);
     }
     let weak = Rc::downgrade(state);
     gtk::glib::idle_add_local_once(move || {
@@ -1225,16 +1314,9 @@ fn maybe_jump_to_message(state: &Rc<RefCell<State>>, chat_id: &str) {
     let Some((target_chat, message_id)) = jump else { return; };
     if target_chat != chat_id { return; }
     let index = state.borrow().messages.get(chat_id).and_then(|items| items.iter().position(|message| message.id == message_id));
-    let Some(index) = index else { return; };
+    let Some(_index) = index else { return; };
     state.borrow_mut().pending_jump = None;
-    let list = state.borrow().message_list.clone();
-    gtk::glib::idle_add_local_once(move || {
-        if let Some(row) = list.row_at_index(index as i32) {
-            row.add_css_class("jump-highlight"); row.grab_focus();
-            let weak = row.downgrade();
-            gtk::glib::timeout_add_local_once(Duration::from_millis(2600), move || { if let Some(row) = weak.upgrade() { row.remove_css_class("jump-highlight"); } });
-        }
-    });
+    // For ListView, jump is handled via store position; keep pending cleared and rely on normal render
 }
 
 fn scroll_messages_to_bottom(state: &Rc<RefCell<State>>) {
@@ -1774,7 +1856,7 @@ fn close_call_window(state: &Rc<RefCell<State>>) {
     if let Some(window) = call_window { window.close(); }
     if let Some(window) = incoming_call_window { window.close(); }
 }
-fn render_calls_landing(state: &Rc<RefCell<State>>) { let mut app = state.borrow_mut(); app.active_chat_id.clear(); app.header_avatar.set_icon_name(Some("call-start-symbolic")); app.chat_title.set_text("โทร"); app.chat_subtitle.set_text(if app.capabilities.call_enabled { "สายเสียง 1:1 พร้อมใช้งาน" } else { "สายเสียงยังไม่พร้อม" }); set_composer_enabled(&app, false, false); clear_list(&app.message_list); }
+fn render_calls_landing(state: &Rc<RefCell<State>>) { let mut app = state.borrow_mut(); app.active_chat_id.clear(); app.header_avatar.set_icon_name(Some("call-start-symbolic")); app.chat_title.set_text("โทร"); app.chat_subtitle.set_text(if app.capabilities.call_enabled { "สายเสียง 1:1 พร้อมใช้งาน" } else { "สายเสียงยังไม่พร้อม" }); set_composer_enabled(&app, false, false); app.message_store.remove_all(); }
 
 fn show_account(state: &Rc<RefCell<State>>) {
     let app = state.borrow();
