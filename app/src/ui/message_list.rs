@@ -249,7 +249,7 @@ pub(crate) fn flex_message_widget(state: &Rc<RefCell<State>>, value: &Value) -> 
 }
 
 pub(crate) fn flex_bubble_widget(state: &Rc<RefCell<State>>, node: &Value) -> gtk::Box {
-    let bubble = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(0).width_request(320).css_classes(["flex-bubble-native"]).build();
+    let bubble = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(0).width_request(460).css_classes(["flex-bubble-native"]).build();
     for section in ["header", "hero", "body", "footer"] { if let Some(value) = node.get(section).filter(|v| v.is_object()) { bubble.append(&flex_node_widget(state, value)); } }
     bubble
 }
@@ -269,12 +269,13 @@ pub(crate) fn flex_node_widget(state: &Rc<RefCell<State>>, node: &Value) -> gtk:
             wrap_flex_action(state, node.get("action"), label.upcast())
         }
         "image" | "icon" => {
-            let size = if kind == "icon" { 42 } else { 300 };
-            let picture = gtk::Picture::new(); picture.set_can_shrink(true); picture.set_size_request(size, if kind == "icon" { 42 } else { 180 });
+            let desired = if kind == "icon" { 42 } else { 460 };
+            let height = if kind == "icon" { 42 } else { 240 };
+            let picture = gtk::Picture::new(); picture.set_can_shrink(true); picture.set_size_request(desired, height);
             if let Some(url) = node.get("url").and_then(Value::as_str).filter(|url| url.starts_with("https://")) {
                 let url = url.to_owned(); let cached = { state.borrow().asset_cache.get(&url).cloned() };
-                if let Some(data) = cached { set_picture_async(&picture, &data, size, 240); }
-                else { state.borrow_mut().request_timeout("asset.preview", json!({ "url": url }), Pending::AssetPicture { picture: picture.clone(), url, max_width: size, max_height: 240 }, Duration::from_secs(30)); }
+                if let Some(data) = cached { set_picture_async(&picture, &data, desired, height); }
+                else { state.borrow_mut().request_timeout("asset.preview", json!({ "url": url }), Pending::AssetPicture { picture: picture.clone(), url, max_width: desired, max_height: height }, Duration::from_secs(30)); }
             }
             wrap_flex_action(state, node.get("action"), picture.upcast())
         }
