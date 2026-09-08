@@ -2820,6 +2820,67 @@ async function fetchUiAssetDataUrl(rawUrl: string): Promise<{ dataUrl: string; m
   return { dataUrl: `data:${mime};base64,${bytes.toString("base64")}`, mime, size: bytes.length };
 }
 
+function htmlMeta(html: string, prop: string): string | undefined {
+  const pattern = new RegExp(
+    `<meta[^>]+(?:property|name)=["']${prop}["'][^>]*content=["']([^"']*)["'][^>]*>|<meta[^>]+content=["']([^"']*)["'][^>]*(?:property|name)=["']${prop}["'][^>]*>`,
+    "i",
+  );
+  const match = pattern.exec(html);
+  const value = match ? (match[1] ?? match[2] ?? "") : "";
+  return value ? decodeHtmlEntities(value).trim() : undefined;
+}
+
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ");
+}
+
+function ogAbsolute(value: string | undefined, base: URL): string | undefined {
+  if (!value) return undefined;
+  try { return new URL(value, base).toString(); } catch { return undefined; }
+}
+
+async function fetchLinkPreview(rawUrl: string): Promise<Record<string, unknown>> {
+  let url = new URL(rawUrl);
+  if (!["http:", "https:"].includes(url.protocol)) throw new Error("link must be http(s)");
+  let response: Response | undefined;
+  for (let redirect = 0; redirect <= 5; redirect++) {
+    response = await fetch(url, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(12_000),
+      headers: { accept: "text/html,application/xhtml+xml,*/*;q=0.8", "user-agent": "Liney/0.1 (+link preview)" },
+    });
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+      if (!location || redirect === 5) throw new Error("link redirect is invalid");
+      url = new URL(location, url);
+      continue;
+    }
+    break;
+  }
+  if (!response?.ok) throw new Error(`link fetch failed (${response?.status ?? "network"})`);
+  const declared = Number(response.headers.get("content-length") ?? 0);
+  if (Number.isFinite(declared) && declared > 3 * 1024 * 1024) throw new Error("link page exceeds 3 MB");
+  const text = (await response.text()).slice(0, 3 * 1024 * 1024);
+
+  const title = htmlMeta(text, "og:title") ?? /<title[^>]*>([^<]*)<\/title>/i.exec(text)?.[1]?.trim();
+  const description =
+    htmlMeta(text, "og:description") ??
+    htmlMeta(text, "description") ??
+    htmlMeta(text, "twitter:description");
+  const image = ogAbsolute(htmlMeta(text, "og:image") ?? htmlMeta(text, "twitter:image"), url);
+  const siteName = htmlMeta(text, "og:site_name") ?? new URL(url).hostname;
+
+  return {
+    url: new URL(url).toString(),
+    title: (title ?? siteName ?? "").slice(0, 300),
+    description: (description ?? "").slice(0, 500) || undefined,
+    image,
+    siteName: siteName ?? "",
+  };
+}
+
 async function handle(request: any) {
   const id = String(request?.id ?? crypto.randomUUID());
   const method = String(request?.method ?? "");
@@ -2914,6 +2975,20 @@ async function handle(request: any) {
     }
     const cancelled = mediaWorker.cancel(jobId);
     emit({ id, ok: true, result: { jobId, cancelled } });
+    return;
+  }
+
+  if (method === "link.preview") {
+    const url = String(request?.params?.url ?? "").trim();
+    if (!/^https?:\/\//i.test(url)) {
+      replyError(id, new Error("url is required"));
+      return;
+    }
+    try {
+      emit({ id, ok: true, result: await fetchLinkPreview(url) });
+    } catch (error) {
+      replyError(id, error);
+    }
     return;
   }
 

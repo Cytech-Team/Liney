@@ -2755,11 +2755,12 @@ function Conversation({
                         {!message.rich && message.image ? (
                           message.image === "food" ? <FoodCard /> : <button className="message-image-button" type="button" title="เปิดดูรูปภาพ" onClick={() => onViewImage(message.image!)}><img className="message-image" src={message.image} alt="รูปภาพ" /></button>
                         ) : null}
-                        {!message.rich && message.postNotification ? (
-                          <PostNotificationCard data={message.postNotification} />
-                        ) : !message.rich && message.text ? (
-                          <div className={`bubble ${message.status === "error" ? "bubble-error" : ""}`}>{message.text}</div>
-                        ) : null}
+                         {!message.rich && message.postNotification ? (
+                           <PostNotificationCard data={message.postNotification} />
+                         ) : !message.rich && message.text ? (
+                           <div className={`bubble ${message.status === "error" ? "bubble-error" : ""}`}>{message.text}</div>
+                         ) : null}
+                         {message.text && message.status !== "sending" ? <LinkPreviewFor text={message.text} /> : null}
                       </>
                     )}
                     {message.status !== "sending" ? (
@@ -3004,6 +3005,47 @@ function PostNotificationCard({ data }: { data: NonNullable<Message["postNotific
       </div>
       <span className="post-notification-arrow">›</span>
     </div>
+  );
+}
+
+const LINK_URL_RE = /(https?:\/\/[^\s<>"']+)/;
+
+function LinkPreviewFor({ text }: { text: string }) {
+  const match = LINK_URL_RE.exec(String(text || ""));
+  const url = match?.[1]?.replace(/[.,;:!?]+$/, "");
+  if (!url) return null;
+  return <LinkPreview url={url} />;
+}
+
+function LinkPreview({ url }: { url: string }) {
+  const [state, setState] = useState<{ title: string; description?: string; image?: string; siteName?: string } | "loading" | "error">("loading");
+  useEffect(() => {
+    if (!lineyEngine.isNative) { setState("error"); return; }
+    let alive = true;
+    lineyEngine
+      .request<{ title?: string; description?: string; image?: string; siteName?: string }>("link.preview", { url }, 12_000)
+      .then((r) => { if (alive) setState(r?.title ? { title: r.title, description: r.description, image: r.image, siteName: r.siteName } : "error"); })
+      .catch(() => { if (alive) setState("error"); });
+    return () => { alive = false; };
+  }, [url]);
+
+  if (state === "loading") {
+    return <div className="link-preview link-preview-loading"><span className="link-preview-skeleton" /></div>;
+  }
+  if (state === "error") {
+    return <a className="link-preview link-preview-fallback" href={url} target="_blank" rel="noreferrer noopener">{url}</a>;
+  }
+  const s = state;
+  return (
+    <a className="link-preview" href={url} target="_blank" rel="noreferrer noopener">
+      {s.image ? <div className="link-preview-thumb"><img src={s.image} alt="" loading="lazy" referrerPolicy="no-referrer" /></div> : null}
+      <div className="link-preview-copy">
+        {s.siteName ? <span className="link-preview-site">{s.siteName}</span> : null}
+        <strong className="link-preview-title">{s.title}</strong>
+        {s.description ? <span className="link-preview-desc">{s.description}</span> : null}
+        <span className="link-preview-url">{url}</span>
+      </div>
+    </a>
   );
 }
 
