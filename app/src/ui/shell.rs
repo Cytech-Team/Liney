@@ -573,24 +573,24 @@ pub(crate) fn build_main(status: &gtk::Label) -> MainWidgets {
 
 pub(crate) fn build_login(status: &gtk::Label) -> (gtk::Box, gtk::Button, gtk::Entry, gtk::PasswordEntry, gtk::Button) {
     let page = gtk::Box::builder().orientation(gtk::Orientation::Vertical).halign(gtk::Align::Center).valign(gtk::Align::Center).css_classes(["login-page"]).build();
-    let content = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(26).css_classes(["login-content"]).build();
+    let content = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(18).css_classes(["login-content"]).build();
     let brand = gtk::Box::builder().orientation(gtk::Orientation::Horizontal).spacing(12).build();
     brand.append(&logo_widget(44));
     let brand_text = gtk::Box::builder().orientation(gtk::Orientation::Vertical).valign(gtk::Align::Center).build();
     brand_text.append(&gtk::Label::builder().label("Liney").xalign(0.0).css_classes(["login-brand"]).build());
     brand_text.append(&gtk::Label::builder().label("Native LINE desktop client for Linux").xalign(0.0).css_classes(["login-help"]).build());
     brand.append(&brand_text); content.append(&brand);
-    let columns = gtk::Box::builder().orientation(gtk::Orientation::Horizontal).spacing(28).build();
-    let qr_card = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(10).hexpand(true).css_classes(["login-card"]).build();
+    let columns = gtk::Box::builder().orientation(gtk::Orientation::Horizontal).spacing(20).homogeneous(true).build();
+    let qr_card = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(10).valign(gtk::Align::Fill).css_classes(["login-card"]).build();
     qr_card.append(&gtk::Label::builder().label("Log in with QR code").xalign(0.0).css_classes(["login-heading"]).build());
     qr_card.append(&gtk::Label::builder().label("เปิด LINE บนมือถือแล้วสแกน QR Code").xalign(0.0).css_classes(["login-help"]).build());
-    let qr_preview = gtk::Box::builder().halign(gtk::Align::Center).valign(gtk::Align::Center).margin_top(14).margin_bottom(14).css_classes(["qr-preview"]).build();
+    let qr_preview = gtk::Box::builder().halign(gtk::Align::Fill).valign(gtk::Align::Fill).hexpand(true).vexpand(true).margin_top(14).margin_bottom(14).css_classes(["qr-preview"]).build();
     let qr_idle = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(10).halign(gtk::Align::Center).valign(gtk::Align::Center).build();
     let qr_idle_icon = gtk::Image::from_icon_name("camera-web-symbolic"); qr_idle_icon.set_pixel_size(28);
     qr_idle.append(&qr_idle_icon); qr_idle.append(&gtk::Label::builder().label("QR Code\nพร้อมสร้างเพื่อเข้าสู่ระบบ").justify(gtk::Justification::Center).css_classes(["login-help"]).build());
     qr_preview.append(&qr_idle); qr_card.append(&qr_preview);
     let qr = gtk::Button::builder().label("สร้าง QR Code").css_classes(["primary"]).sensitive(false).build(); qr_card.append(&qr); columns.append(&qr_card);
-    let email_card = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(12).css_classes(["login-card", "secondary-card"]).build();
+    let email_card = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(12).valign(gtk::Align::Fill).css_classes(["login-card"]).build();
     email_card.append(&gtk::Label::builder().label("Log in with email").xalign(0.0).css_classes(["login-secondary-title"]).build());
     email_card.append(&gtk::Label::builder().label("ใช้ Email / Password ของบัญชี LINE").xalign(0.0).margin_bottom(10).css_classes(["login-help"]).build());
     let email = gtk::Entry::builder().placeholder_text("อีเมล LINE").build();
@@ -601,7 +601,7 @@ pub(crate) fn build_login(status: &gtk::Label) -> (gtk::Box, gtk::Button, gtk::E
     columns.append(&email_card); content.append(&columns);
     let warning = gtk::Label::builder()
         .label("Liney เป็นไคลเอนต์ LINE ที่ไม่เป็นทางการ ไม่ได้เกี่ยวข้องหรือได้รับการรับรองจาก LY Corporation และการใช้งานอาจไม่เป็นไปตามข้อกำหนดการให้บริการของ LINE")
-        .xalign(0.0).wrap(true).max_width_chars(100).css_classes(["login-warning"]).build();
+        .xalign(0.0).wrap(true).css_classes(["login-warning"]).build();
     content.append(&warning);
     let consent = gtk::CheckButton::with_label("ฉันอ่านคำเตือนแล้วและยอมรับความเสี่ยงในการใช้งานไคลเอนต์ที่ไม่เป็นทางการ");
     consent.add_css_class("login-consent");
