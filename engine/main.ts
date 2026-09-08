@@ -965,8 +965,12 @@ async function normalizeTalkChat(chat: any, box: any): Promise<any> {
   if (!client) throw new Error("not authenticated");
   const mid = String(chat?.mid ?? talkMessageBoxId(box));
   const isDm = mid.startsWith("u");
+  // Prefer the locally-known sender identity. If it's not cached yet, leave a
+  // placeholder instead of resolving it over the network here — this function
+  // runs for every room during the post-cache refresh and per-sender RPCs at
+  // startup are what make the app feel like it has no cache.
   let identity = isDm ? talkSenderCache.get(mid) : undefined;
-  if (isDm && !identity) identity = (await resolveTalkSender(mid)) ?? undefined;
+  if (isDm && !identity) identity = { id: mid, name: "LINE User", avatarUrl: "" };
   const chatName = String(chat?.name ?? "").trim();
   const hasUsefulChatName = Boolean(chatName) && !["LINE Chat", "LINE User"].includes(chatName);
   const rawLast = box?.lastMessages?.[0];
@@ -1070,7 +1074,7 @@ async function loadChatsList(): Promise<any[]> {
   // metadata only for those extra boxes; DMs already have contact metadata
   // from the friends sync and therefore need no extra request.
   const extraGroups = new Map<string, any>();
-  await runPool(additionalIds.filter((id) => !id.startsWith("u")), 6, async (id) => {
+  await runPool(additionalIds.filter((id) => !id.startsWith("u")), 4, async (id) => {
     try {
       const extra = await client!.getChat(id);
       extraGroups.set(id, extra);
@@ -1079,10 +1083,14 @@ async function loadChatsList(): Promise<any[]> {
     }
   });
 
-  const remoteResult = await Promise.all([
-    ...chats.map((chat: any) => normalizeTalkChat(chat, boxMap.get(String(chat.mid)))),
-    ...additionalIds.map((id) => normalizeTalkChat(extraGroups.get(id), boxMap.get(id))),
-  ]);
+  const jobs: Array<{ chat: any; box: any }> = [
+    ...chats.map((chat: any) => ({ chat, box: boxMap.get(String(chat.mid)) })),
+    ...additionalIds.map((id) => ({ chat: extraGroups.get(id), box: boxMap.get(id) })),
+  ];
+  const remoteResult = new Array<any>(jobs.length);
+  await runPool(jobs, 4, async ({ chat, box }, index) => {
+    remoteResult[index] = await normalizeTalkChat(chat, box);
+  });
   const result = mergeKnownTalkChats(remoteResult);
   if (!result.length && joinedError) throw joinedError;
   result.sort((a, b) => b.lastMessageTime - a.lastMessageTime);
@@ -1105,22 +1113,22 @@ async function loadFriendsList(): Promise<any[]> {
         contacts.push({ mid, contact });
       }
     } catch {
+      // If getContactsV2 fails, fall back to the local sender cache only —
+      // NOT a per-contact getUser() loop, which fans out N network requests
+      // and is the main reason a post-cache refresh is slow at startup.
       for (const mid of mids) {
-        try {
-          const user: any = await client.getUser(mid);
-          const detail = user?.raw?.targetProfileDetail ?? {};
+        const known = talkSenderCache.get(mid);
+        if (known) {
           contacts.push({
             mid,
             contact: {
-              displayName: detail.profileName,
-              picturePath: detail.picturePath,
-              pictureStatus: detail.pictureStatus,
-              statusMessage: detail.statusMessage?.content ?? detail.statusMessage ?? "",
-              favoriteTime: user?.raw?.friendDetail?.favoriteTime ?? 0,
+              displayName: known.name,
+              picturePath: known.avatarUrl,
+              pictureStatus: "",
+              statusMessage: "",
+              favoriteTime: 0,
             },
           });
-        } catch {
-          // Keep unreachable contacts out of the list rather than inventing data.
         }
       }
     }
@@ -1161,7 +1169,10 @@ async function loadOpenChatList(): Promise<any[]> {
   } catch (error) {
     joinedError = error;
   }
-  const result = await Promise.all(chats.map(async (chat: any) => {
+  const result: any[] = [];
+  // Bounded concurrency (not Promise.all) so a refresh doesn't fan out one
+  // getSquareChatStatus request per OpenChat at the same instant.
+  await runPool(chats, 4, async (chat: any) => {
     let status: any = null;
     try {
       status = (await client!.base.square.getSquareChatStatus({
@@ -1172,7 +1183,7 @@ async function loadOpenChatList(): Promise<any[]> {
     }
     const last = status?.lastMessage?.message;
     if (last) rememberMessageMedia(last, true);
-    return {
+    result.push({
       id: String(chat.mid),
       name: String(chat.name || "OpenChat"),
       kind: "openchat",
@@ -1182,8 +1193,8 @@ async function loadOpenChatList(): Promise<any[]> {
       memberCount: Number(status?.otherStatus?.memberCount ?? 0),
       lastMessageTime: Number(last?.createdTime ?? 0),
       raw: normalize(chat.raw),
-    };
-  }));
+    });
+  });
   const byId = new Map<string, any>(result.map((chat) => [String(chat.id), chat]));
   for (const known of database.listChats(ACCOUNT_ID, "openchat")) {
     if (!byId.has(known.id)) byId.set(known.id, known);
