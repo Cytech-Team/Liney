@@ -68,7 +68,7 @@ pub(crate) fn build_ui(app: &gtk::Application) {
         sync_gate: sync_gate.root, sync_gate_title: sync_gate.title, sync_gate_detail: sync_gate.detail, sync_gate_bar: sync_gate.bar, sync_gate_percent: sync_gate.percent,
         section_title: main.section_title,
         offline_banner: main.offline_banner.clone(), offline_label: main.offline_label.clone(), chat_empty: main.chat_empty.clone(), message_empty: main.message_empty.clone(),
-        chat_list: main.chat_list.clone(), chat_store: main.chat_store.clone(), chat_selection: main.chat_selection.clone(), message_list: main.message_list.clone(), message_store: main.message_store.clone(), message_selection: main.message_selection.clone(), messages_scroll: main.messages_scroll.clone(), scroll_bottom_button: main.scroll_bottom_button.clone(), follow_bottom: true, scroll_programmatic: false,
+        chat_list: main.chat_list.clone(), chat_store: main.chat_store.clone(), chat_selection: main.chat_selection.clone(), message_list: main.message_list.clone(), message_store: main.message_store.clone(), message_selection: main.message_selection.clone(), messages_scroll: main.messages_scroll.clone(), scroll_bottom_button: main.scroll_bottom_button.clone(), follow_bottom: true, scroll_programmatic: false, render_dirty: false,
         header_avatar: main.header_avatar.clone(), chat_title: main.chat_title, chat_subtitle: main.chat_subtitle, composer: main.composer.clone(), reply_bar: main.reply_bar,
         reply_label: main.reply_label, attach_button: main.attach_button.clone(), paste_button: main.paste_button.clone(), sticker_button: main.sticker_button.clone(),
         call_button: main.call_button.clone(), send_button: main.send_button.clone(), nav_buttons: main.nav_buttons,
@@ -350,6 +350,13 @@ pub(crate) fn build_ui(app: &gtk::Application) {
             let Some(state) = weak.upgrade() else { return gtk::glib::ControlFlow::Break };
             let events = { state.borrow().engine.drain(64) };
             for event in events { handle_engine_message(&state, event); }
+            // Coalesce: a burst of engine events marks the UI dirty; render the
+            // chat + message lists once per tick instead of once per event.
+            if state.borrow().render_dirty {
+                state.borrow_mut().render_dirty = false;
+                render_sidebar(&state);
+                render_messages(&state);
+            }
             let timed_out: Vec<u64> = {
                 let app = state.borrow();
                 let now = Instant::now();

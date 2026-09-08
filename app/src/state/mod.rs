@@ -135,6 +135,7 @@ pub struct State {
     pub scroll_bottom_button: gtk::Button,
     pub follow_bottom: bool,
     pub scroll_programmatic: bool,
+    pub render_dirty: bool,
     pub header_avatar: gtk::Image,
     pub chat_title: gtk::Label,
     pub chat_subtitle: gtk::Label,
@@ -207,6 +208,9 @@ impl State {
         self.pending.clear();
         self.set_status("เชื่อม LINE engine ใหม่แล้ว…");
         Ok(())
+    }
+    pub fn mark_render(&mut self) {
+        self.render_dirty = true;
     }
 }
 

@@ -708,8 +708,8 @@ fn handle_live_message(state: &Rc<RefCell<State>>, payload: &Value, envelope: &V
             if let Some(chat) = app.chat_by_id(&chat_id) { app.mark_read(&chat); }
         }
     }
-    render_sidebar(state);
-    if state.borrow().active_chat_id == chat_id { render_messages(state); hydrate_message_assets(state, &chat_id); }
+    state.borrow_mut().mark_render();
+    if state.borrow().active_chat_id == chat_id { hydrate_message_assets(state, &chat_id); }
 }
 
 fn update_outbox_message(state: &Rc<RefCell<State>>, event_type: &str, payload: &Value) {
@@ -723,14 +723,14 @@ fn update_outbox_message(state: &Rc<RefCell<State>>, event_type: &str, payload: 
             if let Some(message) = state.borrow_mut().messages.get_mut(chat_id).and_then(|list| list.iter_mut().find(|m| m.id == local_id)) { message.id = server_id.to_owned(); }
         }
     }
-    if state.borrow().active_chat_id == chat_id { render_messages(state); }
+    state.borrow_mut().mark_render();
 }
 
 fn update_reactions(state: &Rc<RefCell<State>>, payload: &Value) {
     let chat_id = payload.get("chatId").and_then(Value::as_str).unwrap_or_default(); let message_id = payload.get("messageId").and_then(Value::as_str).unwrap_or_default();
     let reactions = payload.get("reactions").cloned().and_then(|v| serde_json::from_value::<Vec<Reaction>>(v).ok()).unwrap_or_default();
     if let Some(message) = state.borrow_mut().messages.get_mut(chat_id).and_then(|list| list.iter_mut().find(|m| m.id == message_id)) { message.reactions = reactions; }
-    if state.borrow().active_chat_id == chat_id { render_messages(state); }
+    state.borrow_mut().mark_render();
 }
 
 fn update_read_receipt(state: &Rc<RefCell<State>>, payload: &Value) {
@@ -738,24 +738,24 @@ fn update_read_receipt(state: &Rc<RefCell<State>>, payload: &Value) {
     if let Some(list) = state.borrow_mut().messages.get_mut(chat_id) {
         for message in list.iter_mut().filter(|m| m.is_mine) { if message.id == message_id || numeric_leq(&message.id, message_id) { message.read_by_peer = true; } }
     }
-    if state.borrow().active_chat_id == chat_id { render_messages(state); }
+    state.borrow_mut().mark_render();
 }
 
 fn remove_message_event(state: &Rc<RefCell<State>>, payload: &Value) {
     let chat_id = payload.get("chatId").and_then(Value::as_str).unwrap_or_default(); let message_id = payload.get("messageId").and_then(Value::as_str).unwrap_or_default();
     if let Some(list) = state.borrow_mut().messages.get_mut(chat_id) { list.retain(|m| m.id != message_id); }
-    if state.borrow().active_chat_id == chat_id { render_messages(state); }
+    state.borrow_mut().mark_render();
 }
 
 fn unsent_message_event(state: &Rc<RefCell<State>>, payload: &Value) {
     let chat_id = payload.get("chatId").and_then(Value::as_str).unwrap_or_default(); let message_id = payload.get("messageId").and_then(Value::as_str).unwrap_or_default();
     if let Some(message) = state.borrow_mut().messages.get_mut(chat_id).and_then(|list| list.iter_mut().find(|m| m.id == message_id)) { message.unsent = true; message.text = "ยกเลิกข้อความแล้ว".into(); message.sticker_url.clear(); message.image_data_url.clear(); message.asset_data_url.clear(); message.reactions.clear(); }
-    if state.borrow().active_chat_id == chat_id { render_messages(state); }
+    state.borrow_mut().mark_render();
 }
 
 fn set_message_status(state: &Rc<RefCell<State>>, chat_id: &str, id: &str, status: &str) {
     if let Some(message) = state.borrow_mut().messages.get_mut(chat_id).and_then(|list| list.iter_mut().find(|m| m.id == id || m.local_id == id)) { message.status = status.into(); }
-    if state.borrow().active_chat_id == chat_id { render_messages(state); }
+    state.borrow_mut().mark_render();
 }
 
 fn start_call(state: &Rc<RefCell<State>>) {
