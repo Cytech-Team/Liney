@@ -541,21 +541,10 @@ pub(crate) fn build_main(status: &gtk::Label) -> MainWidgets {
     let message_store = gio::ListStore::new::<gtk::StringObject>();
     let message_selection = gtk::NoSelection::new(Some(message_store.clone()));
     let message_list = gtk::ListView::builder().model(&message_selection).css_classes(["message-list"]).build();
-    // Viewport-anchored message list: it fills the stage and scrolls when long,
-    // but short conversations sit at the bottom (above the composer) instead of
-    // leaving a large empty gap below the few messages.
-    let messages_scroll = gtk::ScrolledWindow::builder().child(&message_list).vexpand(true).hscrollbar_policy(gtk::PolicyType::Never).propagate_natural_height(false).css_classes(["message-stage"]).build();
-    messages_scroll.set_valign(gtk::Align::Fill);
-    let stage_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    stage_box.set_vexpand(true);
-    let stage_spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    stage_spacer.set_vexpand(true);
-    messages_scroll.set_valign(gtk::Align::End);
-    stage_box.append(&stage_spacer);
-    stage_box.append(&messages_scroll);
+    let messages_scroll = gtk::ScrolledWindow::builder().child(&message_list).vexpand(true).hscrollbar_policy(gtk::PolicyType::Never).css_classes(["message-stage"]).build();
     let message_empty = gtk::Label::builder().label("เลือกแชตทางซ้ายเพื่อเริ่มใช้งาน").css_classes(["conversation-empty"]).margin_top(36).halign(gtk::Align::Center).build();
     message_empty.set_visible(true);
-    let message_stage_overlay = gtk::Overlay::new(); message_stage_overlay.set_vexpand(true); message_stage_overlay.set_child(Some(&stage_box));
+    let message_stage_overlay = gtk::Overlay::new(); message_stage_overlay.set_vexpand(true); message_stage_overlay.set_child(Some(&messages_scroll));
     message_stage_overlay.add_overlay(&message_empty);
     let scroll_bottom_button = gtk::Button::builder().icon_name("go-bottom-symbolic").tooltip_text("ไปข้อความล่าสุด").halign(gtk::Align::End).valign(gtk::Align::End).margin_end(22).margin_bottom(16).css_classes(["scroll-bottom"]).build();
     scroll_bottom_button.set_visible(false); message_stage_overlay.add_overlay(&scroll_bottom_button); content.append(&message_stage_overlay);
