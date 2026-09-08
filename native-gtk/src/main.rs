@@ -2,7 +2,10 @@ mod composer_media;
 mod engine;
 mod models;
 mod settings;
+mod state;
 mod theme;
+
+use state::{Capabilities, ListFilter, Pending, PendingRequest, Section, State, TrayCommand, LineyTray};
 
 use base64::Engine as _;
 use engine::EngineBridge;
@@ -29,235 +32,6 @@ use std::{
 const APP_ID: &str = "dev.liney.desktop";
 static LOCAL_ID: AtomicU64 = AtomicU64::new(1);
 static SEND_SEQUENCE: AtomicU64 = AtomicU64::new(1);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum Section { Messages, Friends, OpenChat, Calls }
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ListFilter { All, Unread, Pinned, Favorites }
-
-impl Section {
-    fn title(self) -> &'static str {
-        match self {
-            Self::Messages => "แชต",
-            Self::Friends => "เพื่อน",
-            Self::OpenChat => "OpenChat",
-            Self::Calls => "โทร",
-        }
-    }
-}
-
-#[derive(Clone)]
-enum Pending {
-    Capabilities,
-    Profile,
-    Chats,
-    Friends,
-    OpenChats,
-    Messages { chat_id: String },
-    MarkRead,
-    Send { chat_id: String, local_id: String },
-    MediaSend { chat_id: String, local_id: String },
-    MediaCancel { chat_id: String, local_id: String },
-    MediaPreview { chat_id: String, message_id: String, attempt: u8 },
-    AssetMessage { chat_id: String, message_id: String, candidates: Vec<String>, index: usize },
-    AssetButton { button: gtk::Button },
-    AssetImage { image: gtk::Image, url: String, size: i32, guard_chat_id: String },
-    AssetPicture { picture: gtk::Picture, url: String, max_width: i32, max_height: i32 },
-    Stickers { grid: gtk::FlowBox, tabs: gtk::Box },
-    Emojis { grid: gtk::FlowBox, tabs: gtk::Box },
-    SendSticker { chat_id: String, local_id: String },
-    SendEmoji { chat_id: String, local_id: String },
-    Retry { chat_id: String, local_id: String },
-    React { chat_id: String },
-    Delete { chat_id: String, message_id: String },
-    Unsend { chat_id: String, message_id: String },
-    Login,
-    Logout,
-    SyncStart,
-    HistoryClear,
-    StickerCacheClear,
-    CallStart,
-    CallDevices,
-    CallAccept,
-    CallReject,
-    CallEnd,
-    CallMute,
-    CallOutput,
-}
-
-struct PendingRequest {
-    action: Pending,
-    deadline: Instant,
-}
-
-#[derive(Clone, Debug, Default)]
-struct Capabilities {
-    authenticated: bool,
-    linejs_version: String,
-    storage_mode: String,
-    call_enabled: bool,
-    incoming_call: bool,
-    call_reason: String,
-}
-
-struct State {
-    app: gtk::Application,
-    window: gtk::ApplicationWindow,
-    engine: EngineBridge,
-    pending: HashMap<u64, PendingRequest>,
-    capabilities: Capabilities,
-    profile: Option<Profile>,
-    settings: AppSettings,
-    css_provider: gtk::CssProvider,
-    section: Section,
-    list_filter: ListFilter,
-    query: String,
-    chats: Vec<Chat>,
-    friends: Vec<Chat>,
-    open_chats: Vec<Chat>,
-    sidebar_ids: Vec<String>,
-    active_chat_id: String,
-    messages: HashMap<String, Vec<Message>>,
-    reply_target: Option<ReplyTarget>,
-    asset_cache: HashMap<String, String>,
-    notification_dedup: HashMap<String, Instant>,
-    pending_jump: Option<(String, String)>,
-    stack: gtk::Stack,
-    overlay: gtk::Overlay,
-    qr_backdrop: Option<gtk::Box>,
-    status: gtk::Label,
-    login_status: gtk::Label,
-    sync_label: gtk::Label,
-    sync_bar: gtk::ProgressBar,
-    sync_gate: gtk::Box,
-    sync_gate_title: gtk::Label,
-    sync_gate_detail: gtk::Label,
-    sync_gate_bar: gtk::ProgressBar,
-    sync_gate_percent: gtk::Label,
-    section_title: gtk::Label,
-    chat_list: gtk::ListView,
-    chat_store: gio::ListStore,
-    chat_selection: gtk::SingleSelection,
-    message_list: gtk::ListView,
-    message_store: gio::ListStore,
-    message_selection: gtk::NoSelection,
-    messages_scroll: gtk::ScrolledWindow,
-    scroll_bottom_button: gtk::Button,
-    follow_bottom: bool,
-    scroll_programmatic: bool,
-    header_avatar: gtk::Image,
-    chat_title: gtk::Label,
-    chat_subtitle: gtk::Label,
-    composer: gtk::TextView,
-    reply_bar: gtk::Box,
-    reply_label: gtk::Label,
-    attach_button: gtk::Button,
-    paste_button: gtk::Button,
-    sticker_button: gtk::Button,
-    call_button: gtk::Button,
-    send_button: gtk::Button,
-    nav_buttons: HashMap<Section, gtk::Button>,
-    call_window: Option<gtk::Window>,
-    incoming_call_window: Option<gtk::Window>,
-    call_status_label: Option<gtk::Label>,
-    call_mute_button: Option<gtk::Button>,
-    call_muted: bool,
-    call_devices: Vec<AudioDevice>,
-    call_output_box: Option<gtk::Box>,
-    tray_sender: mpsc::Sender<TrayCommand>,
-    tray_handle: Option<ksni::blocking::Handle<LineyTray>>,
-}
-
-impl State {
-    fn request(&mut self, method: &str, params: Value, action: Pending) {
-        self.request_timeout(method, params, action, Duration::from_secs(60));
-    }
-
-    fn request_timeout(&mut self, method: &str, params: Value, action: Pending, timeout: Duration) {
-        match self.engine.request(method, params) {
-            Ok(id) => {
-                self.pending.insert(id, PendingRequest { action, deadline: Instant::now() + timeout });
-            }
-            Err(error) => self.set_status(&error),
-        }
-    }
-
-    fn set_status(&self, text: &str) {
-        self.status.set_text(text);
-        self.login_status.set_text(text);
-    }
-
-    fn chat_by_id(&self, id: &str) -> Option<Chat> {
-        self.chats.iter().chain(self.open_chats.iter()).chain(self.friends.iter()).find(|chat| chat.id == id).cloned()
-    }
-
-    fn active_chat(&self) -> Option<Chat> {
-        self.chat_by_id(&self.active_chat_id)
-    }
-
-    fn load_account_lists(&mut self) {
-        self.set_status("กำลังโหลดข้อมูล LINE…");
-        self.request("profile.get", json!({}), Pending::Profile);
-        self.request_timeout("chat.list", json!({}), Pending::Chats, Duration::from_secs(90));
-        self.request_timeout("friends.list", json!({}), Pending::Friends, Duration::from_secs(90));
-        if self.settings.openchat {
-            self.request_timeout("openchat.list", json!({}), Pending::OpenChats, Duration::from_secs(90));
-        }
-    }
-
-    fn mark_read(&mut self, chat: &Chat) {
-        let message_id = self.messages.get(&chat.id).and_then(|m| m.last()).map(|m| m.id.clone()).unwrap_or_default();
-        self.request("chat.mark_read", json!({
-            "chatId": chat.id,
-            "kind": chat.engine_kind(),
-            "messageId": message_id,
-        }), Pending::MarkRead);
-        for item in self.chats.iter_mut().chain(self.open_chats.iter_mut()) {
-            if item.id == chat.id { item.unread = 0; }
-        }
-    }
-
-    fn restart_engine(&mut self) -> Result<(), String> {
-        let engine = EngineBridge::spawn()?;
-        self.engine.terminate();
-        self.engine = engine;
-        self.pending.clear();
-        self.set_status("เชื่อม LINE engine ใหม่แล้ว…");
-        Ok(())
-    }
-}
-
-#[derive(Clone)]
-enum TrayCommand { Show, Quit }
-
-#[derive(Clone, Debug)]
-struct LineyTray { sender: mpsc::Sender<TrayCommand> }
-
-impl ksni::Tray for LineyTray {
-    fn id(&self) -> String { "liney".into() }
-    fn title(&self) -> String { "Liney".into() }
-    fn icon_name(&self) -> String { "liney".into() }
-    fn activate(&mut self, _x: i32, _y: i32) { let _ = self.sender.send(TrayCommand::Show); }
-    fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
-        use ksni::menu::{MenuItem, StandardItem};
-        vec![
-            StandardItem {
-                label: "เปิด Liney".into(),
-                icon_name: "liney".into(),
-                activate: Box::new(|tray: &mut LineyTray| { let _ = tray.sender.send(TrayCommand::Show); }),
-                ..Default::default()
-            }.into(),
-            MenuItem::Separator,
-            StandardItem {
-                label: "ออก".into(),
-                icon_name: "application-exit".into(),
-                activate: Box::new(|tray: &mut LineyTray| { let _ = tray.sender.send(TrayCommand::Quit); }),
-                ..Default::default()
-            }.into(),
-        ]
-    }
-}
 
 fn main() {
     let app = gtk::Application::builder().application_id(APP_ID).build();
@@ -321,6 +95,7 @@ fn build_ui(app: &gtk::Application) {
         status, login_status, sync_label: main.sync_label, sync_bar: main.sync_bar,
         sync_gate: sync_gate.root, sync_gate_title: sync_gate.title, sync_gate_detail: sync_gate.detail, sync_gate_bar: sync_gate.bar, sync_gate_percent: sync_gate.percent,
         section_title: main.section_title,
+        offline_banner: main.offline_banner.clone(), offline_label: main.offline_label.clone(), chat_empty: main.chat_empty.clone(), message_empty: main.message_empty.clone(),
         chat_list: main.chat_list.clone(), chat_store: main.chat_store.clone(), chat_selection: main.chat_selection.clone(), message_list: main.message_list.clone(), message_store: main.message_store.clone(), message_selection: main.message_selection.clone(), messages_scroll: main.messages_scroll.clone(), scroll_bottom_button: main.scroll_bottom_button.clone(), follow_bottom: true, scroll_programmatic: false,
         header_avatar: main.header_avatar.clone(), chat_title: main.chat_title, chat_subtitle: main.chat_subtitle, composer: main.composer.clone(), reply_bar: main.reply_bar,
         reply_label: main.reply_label, attach_button: main.attach_button.clone(), paste_button: main.paste_button.clone(), sticker_button: main.sticker_button.clone(),
@@ -681,9 +456,13 @@ struct MainWidgets {
     section_title: gtk::Label,
     search: gtk::SearchEntry,
     filter: gtk::DropDown,
+    offline_banner: gtk::Box,
+    offline_label: gtk::Label,
+    chat_empty: gtk::Label,
     chat_list: gtk::ListView,
     chat_store: gio::ListStore,
     chat_selection: gtk::SingleSelection,
+    message_empty: gtk::Label,
     message_list: gtk::ListView,
     message_store: gio::ListStore,
     message_selection: gtk::NoSelection,
@@ -751,6 +530,9 @@ fn build_main(status: &gtk::Label) -> MainWidgets {
     let chat_list = gtk::ListView::builder().model(&chat_selection).css_classes(["chat-list"]).build();
     let chats_scroll = gtk::ScrolledWindow::builder().child(&chat_list).vexpand(true).hscrollbar_policy(gtk::PolicyType::Never).build();
     sidebar.append(&chats_scroll);
+    let chat_empty = gtk::Label::builder().label("ยังไม่มีรายการ").css_classes(["empty-note"]).margin_top(18).halign(gtk::Align::Center).build();
+    chat_empty.set_visible(false);
+    sidebar.append(&chat_empty);
     root.append(&sidebar);
 
     let content = gtk::Box::builder().orientation(gtk::Orientation::Vertical).hexpand(true).css_classes(["conversation"]).build();
@@ -765,6 +547,12 @@ fn build_main(status: &gtk::Label) -> MainWidgets {
     conversation_header.append(&call_button);
     content.append(&conversation_header);
 
+    let offline_banner = gtk::Box::builder().orientation(gtk::Orientation::Horizontal).spacing(8).css_classes(["offline-banner"]).margin_start(12).margin_end(12).margin_top(6).margin_bottom(6).build();
+    let offline_icon = gtk::Image::from_icon_name("network-offline-symbolic"); offline_icon.set_pixel_size(14);
+    let offline_label = gtk::Label::builder().label("ออฟไลน์ — กำลังใช้ข้อมูลแคช").xalign(0.0).css_classes(["offline-label"]).hexpand(true).build();
+    offline_banner.append(&offline_icon); offline_banner.append(&offline_label);
+    offline_banner.set_visible(false);
+    content.append(&offline_banner);
     let sync_box = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(4).margin_start(24).margin_end(24).margin_top(8).build();
     let sync_label = gtk::Label::builder().xalign(0.0).css_classes(["sync-label"]).build();
     let sync_bar = gtk::ProgressBar::new();
@@ -775,7 +563,10 @@ fn build_main(status: &gtk::Label) -> MainWidgets {
     let message_selection = gtk::NoSelection::new(Some(message_store.clone()));
     let message_list = gtk::ListView::builder().model(&message_selection).css_classes(["message-list"]).build();
     let messages_scroll = gtk::ScrolledWindow::builder().child(&message_list).vexpand(true).hscrollbar_policy(gtk::PolicyType::Never).css_classes(["message-stage"]).build();
+    let message_empty = gtk::Label::builder().label("เลือกแชตทางซ้ายเพื่อเริ่มใช้งาน").css_classes(["conversation-empty"]).margin_top(36).halign(gtk::Align::Center).build();
+    message_empty.set_visible(true);
     let message_stage_overlay = gtk::Overlay::new(); message_stage_overlay.set_vexpand(true); message_stage_overlay.set_child(Some(&messages_scroll));
+    message_stage_overlay.add_overlay(&message_empty);
     let scroll_bottom_button = gtk::Button::builder().icon_name("go-bottom-symbolic").tooltip_text("ไปข้อความล่าสุด").halign(gtk::Align::End).valign(gtk::Align::End).margin_end(22).margin_bottom(16).css_classes(["scroll-bottom"]).build();
     scroll_bottom_button.set_visible(false); message_stage_overlay.add_overlay(&scroll_bottom_button); content.append(&message_stage_overlay);
 
@@ -804,7 +595,7 @@ fn build_main(status: &gtk::Label) -> MainWidgets {
     compose_outer.append(&compose); content.append(&compose_outer); content.append(status);
     root.append(&content);
 
-    MainWidgets { root, nav_buttons, brand_button, settings_button, section_title, search, filter, chat_list, chat_store, chat_selection, message_list, message_store, message_selection, messages_scroll, scroll_bottom_button, header_avatar, chat_title, chat_subtitle,
+    MainWidgets { root, nav_buttons, brand_button, settings_button, section_title, search, filter, offline_banner, offline_label, chat_empty, chat_list, chat_store, chat_selection, message_empty, message_list, message_store, message_selection, messages_scroll, scroll_bottom_button, header_avatar, chat_title, chat_subtitle,
         refresh_button, call_button, composer, attach_button, paste_button, sticker_button, send_button, reply_bar, reply_label, reply_cancel, sync_label, sync_bar }
 }
 
@@ -970,8 +761,26 @@ fn handle_engine_event(state: &Rc<RefCell<State>>, kind: &str, event: &Value) {
         }
         "sync.room_error" => state.borrow().set_status("ซิงก์บางห้องไม่สำเร็จ กำลังดำเนินการต่อ…"),
         "event.chats.updated" => handle_chats_updated(state, payload),
-        "event.transport" => state.borrow().set_status("สถานะการเชื่อมต่อ LINE เปลี่ยนแปลง"),
-        "event.transport.error" => state.borrow().set_status("การเชื่อมต่อ LINE ขัดข้อง กำลังลองใหม่…"),
+        "event.transport" => {
+            let app = state.borrow();
+            let transport_state = payload.get("state").and_then(Value::as_str).or_else(|| payload.get("payload").and_then(|p| p.get("state")).and_then(Value::as_str)).unwrap_or("");
+            if transport_state == "connected" {
+                app.offline_banner.set_visible(false);
+                app.set_status("เชื่อมต่อ LINE แล้ว");
+            } else if transport_state == "reconnecting" {
+                app.offline_banner.set_visible(true);
+                app.offline_label.set_text("ออฟไลน์ — กำลังเชื่อมต่อใหม่ ใช้ข้อมูลแคช");
+                app.set_status("การเชื่อมต่อ LINE ขัดข้อง กำลังลองใหม่…");
+            } else {
+                app.set_status("สถานะการเชื่อมต่อ LINE เปลี่ยนแปลง");
+            }
+        },
+        "event.transport.error" => {
+            let app = state.borrow();
+            app.offline_banner.set_visible(true);
+            app.offline_label.set_text("ออฟไลน์ — ใช้ข้อมูลแคช");
+            app.set_status("การเชื่อมต่อ LINE ขัดข้อง กำลังลองใหม่…");
+        },
         "event.message.decode_error" => state.borrow().set_status("อ่านข้อความบางรายการไม่ได้"),
         "event.message.error" => state.borrow().set_status("ประมวลผลข้อความบางรายการไม่สำเร็จ"),
         "event.message.persistence_error" => state.borrow().set_status("บันทึกข้อความบางรายการในเครื่องไม่สำเร็จ"),
@@ -1201,7 +1010,7 @@ fn handle_request_error(state: &Rc<RefCell<State>>, action: Pending, message: &s
 }
 
 fn render_sidebar(state: &Rc<RefCell<State>>) {
-    let (items, _query, section, store) = {
+    let (items, needle, section, store) = {
         let app = state.borrow();
         let mut items: Vec<Chat> = match app.section {
             Section::Messages => app.chats.iter().chain(app.open_chats.iter()).cloned().collect(),
@@ -1230,18 +1039,23 @@ fn render_sidebar(state: &Rc<RefCell<State>>) {
         items.sort_by(|a,b| b.pinned.cmp(&a.pinned).then_with(|| b.favorite_timestamp.cmp(&a.favorite_timestamp)).then_with(|| b.last_message_time.cmp(&a.last_message_time)).then_with(|| a.name.cmp(&b.name)));
         (items, needle, app.section, app.chat_store.clone())
     };
-    // Handle special Calls section and empty state via store clear (ListView shows empty)
+    let empty_label = state.borrow().chat_empty.clone();
     if section == Section::Calls {
         store.remove_all();
-        // Keep empty store; placeholder handled elsewhere if needed
+        empty_label.set_text("เลือกแชตส่วนตัวแล้วกดปุ่มโทรด้านบน");
+        empty_label.set_visible(true);
         state.borrow_mut().sidebar_ids = Vec::new();
         return;
     }
     if items.is_empty() {
         store.remove_all();
+        let text = if !needle.is_empty() { "ไม่พบผลการค้นหา" } else if section == Section::OpenChat { "ไม่พบ OpenChat" } else { "ยังไม่มีรายการ" };
+        empty_label.set_text(text);
+        empty_label.set_visible(true);
         state.borrow_mut().sidebar_ids = Vec::new();
         return;
     }
+    empty_label.set_visible(false);
     let ids: Vec<String> = items.iter().map(|c| c.id.clone()).collect();
     let n = store.n_items() as usize;
     let objects: Vec<glib::Object> = items.iter().map(|c| gtk::StringObject::new(&serde_json::to_string(c).unwrap()).upcast::<glib::Object>()).collect();
@@ -1278,20 +1092,25 @@ fn open_chat(state: &Rc<RefCell<State>>, id: &str) {
 }
 
 fn render_messages(state: &Rc<RefCell<State>>) {
-    let (messages, active, store, scroll, follow_bottom, old_value) = {
+    let (messages, active, store, empty_label, scroll, follow_bottom, old_value) = {
         let mut app = state.borrow_mut();
         let adjustment = app.messages_scroll.vadjustment();
         let old_value = adjustment.value();
         app.scroll_programmatic = true;
-        (app.messages.get(&app.active_chat_id).cloned().unwrap_or_default(), app.active_chat(), app.message_store.clone(), app.messages_scroll.clone(), app.follow_bottom, old_value)
+        (app.messages.get(&app.active_chat_id).cloned().unwrap_or_default(), app.active_chat(), app.message_store.clone(), app.message_empty.clone(), app.messages_scroll.clone(), app.follow_bottom, old_value)
     };
     let Some(_chat) = active else {
         store.remove_all();
+        empty_label.set_text("เลือกแชตทางซ้ายเพื่อเริ่มใช้งาน");
+        empty_label.set_visible(true);
         return;
     };
     if messages.is_empty() {
         store.remove_all();
+        empty_label.set_text("ยังไม่มีข้อความในห้องนี้");
+        empty_label.set_visible(true);
     } else {
+        empty_label.set_visible(false);
         let objects: Vec<glib::Object> = messages.iter().map(|m| gtk::StringObject::new(&serde_json::to_string(m).unwrap()).upcast::<glib::Object>()).collect();
         let n = store.n_items();
         store.splice(0, n, &objects);
@@ -1959,9 +1778,13 @@ fn show_settings(state: &Rc<RefCell<State>>) {
     { let state = state.clone(); clear_history.connect_clicked(move |_| confirm_action(&state, "ล้างข้อมูลในเครื่อง?", "ลบประวัติข้อความและ media cache เฉพาะเครื่องนี้ ไม่ลบข้อความบน LINE", |state| state.borrow_mut().request("history.clear", json!({}), Pending::HistoryClear))); }
     let clear_stickers = gtk::Button::with_label("ล้างแคชสติกเกอร์");
     { let state = state.clone(); clear_stickers.connect_clicked(move |_| confirm_action(&state, "ล้างแคชสติกเกอร์?", "ครั้งถัดไป Liney จะดึงรายการสติกเกอร์จาก LINE ใหม่", |state| state.borrow_mut().request("sticker.cache.clear", json!({}), Pending::StickerCacheClear))); }
+    let full_sync = gtk::Button::with_label("Full Sync — ซิงก์ทุกห้องใหม่ (manual)");
+    { let state = state.clone(); full_sync.connect_clicked(move |_| { state.borrow_mut().request_timeout("sync.start", json!({}), Pending::SyncStart, Duration::from_secs(180)); state.borrow().set_status("เริ่ม Full Sync…"); }); }
+    let safe_mode = gtk::Button::with_label("Safe Mode — รีสตาร์ท engine แบบปลอดภัย");
+    { let state = state.clone(); let window = window.clone(); safe_mode.connect_clicked(move |_| { match state.borrow_mut().restart_engine() { Ok(()) => { state.borrow().set_status("รีสตาร์ท engine แล้ว"); window.close(); }, Err(e) => state.borrow().set_status(&e) } }); }
     let logout = gtk::Button::with_label("ออกจากระบบ LINE"); logout.add_css_class("danger");
     { let state = state.clone(); let window = window.clone(); logout.connect_clicked(move |_| { state.borrow_mut().request("auth.logout", json!({}), Pending::Logout); window.close(); }); }
-    buttons.append(&clear_history); buttons.append(&clear_stickers); buttons.append(&logout); root.append(&buttons);
+    buttons.append(&clear_history); buttons.append(&clear_stickers); buttons.append(&full_sync); buttons.append(&safe_mode); buttons.append(&logout); root.append(&buttons);
     let scroll = gtk::ScrolledWindow::builder().child(&root).vexpand(true).build(); window.set_child(Some(&scroll)); window.present();
 }
 

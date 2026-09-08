@@ -10,6 +10,7 @@ help:
 	@echo "  tree: app/ (UI)  engine/ (data)  docs/ARCHITECTURE.md"
 
 check:
+	cargo check --manifest-path app/Cargo.toml
 	cargo check --manifest-path native-gtk/Cargo.toml
 	/home/namkrub/.bun/bin/bun test
 
@@ -18,6 +19,7 @@ run:
 
 build:
 	/home/namkrub/.bun/bin/bun run engine:build
+	cargo build --release --manifest-path app/Cargo.toml
 	cargo build --release --manifest-path native-gtk/Cargo.toml
 
 package: build
