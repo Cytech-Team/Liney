@@ -418,8 +418,9 @@ function MainApp() {
           const restoredProfile = await lineyEngine.request<ProfileResult>("profile.get", {}, 20_000);
           setProfile(restoredProfile);
         } catch {}
-        void loadLiveChats();
-        void loadLiveFriends();
+        // Defer list loads so the auth.ready event (which also populates them)
+        // doesn't trigger a second, duplicate network refresh at startup.
+        scheduleLiveChatRefresh();
       } else {
         setAuthenticated(false);
         setAuthOpen(true);
