@@ -1,0 +1,8 @@
+{
+  "name": "liney-public-website",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "build": "rm -rf dist && mkdir -p dist && cp 404.html download.html index.html license.html LICENSE.txt notice.html privacy.html robots.txt site-config.js site.js styles.css terms.html dist/ && cp -R assets dist/assets"
+  }
+}

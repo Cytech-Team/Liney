@@ -48,3 +48,6 @@ release/
 
 # One-off local protocol probes
 .tmp-*.ts
+
+# Cloudflare static website build output
+website/dist/

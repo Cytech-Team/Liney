@@ -1,19 +1,24 @@
 # Liney public website
 
-Static public pages for Cloudflare Pages. This directory intentionally has no
-runtime dependency or build step.
+Static public pages deployed to Cloudflare Workers Static Assets.
 
-## Cloudflare Pages Git sync
+## Cloudflare Workers Builds
 
-Connect `Cytech-Team/Liney` to Cloudflare Pages and use:
+The Cloudflare Worker `liney` is connected to `Cytech-Team/Liney` and should use:
 
 - Production branch: `master`
-- Build command: leave empty (or `exit 0` if the dashboard requires one)
-- Build output directory: `website`
-- Root directory: repository root
+- Root directory: `/website`
+- Build command: `bun run build`
+- Deploy command: `npx wrangler deploy`
+- Wrangler config: `website/wrangler.jsonc`
 
-Cloudflare Pages will then deploy automatically for pushes to the connected
-branch and can create preview deployments for other branches.
+`bun run build` copies only the public site files into `website/dist/`. Wrangler
+then publishes `dist/` as static assets, so project metadata such as this README,
+`package.json`, and `wrangler.jsonc` are not exposed as website assets.
+
+For automatic builds, Cloudflare Workers Builds also needs a valid build API token.
+If Cloudflare reports that the selected token was deleted or rolled, create/select a
+new token in Worker Settings > Build > Build Configuration and retry the build.
 
 ## Configure repository links
 
@@ -39,7 +44,13 @@ From the repository root:
 python3 -m http.server 4173 --directory website
 ```
 
-Then open <http://127.0.0.1:4173/>.
+Or preview the exact deployment output:
+
+```sh
+cd website
+bun run build
+python3 -m http.server 4173 --directory dist
+```
 
 ## Pages
 
