@@ -1,8 +1,18 @@
-import { LineJsAdapter, type LineClient } from "./linejs/adapter";
-import { SquareMessage, TalkMessage, type Client } from "@evex/linejs";
-import { parseCancelCall, parseIncomingCall } from "@evex/linejs/call";
-// Adapter re-exports for boundary compliance; direct @evex/linejs remains only here and in adapter module
-const { loginWithPassword, loginWithQR, loginWithAuthToken } = LineJsAdapter;
+import { getTargetProfiles, LineJsAdapter, type LineClient } from "./linejs/adapter";
+// Keep all LINEJS values behind the adapter boundary. This makes replacing the
+// protocol implementation a local engine change instead of a repository-wide
+// import migration.
+const {
+  loginWithPassword,
+  loginWithQR,
+  loginWithAuthToken,
+  createSquareMessage,
+  createTalkMessage,
+  fetchMessageAsset,
+  fromRawTalk,
+  parseCancelCall,
+  parseIncomingCall,
+} = LineJsAdapter;
 import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
@@ -14,7 +24,7 @@ import { CallManager } from "./call-manager";
 import { LineyDatabase, type DatabaseChat, type DatabaseMessage, type OutboxRecord } from "./database";
 import { LineyMediaCache } from "./media-cache";
 import { decodeMediaBase64, MediaWorker } from "./media-worker";
-import { normalizeImageBlob } from "./media-format";
+import { detectImageMime, normalizeImageBlob } from "./media-format";
 import {
   LineyKeyring,
   SecureLineStorage,
@@ -33,12 +43,16 @@ import {
   retryDelayMs,
 } from "./outbox";
 import {
-  additionalTalkHistoryBoxIds,
-  talkMessageBoxHasHistory,
+  LINE_SYSTEM_ACCOUNT_MID,
+  talkMessageBoxHistoryState,
   talkMessageBoxId,
+  shouldRetryTalkHistory,
 } from "./talk-history";
 import { parseFlexMessage } from "./flex";
 import { parseRichMessage } from "./rich";
+import { callHistoryPreview, parseCallHistory } from "./call-history";
+import { canonicalTalkOperationType, isLineServiceChatOperation } from "./talk-operation";
+import { talkReadStateForMessages } from "./talk-read-state";
 import { normalizeJsonValue } from "./serialization";
 import { stickerUrlFromRaw } from "./sticker";
 import { ownedStickersFromPurchases } from "./sticker-catalog";
@@ -47,16 +61,17 @@ import { SyncCoordinator } from "./sync/coordinator";
 import { PROTOCOL_VERSION } from "./protocol/protocol";
 
 const LINEJS_VERSION = LineJsAdapter.version;
-const ACCOUNT_ID = "default";
+let ACCOUNT_ID = "default";
 process.umask(0o077);
-let client: Client | null = null;
+let client: LineClient | null = null;
 let loginInFlight = false;
+let authGeneration = 0;
 let listenerAbort: AbortController | null = null;
-let syncGeneration = 0;
-let syncPromise: Promise<void> | null = null;
 let currentProfile: any = null;
 let pushHealthy = false;
 let pushConnectedSince = 0;
+let lastTalkPushEventAt = 0;
+let lastSquarePushEventAt = 0;
 const mediaPreviewCache = new Map<string, string>();
 const messageMediaSourceCache = new Map<string, { raw: any; isSquare: boolean }>();
 const preSyncedMessages = new Map<string, any[]>();
@@ -64,15 +79,39 @@ const liveMessageOverlayKeys = new Set<string>();
 let preSyncedChats: any[] | null = null;
 let preSyncedFriends: any[] | null = null;
 let preSyncedOpenChats: any[] | null = null;
+type ChatListRefreshKind = "talk" | "friends" | "openchat";
+const chatListRefreshGeneration: Record<ChatListRefreshKind, number> = { talk: 0, friends: 0, openchat: 0 };
+type ChatListLoader = (persist?: boolean, canPersist?: () => boolean) => Promise<any[]>;
 const talkMessageBoxCache = new Map<string, any>();
-type SenderIdentity = { id: string; name: string; avatarUrl: string };
+let systemAccountTrackInFlight: Promise<void> | null = null;
+let lastSystemAccountTrackAt = 0;
+const SYSTEM_ACCOUNT_TRACK_KEY = "line-system-account-cursor";
+const SYSTEM_ACCOUNT_TRACK_INTERVAL_MS = 15_000;
+const SYSTEM_ACCOUNT_TRACK_EVENT_THROTTLE_MS = 1_000;
+type SenderIdentity = { id: string; name: string; avatarUrl: string; isOfficialAccount?: boolean };
 const talkSenderCache = new Map<string, SenderIdentity>();
+const talkSenderProfileChecked = new Set<string>();
+const talkSenderResolutionCache = new Map<string, Promise<SenderIdentity | null>>();
 const squareSenderCache = new Map<string, SenderIdentity>();
 let ownedStickerCache: { expiresAt: number; stickers: ReturnType<typeof ownedStickersFromPurchases> } | null = null;
 const STICKER_CACHE_TTL_MS = 7 * 24 * 60 * 60_000;
 
+function invalidateChatListRefreshes(): void {
+  for (const kind of Object.keys(chatListRefreshGeneration) as ChatListRefreshKind[]) {
+    chatListRefreshGeneration[kind] += 1;
+  }
+}
+
+function refreshChatListInBackground(kind: ChatListRefreshKind, loader: ChatListLoader): void {
+  const generation = ++chatListRefreshGeneration[kind];
+  void loader(true, () => Boolean(client) && generation === chatListRefreshGeneration[kind]).then((fresh) => {
+    if (!client || generation !== chatListRefreshGeneration[kind]) return;
+    emit({ type: "event.chats.updated", kind, refreshGeneration: generation, chats: fresh });
+  }).catch(() => undefined);
+}
+
 function shopResultAs<T extends Record<string, unknown>>(schema: string, value: unknown): T {
-  const renamed = client?.base.thrift.rename_thrift(schema, value);
+  const renamed = client ? LineJsAdapter.renameThrift(client, schema, value) : undefined;
   return renamed && typeof renamed === "object" ? renamed as T : {} as T;
 }
 
@@ -116,7 +155,7 @@ async function listOwnedStickers(): Promise<ReturnType<typeof ownedStickersFromP
     // LINEJS exposes getPurchasedProducts, but it only includes transaction
     // history. getOwnedProducts is the Shop API inventory endpoint and also
     // includes free/default packs currently attached to this account.
-    const page = await client.base.request.request(
+    const page = await LineJsAdapter.request(client,
       [
         [11, 2, "stickershop"], [8, 3, offset], [8, 4, pageSize],
         [12, 5, [[11, 1, "th"], [11, 2, "TH"]]],
@@ -138,7 +177,7 @@ async function listOwnedStickers(): Promise<ReturnType<typeof ownedStickersFromP
   // then read each pack's public manifest for its sticker IDs. Neither source
   // is chat history and each id is still anchored to account ownership.
   if (!stickers.length) {
-    const summariesRaw = await client.base.request.request(
+    const summariesRaw = await LineJsAdapter.request(client,
       [[11, 2, "stickershop"], [8, 3, 0], [8, 4, 200], [12, 5, [[11, 1, "th"], [11, 2, "TH"]]]],
       "getOwnedProductSummaries", 4, true, "/TSHOP4",
     ) as unknown;
@@ -207,15 +246,17 @@ const keyring = new LineyKeyring();
 const legacyMigration = migrateLegacyCredentials(dataPath(), keyring);
 const store = new SecureLineStorage(storagePath(), keyring);
 const database = new LineyDatabase(databasePath());
+if (readCredential()) ACCOUNT_ID = database.latestAccountId() ?? ACCOUNT_ID;
 const mediaDiskCache = new LineyMediaCache(join(dataPath(), "media"));
 const mediaUploadTempDir = join(dataPath(), "media-upload-tmp");
 let syncCoordinator: SyncCoordinator | null = null;
 function getSyncCoordinator(): SyncCoordinator {
   if (syncCoordinator) return syncCoordinator;
   syncCoordinator = new SyncCoordinator(database, emit, {
-    loadFriends: loadFriendsList,
-    loadChats: loadChatsList,
-    loadOpenChats: loadOpenChatList,
+    loadFriends: () => loadFriendsList(false),
+    loadChats: () => loadChatsList(false),
+    loadOpenChats: () => loadOpenChatList(false),
+    persistLists: (friends, chats, openChats) => database.upsertChats(ACCOUNT_ID, [...friends, ...chats, ...openChats] as DatabaseChat[]),
     fetchTalk: fetchTalkMessagesNormalized,
     fetchOpen: fetchOpenChatMessagesNormalized,
     persist: persistNormalizedMessages,
@@ -273,11 +314,11 @@ function normalize(value: any): any {
   return normalizeJsonValue(value);
 }
 
-async function persistCredential(next: Client) {
+async function persistCredential(next: LineClient) {
   const refreshToken = await store.get("refreshToken");
   const expireValue = await store.get("expire");
   const credential: AuthCredential = {
-    accessToken: next.authToken,
+    accessToken: LineJsAdapter.authToken(next),
     ...(typeof refreshToken === "string" ? { refreshToken } : {}),
     ...(typeof expireValue === "number" ? { expire: expireValue } : {}),
   };
@@ -297,10 +338,17 @@ function readCredential(): AuthCredential | null {
 }
 
 async function clearLocalSession() {
+  authGeneration += 1;
   listenerAbort?.abort();
   listenerAbort = null;
+  // Full sync is cancellable and must not continue writing the previous
+  // account's in-memory/cache state after logout or during a new login.
+  syncCoordinator?.cancel();
+  invalidateChatListRefreshes();
   pushHealthy = false;
   pushConnectedSince = 0;
+  lastTalkPushEventAt = 0;
+  lastSquarePushEventAt = 0;
   mediaWorker.cancelAll();
   client = null;
   currentProfile = null;
@@ -313,13 +361,67 @@ async function clearLocalSession() {
   preSyncedOpenChats = null;
   talkMessageBoxCache.clear();
   talkSenderCache.clear();
+  talkSenderProfileChecked.clear();
+  talkSenderResolutionCache.clear();
   squareSenderCache.clear();
   await callManager.stop("logged-out").catch(() => undefined);
+  database.clearAccount(ACCOUNT_ID);
+  await mediaDiskCache.clear();
+  ownedStickerCache = null;
+  stickerCatalogCache.clear();
+  ACCOUNT_ID = "default";
   try {
     await store.clear();
   } catch {
     // Keep logout best-effort if the keyring daemon disappears mid-operation.
   }
+}
+
+function accountIdForMid(value: unknown): string | null {
+  const mid = String(value ?? "").trim();
+  return mid ? `account:${createHash("sha256").update(mid).digest("hex")}` : null;
+}
+
+async function activateAccount(profile: any): Promise<{ changed: boolean; migrated: boolean }> {
+  const previous = ACCOUNT_ID;
+  const mid = String(profile?.mid ?? "").trim();
+  const derived = accountIdForMid(mid);
+  if (!derived) return { changed: false, migrated: false };
+
+  const known = database.findAccountIdByMid(mid);
+  let next = known && known !== "default" ? known : derived;
+  let migrated = false;
+  if ((!known || known === "default") && previous === "default") {
+    const legacy = database.getAccount("default");
+    if (!legacy || !legacy.mid || legacy.mid === mid) {
+      migrated = database.rekeyAccount("default", derived);
+      next = derived;
+    }
+  }
+  if (next !== previous) {
+    listenerAbort?.abort();
+    listenerAbort = null;
+    syncCoordinator?.cancel();
+    invalidateChatListRefreshes();
+    mediaWorker.cancelAll();
+    await callManager.stop("account-switched").catch(() => undefined);
+    mediaPreviewCache.clear();
+    messageMediaSourceCache.clear();
+    preSyncedMessages.clear();
+    liveMessageOverlayKeys.clear();
+    preSyncedChats = null;
+    preSyncedFriends = null;
+    preSyncedOpenChats = null;
+    talkMessageBoxCache.clear();
+    talkSenderCache.clear();
+    talkSenderProfileChecked.clear();
+    talkSenderResolutionCache.clear();
+    squareSenderCache.clear();
+    ownedStickerCache = null;
+    stickerCatalogCache.clear();
+  }
+  ACCOUNT_ID = next;
+  return { changed: next !== previous, migrated };
 }
 
 function contentTypeCode(value: unknown): number {
@@ -412,9 +514,7 @@ function squareReactionSummaries(status: unknown, selfMid = ""): Array<{ type: n
 }
 
 function relatedMessageId(raw: any): string | undefined {
-  const value = raw?.relatedMessageId ?? raw?.message?.relatedMessageId;
-  const id = String(value ?? "").trim();
-  return id || undefined;
+  return LineJsAdapter.replyTargetMessageId(raw);
 }
 
 function applyReactionToSummaries(rawReactions: unknown, type: number): Array<{ type: number; count: number; mine?: boolean }> {
@@ -514,14 +614,15 @@ function httpsUrl(value: unknown): string | undefined {
 }
 
 async function downloadObsMessageData(messageId: string, isPreview: boolean, isSquare: boolean): Promise<Blob> {
-  if (!client?.base.authToken) throw new Error("not authenticated");
-  const response = await client.base.fetch(
-    client.base.obs.getMessageDataUrl(messageId, isPreview, isSquare),
+  if (!client || !LineJsAdapter.authToken(client)) throw new Error("not authenticated");
+  const response = await LineJsAdapter.fetch(
+    client,
+    LineJsAdapter.getMessageDataUrl(client, messageId, isPreview, isSquare),
     {
       headers: {
         accept: "image/*,application/octet-stream,*/*",
-        "x-line-application": client.base.request.systemType,
-        "x-Line-access": client.base.authToken,
+        "x-line-application": LineJsAdapter.systemType(client),
+        "x-Line-access": LineJsAdapter.authToken(client),
       },
     },
   );
@@ -572,22 +673,31 @@ async function fetchMessageMediaBlob(messageId: string, isSquare: boolean, chatI
     }
   }
   const metadata = messageContentMetadata(raw);
+  const contentType = contentTypeCode(raw?.contentType);
 
   // Some generations of LINE messages carry signed OBS URLs directly.
   const previewUrl = httpsUrl(metadata.PREVIEW_URL);
   if (previewUrl) {
-    const result = await tryImageSource(async () => {
-      const response = await client!.base.fetch(previewUrl);
-      if (!response.ok) throw new Error(`LINE preview request failed (${response.status})`);
-      return response.blob();
-    }, true);
+    const result = await tryImageSource(() => fetchMessageAsset(client!, previewUrl), true);
     if (result) return result;
+  }
+
+  // RICH messages carry their composed image in DOWNLOAD_URL rather than the
+  // normal OBS message object. Try it before message-id OBS fallbacks so old
+  // RICH cards do not incur several guaranteed-failing media requests.
+  if (contentType === 17) {
+    const downloadUrl = httpsUrl(metadata.DOWNLOAD_URL);
+    if (downloadUrl) {
+      const result = await tryImageSource(() => fetchMessageAsset(client!, downloadUrl), true);
+      if (result) return result;
+    }
+    throw new Error(`LINE rich media object ${messageId} is unavailable`);
   }
 
   // E2EE media cannot be read from /preview directly; decrypt the chunks.
   if (!isSquare && Array.isArray(raw?.chunks) && raw.chunks.length) {
     const result = await tryImageSource(async () => {
-      const decrypted = await client!.base.obs.downloadMediaByE2EE(raw);
+      const decrypted = await LineJsAdapter.downloadMediaByE2EE(client!, raw);
       if (!decrypted) throw new Error("LINE E2EE media is empty");
       return decrypted;
     }, false);
@@ -604,7 +714,7 @@ async function fetchMessageMediaBlob(messageId: string, isSquare: boolean, chatI
   // Keep the SDK helper as a compatibility fallback for older LINE gateways.
   // Its object_info request can fail independently of the media request, so
   // the direct OBS request above must be attempted first.
-  const sdkPreviewResult = await tryImageSource(async () => client!.base.obs.downloadMessageData({
+  const sdkPreviewResult = await tryImageSource(async () => LineJsAdapter.downloadMessageData(client!, {
     messageId,
     isPreview: true,
     isSquare,
@@ -618,7 +728,7 @@ async function fetchMessageMediaBlob(messageId: string, isSquare: boolean, chatI
   );
   if (fullResult) return fullResult;
 
-  const sdkFullResult = await tryImageSource(async () => client!.base.obs.downloadMessageData({
+  const sdkFullResult = await tryImageSource(async () => LineJsAdapter.downloadMessageData(client!, {
     messageId,
     isPreview: false,
     isSquare,
@@ -627,11 +737,7 @@ async function fetchMessageMediaBlob(messageId: string, isSquare: boolean, chatI
 
   const downloadUrl = httpsUrl(metadata.DOWNLOAD_URL);
   if (downloadUrl) {
-    const result = await tryImageSource(async () => {
-      const response = await client!.base.fetch(downloadUrl);
-      if (!response.ok) throw new Error(`LINE download request failed (${response.status})`);
-      return response.blob();
-    }, false);
+    const result = await tryImageSource(() => fetchMessageAsset(client!, downloadUrl), false);
     if (result) return result;
   }
 
@@ -742,6 +848,19 @@ function cdnUrl(pathOrHash: unknown) {
   return `https://profile.line-scdn.net/${value.replace(/^\/+/, "")}`;
 }
 
+/**
+ * LINE profile hashes can become stale after a user changes their avatar.
+ * The OBS talk profile endpoint is keyed by MID and always resolves the
+ * current profile image, so prefer it for normal Talk users.
+ */
+function talkProfileImageUrl(mid: string, fallback?: unknown): string {
+  const normalizedMid = String(mid ?? "").trim();
+  if (/^u[0-9a-f]{32}$/i.test(normalizedMid)) {
+    return `https://obs.line-scdn.net/r/talk/p/${encodeURIComponent(normalizedMid)}`;
+  }
+  return cdnUrl(fallback);
+}
+
 function midString(value: any): string {
   if (typeof value === "string") return value;
   if (value && typeof value === "object") {
@@ -758,30 +877,51 @@ function midTypeName(value: unknown): string {
   return String(value ?? "").trim().toUpperCase();
 }
 
+function isBotTargetProfile(profile: any): boolean {
+  const userType = profile?.userType;
+  const normalized = String(userType ?? "").trim().toUpperCase();
+  return userType === 2 || normalized === "2" || normalized === "BOT";
+}
+
 function finiteMessageTime(value: unknown): number {
   const time = Number(value);
   return Number.isFinite(time) && time > 0 ? time : Date.now();
 }
 
-function talkProfileIdentity(mid: string, raw: any): SenderIdentity {
+function talkProfileIdentity(mid: string, raw: any, isOfficialAccount = false): SenderIdentity {
   const detail = raw?.targetProfileDetail ?? raw?.contact ?? raw ?? {};
   const name = String(detail?.profileName ?? detail?.displayName ?? "LINE User").trim() || "LINE User";
-  const avatarUrl = cdnUrl(detail?.picturePath || detail?.pictureStatus);
-  return { id: mid, name, avatarUrl };
+  const avatarUrl = talkProfileImageUrl(mid, detail?.pictureStatus || detail?.picturePath);
+  return { id: mid, name, avatarUrl, ...(isOfficialAccount ? { isOfficialAccount: true } : {}) };
 }
 
 function talkContactIdentity(mid: string, contact: any): SenderIdentity {
   const name = String(contact?.displayNameOverridden || contact?.displayName || "LINE User").trim() || "LINE User";
-  const avatarUrl = cdnUrl(contact?.picturePath || contact?.pictureStatus || contact?.thumbnailUrl);
+  const avatarUrl = talkProfileImageUrl(mid, contact?.pictureStatus || contact?.picturePath || contact?.thumbnailUrl);
   return { id: mid, name, avatarUrl };
 }
 
 async function resolveTalkSender(mid: string): Promise<SenderIdentity | null> {
   if (!client || !mid || !mid.startsWith("u")) return null;
   const cached = talkSenderCache.get(mid);
-  if (cached) return cached;
+  if (cached && (cached.isOfficialAccount || talkSenderProfileChecked.has(mid))) return cached;
   try {
-    const user: any = await client.getUser(mid);
+    const profiles = await getTargetProfiles(client, [mid]);
+    talkSenderProfileChecked.add(mid);
+    const [profile] = profiles;
+    if (profile) {
+      const identity = talkProfileIdentity(mid, profile, isBotTargetProfile(profile));
+      if (identity.name !== "LINE User" || identity.avatarUrl || identity.isOfficialAccount) {
+        talkSenderCache.set(mid, identity);
+        return identity;
+      }
+    }
+  } catch {
+    // Profile classification is best-effort; regular contact fallbacks below
+    // still keep the message visible when RelationService is unavailable.
+  }
+  try {
+    const user: any = await LineJsAdapter.getUser(client, mid);
     const identity = talkProfileIdentity(mid, user?.raw);
     if (identity.name !== "LINE User" || identity.avatarUrl) {
       talkSenderCache.set(mid, identity);
@@ -791,7 +931,7 @@ async function resolveTalkSender(mid: string): Promise<SenderIdentity | null> {
     // Continue through Talk contact fallbacks for non-friend group members.
   }
   try {
-    const response: any = await client.base.talk.getContactsV2({ mids: [mid] });
+    const response: any = await LineJsAdapter.getContactsV2(client, { mids: [mid] });
     const contact = response?.contacts?.[mid]?.contact;
     if (contact) {
       const identity = talkContactIdentity(mid, contact);
@@ -802,7 +942,7 @@ async function resolveTalkSender(mid: string): Promise<SenderIdentity | null> {
     // Older / restricted desktop sessions can reject V2.
   }
   try {
-    const contacts: any[] = await client.base.talk.getContacts({ mids: [mid] });
+    const contacts: any[] = await LineJsAdapter.getContacts(client, { mids: [mid] });
     const contact = contacts?.[0];
     if (contact) {
       const identity = talkContactIdentity(mid, contact);
@@ -817,6 +957,16 @@ async function resolveTalkSender(mid: string): Promise<SenderIdentity | null> {
   return fallback;
 }
 
+function resolveTalkSenderInBackground(mid: string): Promise<SenderIdentity | null> {
+  const pending = talkSenderResolutionCache.get(mid);
+  if (pending) return pending;
+  const resolution = resolveTalkSender(mid).finally(() => {
+    if (talkSenderResolutionCache.get(mid) === resolution) talkSenderResolutionCache.delete(mid);
+  });
+  talkSenderResolutionCache.set(mid, resolution);
+  return resolution;
+}
+
 async function resolveTalkIdentities(ids: string[]): Promise<Map<string, SenderIdentity>> {
   if (!client) return new Map();
   const unique = [...new Set(ids.filter((id) => id.startsWith("u")))];
@@ -827,7 +977,7 @@ async function resolveTalkIdentities(ids: string[]): Promise<Map<string, SenderI
   for (let start = 0; start < missing.length; start += 50) {
     const mids = missing.slice(start, start + 50);
     try {
-      const response: any = await client.base.talk.getContactsV2({ mids });
+      const response: any = await LineJsAdapter.getContactsV2(client, { mids });
       for (const mid of mids) {
         const contact = response?.contacts?.[mid]?.contact;
         if (contact) talkSenderCache.set(mid, talkContactIdentity(mid, contact));
@@ -837,6 +987,31 @@ async function resolveTalkIdentities(ids: string[]): Promise<Map<string, SenderI
     }
   }
 
+  // Official Accounts are returned as BOT target profiles even when the
+  // normal user/contact endpoints hide their profile. Classify in bounded
+  // batches so historical messages can retain an actionable client fallback.
+  for (let start = 0; start < unique.length; start += 50) {
+    const mids = unique.slice(start, start + 50);
+    try {
+      const profiles = await getTargetProfiles(client, mids);
+      for (const mid of mids) talkSenderProfileChecked.add(mid);
+      for (const profile of profiles) {
+        const mid = midString(profile?.targetUserMid);
+        if (!mid) continue;
+        const current = talkSenderCache.get(mid);
+        const isOfficialAccount = isBotTargetProfile(profile);
+        const profileIdentity = talkProfileIdentity(mid, profile, isOfficialAccount);
+        talkSenderCache.set(mid, {
+          id: mid,
+          name: current?.name && current.name !== "LINE User" ? current.name : profileIdentity.name,
+          avatarUrl: current?.avatarUrl || profileIdentity.avatarUrl,
+          ...(isOfficialAccount || current?.isOfficialAccount ? { isOfficialAccount: true } : {}),
+        });
+      }
+    } catch {
+      // Classification must never make a room disappear.
+    }
+  }
   await resolveIdentities(
     unique.filter((id) => !talkSenderCache.has(id)),
     resolveTalkSender,
@@ -852,7 +1027,7 @@ async function resolveSquareSender(mid: string, fallbackName = ""): Promise<Send
   const cached = squareSenderCache.get(mid);
   if (cached) return cached;
   try {
-    const response: any = await client.base.square.getSquareMember({ squareMemberMid: mid });
+    const response: any = await LineJsAdapter.getSquareMember(client, { squareMemberMid: mid });
     const member = response?.squareMember ?? response ?? {};
     const identity = {
       id: mid,
@@ -888,9 +1063,10 @@ async function resolveIdentities(
   return result;
 }
 
-function displayMessageText(text: unknown, contentType: unknown) {
+function displayMessageText(text: unknown, contentType: unknown, rawMessage?: unknown) {
   const raw = String(text ?? "").replace(/\r\n?/g, "\n").trim();
   const code = contentTypeCode(contentType);
+  if (code === 6) return callHistoryPreview(parseCallHistory(rawMessage ?? { contentType, text }));
   const internalTokens = new Set([
     "IMAGE", "VIDEO", "AUDIO", "CALL", "STICKER", "FILE", "LOCATION",
     "POSTNOTIFICATION", "CHATEVENT", "FLEX",
@@ -899,9 +1075,18 @@ function displayMessageText(text: unknown, contentType: unknown) {
   return raw || contentLabel(code) || "ข้อความใหม่";
 }
 
-function compactPreview(text: unknown, contentType: unknown) {
+// This is the same URI constructed by LINEJS's TalkMessage.announce()
+// implementation. It is the fallback link for messages whose sender/profile
+// data is hidden from the selfbot API (notably Official Accounts).
+function officialLineMessageUrl(chatId: string, messageId: string): string {
+  const params = new URLSearchParams({ chatId, messageId });
+  return `line://nv/chatMsg?${params.toString()}`;
+}
+
+function compactPreview(text: unknown, contentType: unknown, rawMessage?: unknown) {
   const clean = String(text ?? "").replace(/\s+/g, " ").trim();
   const code = contentTypeCode(contentType);
+  if (code === 6) return callHistoryPreview(parseCallHistory(rawMessage ?? { contentType, text }));
   // LINEJS may surface the enum token itself as message.text for non-text
   // messages (for example POSTNOTIFICATION). Never show that internal token
   // directly in the UI; use a localized content label instead.
@@ -920,7 +1105,7 @@ function mediaSourceKey(messageId: string, isSquare: boolean) {
 
 function rememberMessageMedia(raw: any, isSquare: boolean) {
   const id = String(raw?.id ?? "");
-  if (!id || contentTypeCode(raw?.contentType) !== 1) return;
+  if (!id || ![1, 17].includes(contentTypeCode(raw?.contentType))) return;
   messageMediaSourceCache.set(mediaSourceKey(id, isSquare), { raw, isSquare });
   if (messageMediaSourceCache.size > 1200) {
     const first = messageMediaSourceCache.keys().next().value;
@@ -933,7 +1118,7 @@ async function loadTalkMessageBoxes(): Promise<any[]> {
   try {
     // `activeOnly: true` hides old direct-message boxes. Those boxes still
     // contain readable history and are needed for a real full sync.
-    const boxResult: any = await client.base.talk.getMessageBoxes({
+    const boxResult: any = await LineJsAdapter.getMessageBoxes(client, {
       messageBoxListRequest: {
         activeOnly: false,
         messageBoxCountLimit: 1000,
@@ -961,7 +1146,140 @@ function talkBoxLastTime(box: any): number {
   return Number.isFinite(value) ? value : 0;
 }
 
-async function normalizeTalkChat(chat: any, box: any): Promise<any> {
+function systemAccountCursor(box: any): { messageId: string; deliveredTime: number; unread: number } | null {
+  if (talkMessageBoxId(box) !== LINE_SYSTEM_ACCOUNT_MID) return null;
+  const messageId = String(box?.lastDeliveredMessageId?.messageId ?? "").trim();
+  const deliveredTime = Number(box?.lastDeliveredMessageId?.deliveredTime ?? 0);
+  if (!messageId || !Number.isFinite(deliveredTime) || deliveredTime <= 0) return null;
+  return {
+    messageId,
+    deliveredTime,
+    unread: Math.max(0, Number(box?.unreadCount ?? 0)),
+  };
+}
+
+async function trackLineSystemAccount(next: LineClient, reason: string, force = false): Promise<void> {
+  if (client !== next) return;
+  const now = Date.now();
+  if (!force && now - lastSystemAccountTrackAt < SYSTEM_ACCOUNT_TRACK_EVENT_THROTTLE_MS) return;
+  if (systemAccountTrackInFlight) return systemAccountTrackInFlight;
+  lastSystemAccountTrackAt = now;
+  systemAccountTrackInFlight = (async () => {
+    try {
+      const result: any = await LineJsAdapter.getMessageBoxes(next, {
+        messageBoxListRequest: {
+          activeOnly: false,
+          messageBoxCountLimit: 1000,
+          withUnreadCount: true,
+          lastMessagesPerMessageBoxCount: 1,
+          unreadOnly: false,
+        },
+      } as any);
+      const boxes = Array.isArray(result?.messageBoxes) ? result.messageBoxes : [];
+      const box = boxes.find((candidate: any) => talkMessageBoxId(candidate) === LINE_SYSTEM_ACCOUNT_MID);
+      if (!box) return;
+      talkMessageBoxCache.set(LINE_SYSTEM_ACCOUNT_MID, box);
+      const cursor = systemAccountCursor(box);
+      if (!cursor) return;
+
+      const previous = database.getSyncState(ACCOUNT_ID, SYSTEM_ACCOUNT_TRACK_KEY);
+      if (!previous?.cursor) {
+        // Establish a baseline only. Existing system notifications must not be
+        // surfaced as new merely because Liney has started for the first time.
+        database.setSyncState(ACCOUNT_ID, {
+          key: SYSTEM_ACCOUNT_TRACK_KEY,
+          cursor: cursor.messageId,
+          generation: cursor.deliveredTime,
+          status: "ready",
+        });
+        return;
+      }
+      if (previous.cursor === cursor.messageId) return;
+
+      database.setSyncState(ACCOUNT_ID, {
+        key: SYSTEM_ACCOUNT_TRACK_KEY,
+        cursor: cursor.messageId,
+        generation: cursor.deliveredTime,
+        status: "ready",
+      });
+
+      const syntheticId = `line-system:${cursor.messageId}`;
+      const alreadyStored = database.getMessage(ACCOUNT_ID, LINE_SYSTEM_ACCOUNT_MID, syntheticId);
+      if (!alreadyStored) {
+        database.upsertMessages(ACCOUNT_ID, [{
+          id: syntheticId,
+          chatId: LINE_SYSTEM_ACCOUNT_MID,
+          kind: "dm",
+          text: "มีการแจ้งเตือนใหม่จาก LINE · เนื้อหาไม่พร้อมผ่าน Talk API",
+          isMine: false,
+          createdTime: cursor.deliveredTime,
+          contentType: 0,
+          senderId: LINE_SYSTEM_ACCOUNT_MID,
+          senderName: "LINE",
+          isOfficialAccount: true,
+          status: "sent",
+          raw: {
+            lineySystemNotification: true,
+            trackedMessageId: cursor.messageId,
+            trackReason: reason,
+          },
+        }]);
+        database.setTrackedChatActivity(ACCOUNT_ID, LINE_SYSTEM_ACCOUNT_MID, {
+          preview: "มีการแจ้งเตือนใหม่จาก LINE",
+          createdTime: cursor.deliveredTime,
+          unread: cursor.unread,
+        });
+        emit({
+          type: "event.message",
+          source: "talk-system",
+          message: {
+            id: syntheticId,
+            chatId: LINE_SYSTEM_ACCOUNT_MID,
+            senderId: LINE_SYSTEM_ACCOUNT_MID,
+            senderName: "LINE",
+            text: "มีการแจ้งเตือนใหม่จาก LINE · เนื้อหาไม่พร้อมผ่าน Talk API",
+            isMine: false,
+            createdTime: cursor.deliveredTime,
+            contentType: 0,
+            isOfficialAccount: true,
+            systemNotificationTracked: true,
+            trackedUnread: cursor.unread,
+          },
+        });
+      }
+
+      emit({
+        type: "event.system_notification",
+        source: "talk-metadata",
+        chatId: LINE_SYSTEM_ACCOUNT_MID,
+        messageId: cursor.messageId,
+        createdTime: cursor.deliveredTime,
+        unread: cursor.unread,
+        reason,
+      });
+    } catch (error) {
+      emit({
+        type: "event.system_notification.error",
+        source: "talk-metadata",
+        error: errorInfo(error).message,
+      });
+    } finally {
+      systemAccountTrackInFlight = null;
+    }
+  })();
+  return systemAccountTrackInFlight;
+}
+
+async function consumeSystemAccountTracking(next: LineClient, signal: AbortSignal): Promise<void> {
+  await trackLineSystemAccount(next, "startup", true);
+  while (!signal.aborted && client === next) {
+    await waitForSignal(SYSTEM_ACCOUNT_TRACK_INTERVAL_MS, signal);
+    if (signal.aborted || client !== next) return;
+    await trackLineSystemAccount(next, "interval", true);
+  }
+}
+
+async function normalizeTalkChat(chat: any, box: any, historyState = talkMessageBoxHistoryState(box)): Promise<any> {
   if (!client) throw new Error("not authenticated");
   const mid = String(chat?.mid ?? talkMessageBoxId(box));
   const isDm = mid.startsWith("u");
@@ -984,25 +1302,19 @@ async function normalizeTalkChat(chat: any, box: any): Promise<any> {
       preview = parseRichMessage(rawLast)?.altText || "Rich message";
     } else {
       try {
-        const wrapped = await TalkMessage.fromRawTalk(rawLast, client);
-        preview = compactPreview(wrapped.text, rawLast.contentType);
+        const wrapped = await fromRawTalk(client, rawLast);
+        preview = compactPreview(wrapped.text, rawLast.contentType, rawLast);
       } catch {
-        preview = compactPreview(rawLast?.text, rawLast?.contentType);
+        preview = compactPreview(rawLast?.text, rawLast?.contentType, rawLast);
       }
     }
   }
 
   let avatarUrl = cdnUrl(chat?.raw?.picturePath);
   if (isDm) {
-    if (identity?.avatarUrl) avatarUrl = identity.avatarUrl;
-    else {
-      try {
-        const user: any = await client.getUser(mid);
-        avatarUrl = cdnUrl(user?.raw?.targetProfileDetail?.picturePath || user?.raw?.targetProfileDetail?.pictureStatus);
-      } catch {
-        // Keep chat picture fallback.
-      }
-    }
+    // MID-based OBS URLs track the current Talk profile image and do not go
+    // stale when LINE rotates pictureStatus/picturePath after an avatar edit.
+    avatarUrl = talkProfileImageUrl(mid, identity?.avatarUrl);
   }
   const favoriteTimestamp = Number(chat?.raw?.favoriteTimestamp ?? 0);
   return {
@@ -1012,9 +1324,10 @@ async function normalizeTalkChat(chat: any, box: any): Promise<any> {
     avatarUrl,
     preview,
     unread: Number(box?.unreadCount ?? 0),
-    lastMessageTime: talkBoxLastTime(box),
+    lastMessageTime: historyState === "new" ? 0 : talkBoxLastTime(box),
     favoriteTimestamp,
     pinned: favoriteTimestamp > 0,
+    historyState,
     raw: normalize(chat?.raw),
   };
 }
@@ -1045,26 +1358,25 @@ function mergeKnownTalkChats(remote: any[]): any[] {
       avatarUrl: current.avatarUrl || known.avatarUrl,
       preview: current.preview || known.preview,
       lastMessageTime: Math.max(Number(current.lastMessageTime ?? 0), Number(known.lastMessageTime ?? 0)),
+      historyState: known.historyState === "available" ? "available" : current.historyState ?? known.historyState ?? "available",
     });
   }
   return [...byId.values()];
 }
 
-async function loadChatsList(): Promise<any[]> {
+async function loadChatsList(persist = true, canPersist: () => boolean = () => true): Promise<any[]> {
   if (!client) throw new Error("not authenticated");
   let chats: any[] = [];
   let joinedError: unknown;
   try {
-    chats = await client.fetchJoinedChats();
+    chats = await LineJsAdapter.fetchJoinedChats(client);
   } catch (error) {
     joinedError = error;
   }
   const boxes = await loadTalkMessageBoxes();
   const boxMap = new Map(boxes.map((box: any) => [talkMessageBoxId(box), box]));
   const joinedIds = chats.map((chat: any) => String(chat.mid));
-  const historyBoxes = boxes.filter(talkMessageBoxHasHistory);
   const additionalIds = [...new Set([
-    ...additionalTalkHistoryBoxIds(joinedIds, historyBoxes),
     ...boxes
       .map((box: any) => talkMessageBoxId(box))
       .filter((id) => Boolean(id) && !joinedIds.includes(id)),
@@ -1072,42 +1384,54 @@ async function loadChatsList(): Promise<any[]> {
 
   // Archived direct chats may be absent from getAllChatMids. Resolve group
   // metadata only for those extra boxes; DMs already have contact metadata
-  // from the friends sync and therefore need no extra request.
+  // from the friends sync and therefore need no extra request. A box without
+  // readable history is still surfaced so the UI can direct users to LINE's
+  // official clients instead of silently dropping the room.
   const extraGroups = new Map<string, any>();
   await runPool(additionalIds.filter((id) => !id.startsWith("u")), 4, async (id) => {
     try {
-      const extra = await client!.getChat(id);
+      const extra = await LineJsAdapter.getChat(client!, id);
       extraGroups.set(id, extra);
     } catch {
       // Keep a generic group row; its history is still useful and loadable.
     }
   });
 
-  const jobs: Array<{ chat: any; box: any }> = [
-    ...chats.map((chat: any) => ({ chat, box: boxMap.get(String(chat.mid)) })),
-    ...additionalIds.map((id) => ({ chat: extraGroups.get(id), box: boxMap.get(id) })),
+  const jobs: Array<{ chat: any; box: any; historyState: "available" | "new" | "unavailable" }> = [
+    ...chats.map((chat: any) => {
+      const box = boxMap.get(String(chat.mid));
+      return { chat, box, historyState: talkMessageBoxHistoryState(box) };
+    }),
+    ...additionalIds.map((id) => {
+      const box = boxMap.get(id);
+      return {
+        chat: extraGroups.get(id),
+        box,
+        historyState: talkMessageBoxHistoryState(box),
+      };
+    }),
   ];
   const remoteResult = new Array<any>(jobs.length);
-  await runPool(jobs, 4, async ({ chat, box }, index) => {
-    remoteResult[index] = await normalizeTalkChat(chat, box);
+  await runPool(jobs, 4, async ({ chat, box, historyState }, index) => {
+    remoteResult[index] = await normalizeTalkChat(chat, box, historyState);
   });
   const result = mergeKnownTalkChats(remoteResult);
   if (!result.length && joinedError) throw joinedError;
   result.sort((a, b) => b.lastMessageTime - a.lastMessageTime);
-  database.upsertChats(ACCOUNT_ID, result as DatabaseChat[]);
+  if (persist && canPersist()) database.upsertChats(ACCOUNT_ID, result as DatabaseChat[]);
   return result;
 }
 
-async function loadFriendsList(): Promise<any[]> {
+async function loadFriendsList(persist = true, canPersist: () => boolean = () => true): Promise<any[]> {
   if (!client) throw new Error("not authenticated");
-  const friendIds: string[] = (await client.base.relation.getUserFriendIds({
+  const friendIds: string[] = (await LineJsAdapter.getUserFriendIds(client, {
     request: { blockStatus: "ALL" },
   })).userFriendMids ?? [];
   const contacts: any[] = [];
   for (let offset = 0; offset < friendIds.length; offset += 50) {
     const mids = friendIds.slice(offset, offset + 50);
     try {
-      const response: any = await client.base.talk.getContactsV2({ mids });
+      const response: any = await LineJsAdapter.getContactsV2(client, { mids });
       for (const [mid, entry] of Object.entries<any>(response?.contacts ?? {})) {
         const contact = entry?.contact ?? {};
         contacts.push({ mid, contact });
@@ -1138,7 +1462,7 @@ async function loadFriendsList(): Promise<any[]> {
     const identity: SenderIdentity = {
       id: String(mid),
       name: String(contact?.displayNameOverridden || contact?.displayName || "LINE User"),
-      avatarUrl: cdnUrl(contact?.picturePath || contact?.pictureStatus),
+      avatarUrl: talkProfileImageUrl(String(mid), contact?.pictureStatus || contact?.picturePath),
     };
     talkSenderCache.set(String(mid), identity);
     return {
@@ -1156,16 +1480,16 @@ async function loadFriendsList(): Promise<any[]> {
     if (a.favoriteTime !== b.favoriteTime) return b.favoriteTime - a.favoriteTime;
     return a.name.localeCompare(b.name, "th");
   });
-  database.upsertChats(ACCOUNT_ID, result as DatabaseChat[]);
+  if (persist && canPersist()) database.upsertChats(ACCOUNT_ID, result as DatabaseChat[]);
   return result;
 }
 
-async function loadOpenChatList(): Promise<any[]> {
+async function loadOpenChatList(persist = true, canPersist: () => boolean = () => true): Promise<any[]> {
   if (!client) throw new Error("not authenticated");
   let chats: any[] = [];
   let joinedError: unknown;
   try {
-    chats = await client.fetchJoinedSquareChats();
+    chats = await LineJsAdapter.fetchJoinedSquareChats(client);
   } catch (error) {
     joinedError = error;
   }
@@ -1175,7 +1499,7 @@ async function loadOpenChatList(): Promise<any[]> {
   await runPool(chats, 4, async (chat: any) => {
     let status: any = null;
     try {
-      status = (await client!.base.square.getSquareChatStatus({
+      status = (await LineJsAdapter.getSquareChatStatus(client!, {
         request: { squareChatMid: String(chat.mid) },
       })).chatStatus;
     } catch {
@@ -1202,17 +1526,17 @@ async function loadOpenChatList(): Promise<any[]> {
   const merged = [...byId.values()];
   if (!merged.length && joinedError) throw joinedError;
   merged.sort((a, b) => b.lastMessageTime - a.lastMessageTime);
-  database.upsertChats(ACCOUNT_ID, merged as DatabaseChat[]);
+  if (persist && canPersist()) database.upsertChats(ACCOUNT_ID, merged as DatabaseChat[]);
   return merged;
 }
 
 async function fetchOpenChatMessagesNormalized(chatId: string, limit: number): Promise<any[]> {
   if (!client) throw new Error("not authenticated");
   const collected: any[] = [];
-  const selfMid = midString(client.base.profile?.mid);
+  const selfMid = midString(LineJsAdapter.profileMid(client));
   let syncToken: string | undefined;
   for (let page = 0; page < 6 && collected.length < limit; page++) {
-    const response: any = await client.base.square.fetchSquareChatEvents({
+    const response: any = await LineJsAdapter.fetchSquareChatEvents(client, {
       squareChatMid: chatId,
       syncToken,
       limit: 100,
@@ -1230,19 +1554,21 @@ async function fetchOpenChatMessagesNormalized(chatId: string, limit: number): P
       const rich = contentType === 17 ? parseRichMessage(message) : undefined;
       collected.push({
         id: String(message?.id ?? crypto.randomUUID()),
-        text: contentType === 17 ? (rich?.altText || "Rich message") : displayMessageText(message?.text, contentType),
+        text: contentType === 17 ? (rich?.altText || "Rich message") : displayMessageText(message?.text, contentType, message),
         from: String(message?.from ?? ""),
         to: String(message?.to ?? chatId),
         isMine: event?.type === "SEND_MESSAGE",
         senderName: String(payload?.senderDisplayName ?? ""),
         createdTime: Number(message?.createdTime ?? event?.createdTime ?? Date.now()),
         contentType,
+        readCount: Math.max(0, Number(message?.readCount ?? 0)),
         filename: mediaFilename(message),
         stickerUrl: contentType === 7 ? stickerUrlFromRaw(message) : undefined,
         flex: contentType === 22 ? parseFlexMessage(message) : undefined,
         reactions: squareReactionSummaries(payload?.messageReactionStatus, selfMid),
         replyToId: relatedMessageId(message),
         rich,
+        call: contentType === 6 ? parseCallHistory(message) : undefined,
         raw: message,
       });
     }
@@ -1277,12 +1603,12 @@ async function fetchTalkMessagesNormalized(chatId: string, limit: number): Promi
   const decode = async (rawList: unknown): Promise<any[]> => Promise.all(
     (Array.isArray(rawList) ? rawList : []).map(async (raw: any) => {
       try {
-        return await TalkMessage.fromRawTalk(raw, client!);
+        return await fromRawTalk(client!, raw);
       } catch {
         return {
           raw,
           text: raw?.text ?? "",
-          isMyMessage: midString(raw?.from) === midString((client as any)?.base?.profile?.mid),
+           isMyMessage: midString(raw?.from) === midString(LineJsAdapter.profileMid(client)),
         };
       }
     }),
@@ -1297,24 +1623,31 @@ async function fetchTalkMessagesNormalized(chatId: string, limit: number): Promi
 
     const cursor = box?.lastDeliveredMessageId;
     const rawList = cursor && cursor.messageId !== undefined && cursor.deliveredTime !== undefined
-      ? await client.base.talk.getPreviousMessagesV2WithRequest({
+           ? await LineJsAdapter.getPreviousMessages(client, {
         request: {
           messageBoxId: chatId,
           endMessageId: cursor,
           messagesCount: limit,
         },
       })
-      : await client.base.talk.getRecentMessagesV2({
+       : await LineJsAdapter.getRecentMessages(client, {
         messageBoxId: chatId,
         messagesCount: limit,
       });
     list = await decode(rawList);
+    if (shouldRetryTalkHistory(cursor, list.length)) {
+      const recentRaw: any[] = await LineJsAdapter.getRecentMessages(client, {
+        messageBoxId: chatId,
+        messagesCount: limit,
+      });
+      list = await decode(recentRaw);
+    }
   } catch {
     // One corrupt/old E2EE payload must not make an entire room disappear.
     // Pull raw Talk messages and decode them independently so good messages
     // survive even when one historical encryption key is unavailable.
     try {
-      const rawList: any[] = await client.base.talk.getRecentMessagesV2({
+       const rawList: any[] = await LineJsAdapter.getRecentMessages(client, {
         messageBoxId: chatId,
         messagesCount: limit,
       });
@@ -1333,23 +1666,28 @@ async function fetchTalkMessagesNormalized(chatId: string, limit: number): Promi
   const rich = contentType === 17 ? parseRichMessage(raw) : undefined;
     const from = midString(raw?.from) || midString(message?.from);
     const to = midString(raw?.to) || midString(message?.to);
-    const selfMid = midString(client?.base?.profile?.mid);
+    const selfMid = midString(client ? LineJsAdapter.profileMid(client) : undefined);
+    const editState = LineJsAdapter.talkMessageEditState(message);
     return {
       id: String(raw?.id ?? crypto.randomUUID()),
       text: contentType === 16
         ? postNotificationPreview(raw)
-        : contentType === 17 ? (rich?.altText || "Rich message") : displayMessageText(message?.text, contentType),
+        : contentType === 17 ? (rich?.altText || "Rich message") : displayMessageText(message?.text, contentType, raw),
       from,
       to,
       isMine: Boolean(message?.isMyMessage),
       createdTime: Number(raw?.createdTime ?? Date.now()),
       contentType,
+      readCount: Math.max(0, Number(raw?.readCount ?? 0)),
+      edited: editState.edited || undefined,
+      updatedTime: editState.updatedTime,
       filename: mediaFilename(raw),
       stickerUrl: contentType === 7 ? stickerUrlFromRaw(raw) : undefined,
       flex: contentType === 22 ? parseFlexMessage(raw) : undefined,
       reactions: reactionSummaries(raw?.reactions, selfMid),
       replyToId: relatedMessageId(raw),
       rich,
+      call: contentType === 6 ? parseCallHistory(raw) : undefined,
       raw,
       postNotification,
     };
@@ -1365,6 +1703,8 @@ async function fetchTalkMessagesNormalized(chatId: string, limit: number): Promi
       senderId: sender?.id ?? item.from,
       senderName: sender?.name ?? "",
       senderAvatarUrl: sender?.avatarUrl ?? "",
+      officialClientUrl: officialLineMessageUrl(chatId, String(item.id)),
+        isOfficialAccount: sender?.isOfficialAccount,
     };
   }));
 }
@@ -1393,7 +1733,8 @@ function decorateReplyReferences(messages: any[]): any[] {
   return messages.map((message) => {
     const replyId = String(message?.replyToId ?? "").trim();
     if (!replyId) return message;
-    const target = byId.get(replyId);
+    const chatId = String(message?.chatId ?? "").trim();
+    const target = byId.get(replyId) ?? (chatId ? database.getMessage(ACCOUNT_ID, chatId, replyId) : null);
     return {
       ...message,
       replyTo: {
@@ -1411,11 +1752,89 @@ function decorateStoredMessages(messages: DatabaseMessage[]): any[] {
     const stickerUrl = messageStickerUrl(message);
     const flex = messageFlex(message);
     const rich = Number(message.contentType ?? 0) === 17 ? parseRichMessage(message.raw) : undefined;
-    return stickerUrl || flex || rich
-      ? { ...message, ...(stickerUrl ? { stickerUrl } : {}), ...(flex ? { flex } : {}), ...(rich ? { rich } : {}) }
+    const call = Number(message.contentType ?? 0) === 6 ? parseCallHistory(message.raw) : undefined;
+    const readCount = Math.max(0, Number((message.raw as any)?.readCount ?? 0));
+    const editState = LineJsAdapter.talkMessageEditState(message.raw);
+    return stickerUrl || flex || rich || call || readCount > 0 || editState.edited
+      ? {
+        ...message,
+        ...(readCount > 0 ? { readCount } : {}),
+        ...(editState.edited ? { edited: true, updatedTime: editState.updatedTime } : {}),
+        ...(stickerUrl ? { stickerUrl } : {}),
+        ...(flex ? { flex } : {}),
+        ...(rich ? { rich } : {}),
+        ...(call ? { call, text: callHistoryPreview(call) } : {}),
+      }
       : message;
   });
   return decorateReplyReferences(decorated);
+}
+
+function listCallHistory(limit = 200): any[] {
+  const chats = new Map(database.listConversationChats(ACCOUNT_ID).map((chat) => [chat.id, chat]));
+  return database.listMessagesByContentType(ACCOUNT_ID, 6, limit).flatMap((message) => {
+    const raw = message.raw && typeof message.raw === "object" && !Array.isArray(message.raw)
+      ? message.raw as Record<string, unknown>
+      : {};
+    const call = parseCallHistory({ ...raw, contentType: message.contentType, text: message.text });
+    if (!call) return [];
+    const chat = chats.get(message.chatId);
+    const chatName = String(chat?.name ?? "").trim();
+    const name = chatName && !["LINE Chat", "LINE User"].includes(chatName)
+      ? chatName
+      : String(message.senderName ?? "").trim() || (message.chatId.startsWith("u") ? "LINE User" : "LINE Group");
+    return [{
+      id: message.id,
+      chatId: message.chatId,
+      kind: message.kind,
+      name,
+      avatarUrl: chat?.avatarUrl || message.senderAvatarUrl || "",
+      isMine: message.isMine,
+      createdTime: message.createdTime,
+      call,
+    }];
+  });
+}
+
+async function enrichStoredTalkSenders(messages: DatabaseMessage[]): Promise<DatabaseMessage[]> {
+  if (!client) return messages;
+  const senderMidForMessage = (message: DatabaseMessage): string => {
+    const senderId = String(message.senderId ?? "").trim();
+    return senderId || midString((message.raw as any)?.from);
+  };
+  const senderMids = [...new Set(
+    messages
+      .filter((message) => !message.isMine)
+      .map(senderMidForMessage)
+      .filter((mid) => mid.startsWith("u")),
+  )];
+  if (!senderMids.length) return messages;
+  try {
+    const identities = await resolveTalkIdentities(senderMids);
+    let changed = false;
+    const enriched = messages.map((message) => {
+      const identity = identities.get(senderMidForMessage(message));
+      if (!identity) return message;
+      const next = {
+        ...message,
+        senderId: identity.id,
+        senderName: identity.name,
+        senderAvatarUrl: identity.avatarUrl,
+        isOfficialAccount: Boolean(identity.isOfficialAccount),
+      };
+      if (
+        next.senderName !== message.senderName
+        || next.senderAvatarUrl !== message.senderAvatarUrl
+        || next.isOfficialAccount !== Boolean(message.isOfficialAccount)
+      ) changed = true;
+      return next;
+    });
+    if (changed) database.upsertMessages(ACCOUNT_ID, enriched);
+    return enriched;
+  } catch {
+    // Sender enrichment is optional; never hide cached history when it fails.
+    return messages;
+  }
 }
 
 async function recoverMissingStickerMetadata(
@@ -1460,6 +1879,7 @@ function persistNormalizedMessages(chatId: string, openchat: boolean, messages: 
     senderId: message.senderId,
     senderName: message.senderName,
     senderAvatarUrl: message.senderAvatarUrl,
+    isOfficialAccount: Boolean(message.isOfficialAccount),
     postNotification: message.postNotification,
     reactions: message.reactions,
     replyToId: message.replyToId ?? message.replyTo?.id,
@@ -1492,6 +1912,7 @@ function persistLiveMessage(
     senderId: message.senderId,
     senderName: message.senderName,
     senderAvatarUrl: message.senderAvatarUrl,
+    isOfficialAccount: Boolean(message.isOfficialAccount),
     postNotification: message.postNotification,
     reactions: message.reactions,
     replyToId: message.replyToId ?? message.replyTo?.id,
@@ -1511,13 +1932,14 @@ function persistLiveMessage(
   preSyncedMessages.delete(cacheKey);
   liveMessageOverlayKeys.add(cacheKey);
 
-  const preview = compactPreview(message.text, message.contentType);
+  const preview = compactPreview(message.text, message.contentType, message.raw);
   const targetChats = kind === "openchat" ? preSyncedOpenChats : preSyncedChats;
   if (targetChats) {
     const existing = targetChats.find((chat) => String(chat?.id ?? "") === chatId);
     if (existing) {
-      existing.preview = preview;
-      existing.lastMessageTime = Math.max(Number(existing.lastMessageTime ?? 0), createdTime);
+      const previousLastMessageTime = Number(existing.lastMessageTime ?? 0);
+      if (createdTime >= previousLastMessageTime) existing.preview = preview;
+      existing.lastMessageTime = Math.max(previousLastMessageTime, createdTime);
       if (!message.isMine && !isExistingMessage) existing.unread = Number(existing.unread ?? 0) + 1;
     } else {
       targetChats.push({
@@ -1562,124 +1984,13 @@ function reconcileEcho(chatId: string, kind: "dm" | "group" | "openchat", messag
   return match.localId;
 }
 
-async function preSyncAccount() {
-  if (!client) return;
-  const startedAt = Date.now();
-  const generation = ++syncGeneration;
-  preSyncedMessages.clear();
-  database.setSyncState(ACCOUNT_ID, {
-    key: "account",
-    generation,
-    status: "running",
-  });
-  emit({ type: "sync.start", phase: "metadata" });
-
-  // Contacts first: this also warms the sender profile/avatar cache used by
-  // chat history rendering.
-  preSyncedFriends = await loadFriendsList();
-  emit({ type: "sync.progress", phase: "friends", done: preSyncedFriends.length, total: preSyncedFriends.length });
-
-  const [talkChats, openChats] = await Promise.all([loadChatsList(), loadOpenChatList()]);
-  preSyncedChats = talkChats;
-  preSyncedOpenChats = openChats;
-  emit({ type: "sync.progress", phase: "chats", done: talkChats.length + openChats.length, total: talkChats.length + openChats.length });
-
-  const jobs = [
-    ...talkChats.map((chat) => ({ kind: "talk" as const, id: String(chat.id), limit: 35 })),
-    ...openChats.map((chat) => ({ kind: "openchat" as const, id: String(chat.id), limit: 25 })),
-  ];
-  let done = 0;
-  let failed = 0;
-  await runPool(jobs, 4, async (job) => {
-    try {
-      const messages = job.kind === "openchat"
-        ? await fetchOpenChatMessagesNormalized(job.id, job.limit)
-        : await fetchTalkMessagesNormalized(job.id, job.limit);
-      if (generation === syncGeneration) {
-        const cacheKey = `${job.kind}:${job.id}`;
-        const visibleMessages = messages.filter((message: any) => !database.isMessageHidden(
-          ACCOUNT_ID,
-          job.id,
-          job.kind === "openchat" ? "openchat" : chatKindFor(job.id, false),
-          String(message?.id ?? ""),
-        ));
-        if (!liveMessageOverlayKeys.has(cacheKey)) {
-          preSyncedMessages.set(cacheKey, visibleMessages);
-        }
-        persistNormalizedMessages(job.id, job.kind === "openchat", visibleMessages);
-        database.setSyncState(ACCOUNT_ID, {
-          key: `${job.kind}:${job.id}`,
-          generation,
-          status: "ready",
-        });
-      }
-    } catch (error) {
-      if (generation !== syncGeneration) return;
-      failed += 1;
-      // Preserve the last good SQLite history. A failed refresh must not turn
-      // a room into an empty conversation in either the engine or the UI.
-      database.setSyncState(ACCOUNT_ID, {
-        key: `${job.kind}:${job.id}`,
-        generation,
-        status: "error",
-        error: errorInfo(error).message,
-      });
-      emit({
-        type: "sync.room_error",
-        kind: job.kind,
-        chatId: job.id,
-        error: errorInfo(error).message,
-      });
-    } finally {
-      done += 1;
-      if (generation === syncGeneration && (done === jobs.length || done % 5 === 0)) {
-        emit({ type: "sync.progress", phase: "history", done, total: jobs.length, failed });
-      }
-    }
-  });
-
-  // Warm a bounded set of recent image previews. Most media remains lazy, but
-  // the first rooms opened after login no longer flash missing thumbnails.
-  const imageJobs: { id: string; square: boolean }[] = [];
-  for (const [key, messages] of preSyncedMessages) {
-    const square = key.startsWith("openchat:");
-    const recent = [...messages].reverse().filter((item: any) => item.contentType === 1).slice(0, 1);
-    for (const item of recent) imageJobs.push({ id: String(item.id), square });
-    if (imageJobs.length >= 24) break;
-  }
-  await runPool(imageJobs.slice(0, 24), 3, async (item) => {
-    try { await getImagePreviewDataUrl(item.id, item.square); } catch { /* lazy retry in UI */ }
-  });
-
-  emit({
-    type: "sync.ready",
-    summary: {
-      friends: preSyncedFriends.length,
-      talkChats: talkChats.length,
-      openChats: openChats.length,
-      histories: preSyncedMessages.size,
-      failedHistories: failed,
-      warmedImages: mediaPreviewCache.size,
-      elapsedMs: Date.now() - startedAt,
-    },
-  });
-  database.setSyncState(ACCOUNT_ID, {
-    key: "account",
-    generation,
-    status: "ready",
-    error: failed ? `${failed} room(s) failed` : undefined,
-  });
-}
-
 function startSync(): Promise<void> {
+  invalidateChatListRefreshes();
   return getSyncCoordinator().startFull().catch((error) => {
     // coordinator already set error state; just rethrow for caller
     throw error;
   });
 }
-
-// Legacy alias kept for internal callers; now delegates to coordinator
-async function legacyPreSyncAccount() { return preSyncAccount(); }
 
 function waitForSignal(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve();
@@ -1695,14 +2006,6 @@ function waitForSignal(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-async function closePushConnections(push: any): Promise<void> {
-  const connections = Array.isArray(push?.conns) ? [...push.conns] : [];
-  await Promise.all(connections.map(async (connection: any) => {
-    try { await connection?.close?.(); } catch { /* best effort */ }
-  }));
-  if (Array.isArray(push?.conns)) push.conns.length = 0;
-}
-
 function talkChatId(raw: any, message: any, isMine: boolean, from: string, to: string): string {
   const toType = midTypeName(raw?.toType ?? (() => {
     try { return message?.to?.type; } catch { return ""; }
@@ -1715,21 +2018,6 @@ function talkChatId(raw: any, message: any, isMine: boolean, from: string, to: s
   if (isMine) return to || from;
   return to.startsWith("u") ? (from || to) : (to || from);
 }
-
-const TALK_OPERATION_NAMES: Record<string, string> = {
-  "25": "SEND_MESSAGE",
-  "26": "RECEIVE_MESSAGE",
-  "50": "NOTIFIED_RECEIVED_CALL",
-  "51": "CANCEL_CALL",
-  "55": "NOTIFIED_READ_MESSAGE",
-  "64": "DESTROY_MESSAGE",
-  "65": "NOTIFIED_DESTROY_MESSAGE",
-  "139": "SEND_REACTION",
-  "140": "NOTIFIED_SEND_REACTION",
-  "154": "NOTIFIED_GCS_REACTION",
-  "158": "EDIT_MESSAGE",
-  "159": "NOTIFIED_EDIT_MESSAGE",
-};
 
 const SQUARE_OPERATION_NAMES: Record<string, string> = {
   "0": "RECEIVE_MESSAGE",
@@ -1791,7 +2079,7 @@ function persistReactionEvent(
   emit({ type: "event.message.reaction", source, chatId, messageId, reactions });
 }
 
-async function handleTalkMessage(next: Client, message: any, rawOverride?: any): Promise<void> {
+async function handleTalkMessage(next: LineClient, message: any, rawOverride?: any, eventKind: "message" | "edit" = "message"): Promise<void> {
   const raw = rawOverride ?? message?.raw ?? {};
   if (!raw || typeof raw !== "object") return;
   const contentType = contentTypeCode(raw?.contentType);
@@ -1804,7 +2092,7 @@ async function handleTalkMessage(next: Client, message: any, rawOverride?: any):
   let isMine = false;
   try { isMine = Boolean(message?.isMyMessage); } catch { /* use profile fallback */ }
   if (!isMine) {
-    const selfMid = midString(next.base.profile?.mid);
+    const selfMid = midString(LineJsAdapter.profileMid(next));
     if (selfMid && from === selfMid) isMine = true;
   }
   const chatId = talkChatId(raw, message, isMine, from, to);
@@ -1818,37 +2106,77 @@ async function handleTalkMessage(next: Client, message: any, rawOverride?: any):
   const sender = isMine
     ? null
     : talkSenderCache.get(from) ?? (from ? { id: from, name: "LINE User", avatarUrl: "" } : null);
-  if (!isMine && from && !talkSenderCache.has(from)) {
-    void resolveTalkSender(from).catch(() => undefined);
-  }
+  const shouldResolveSender = !isMine && Boolean(from)
+    && (!talkSenderCache.has(from) || !talkSenderProfileChecked.has(from));
   let textValue: unknown = raw?.text;
   try { if (message?.text !== undefined) textValue = message.text; } catch { /* raw text fallback */ }
+  const messageId = String(raw?.id ?? crypto.randomUUID());
+  const editState = LineJsAdapter.talkMessageEditState(message);
   const normalized = {
-    id: String(raw?.id ?? crypto.randomUUID()),
+    id: messageId,
     chatId,
     from,
     senderId: sender?.id ?? from,
     senderName: sender?.name ?? "",
     senderAvatarUrl: sender?.avatarUrl ?? "",
+    officialClientUrl: officialLineMessageUrl(chatId, messageId),
+    isOfficialAccount: sender?.isOfficialAccount,
     text: contentType === 16
       ? postNotificationPreview(raw)
-      : contentType === 17 ? (rich?.altText || "Rich message") : displayMessageText(textValue, contentType),
+       : contentType === 17 ? (rich?.altText || "Rich message") : displayMessageText(textValue, contentType, raw),
     isMine,
     createdTime: finiteMessageTime(raw?.createdTime),
     contentType,
+    readCount: Math.max(0, Number(raw?.readCount ?? 0)),
+    edited: editState.edited || eventKind === "edit" || undefined,
+    updatedTime: editState.updatedTime,
     filename: mediaFilename(raw),
     stickerUrl: contentType === 7 ? stickerUrlFromRaw(raw) : undefined,
     flex: contentType === 22 ? parseFlexMessage(raw) : undefined,
-    reactions: reactionSummaries(raw?.reactions, midString(next.base.profile?.mid)),
+    reactions: reactionSummaries(raw?.reactions, midString(LineJsAdapter.profileMid(next))),
     replyToId: relatedMessageId(raw),
     rich,
+    call: contentType === 6 ? parseCallHistory(raw) : undefined,
     postNotification,
     raw,
   };
   let localId: string | undefined;
-  try { localId = reconcileEcho(chatId, kind, normalized); } catch { /* UI still receives the event */ }
+  if (eventKind === "message") {
+    try { localId = reconcileEcho(chatId, kind, normalized); } catch { /* UI still receives the event */ }
+  }
   try { persistLiveMessage(chatId, kind, normalized, localId); } catch (error) {
     emit({ type: "event.message.persistence_error", source: "talk", error: errorInfo(error).message });
+  }
+
+  if (shouldResolveSender) {
+    void resolveTalkSenderInBackground(from).then((identity) => {
+      if (!identity || client !== next) return;
+      const stored = database.getMessage(ACCOUNT_ID, chatId, normalized.id);
+      if (stored) {
+        database.upsertMessage(ACCOUNT_ID, {
+          ...stored,
+          senderId: identity.id,
+          senderName: identity.name,
+          senderAvatarUrl: identity.avatarUrl,
+          isOfficialAccount: Boolean(identity.isOfficialAccount),
+        });
+      }
+      emit({
+        type: "event.message.updated",
+        source: "talk",
+        chatId,
+        messageId: normalized.id,
+        message: {
+          id: normalized.id,
+          chatId,
+          senderId: identity.id,
+          senderName: identity.name,
+          senderAvatarUrl: identity.avatarUrl,
+          officialClientUrl: officialLineMessageUrl(chatId, normalized.id),
+          isOfficialAccount: identity.isOfficialAccount,
+        },
+      });
+    }).catch(() => undefined);
   }
 
   // The raw LINE object can contain binary chunks/BigInt values and is not
@@ -1858,15 +2186,17 @@ async function handleTalkMessage(next: Client, message: any, rawOverride?: any):
   const wireMessage = { ...normalized };
   delete (wireMessage as { raw?: unknown }).raw;
   emit({
-    type: "event.message",
+    type: eventKind === "edit" ? "event.message.updated" : "event.message",
     source: "talk",
+    chatId,
+    messageId: normalized.id,
     localId,
     message: localId ? { ...wireMessage, localId } : wireMessage,
   });
 }
 
 async function handleSquareMessage(
-  next: Client,
+  next: LineClient,
   message: any,
   isMineOverride?: boolean,
   fallbackName = "",
@@ -1880,7 +2210,7 @@ async function handleSquareMessage(
   const rich = contentType === 17 ? parseRichMessage(raw) : undefined;
   const from = midString(envelope?.from) || midString(raw?.from) || midString(message?.from);
   const to = midString(envelope?.to) || midString(raw?.to) || midString(message?.to);
-  const selfMid = midString(next.base.profile?.mid);
+  const selfMid = midString(LineJsAdapter.profileMid(next));
   const isMine = isMineOverride ?? Boolean(selfMid && from === selfMid);
   const sender = isMine
     ? null
@@ -1897,16 +2227,18 @@ async function handleSquareMessage(
     senderId: sender?.id ?? from,
     senderName: sender?.name ?? fallbackName,
     senderAvatarUrl: sender?.avatarUrl ?? "",
-    text: contentType === 17 ? (rich?.altText || "Rich message") : displayMessageText(textValue, contentType),
+    text: contentType === 17 ? (rich?.altText || "Rich message") : displayMessageText(textValue, contentType, raw),
     isMine,
     createdTime: finiteMessageTime(raw?.createdTime),
     contentType,
+    readCount: Math.max(0, Number(raw?.readCount ?? 0)),
     filename: mediaFilename(raw),
     stickerUrl: contentType === 7 ? stickerUrlFromRaw(raw) : undefined,
     flex: contentType === 22 ? parseFlexMessage(raw) : undefined,
     reactions: squareReactionSummaries(reactionStatus ?? envelope?.messageReactionStatus ?? raw?.messageReactionStatus, selfMid),
     replyToId: relatedMessageId(raw),
     rich,
+    call: contentType === 6 ? parseCallHistory(raw) : undefined,
     raw,
   };
   if (!to) return;
@@ -1926,8 +2258,40 @@ async function handleSquareMessage(
   });
 }
 
-async function handleTalkOperation(next: Client, operation: any): Promise<void> {
-  const type = operationTypeName(operation?.type, TALK_OPERATION_NAMES);
+async function handleTalkOperation(next: LineClient, operation: any): Promise<void> {
+  const type = canonicalTalkOperationType(operation?.type, LINEJS_VERSION);
+  if (isLineServiceChatOperation(type)) {
+    const revision = String(operation?.revision ?? "").trim();
+    const createdTime = Number(operation?.createdTime ?? Date.now());
+    const param1 = String(operation?.param1 ?? "").trim();
+    const param2 = String(operation?.param2 ?? "").trim();
+    const param3 = String(operation?.param3 ?? "").trim();
+    const eventKey = revision || `${type}:${createdTime}:${param1}:${param2}:${param3}`;
+    database.recordProtocolEvent(ACCOUNT_ID, {
+      eventKey,
+      source: "talk-system",
+      opType: type,
+      revision: revision || undefined,
+      createdTime: Number.isFinite(createdTime) ? createdTime : Date.now(),
+      param1: param1 || undefined,
+      param2: param2 || undefined,
+      param3: param3 || undefined,
+      raw: normalize(operation),
+    });
+    emit({
+      type: "event.system_notification.operation",
+      source: "talk",
+      operationType: type,
+      revision: revision || undefined,
+      createdTime,
+      param1: param1 || undefined,
+      param2: param2 || undefined,
+      param3: param3 || undefined,
+    });
+    void trackLineSystemAccount(next, `op:${type}`).catch(() => undefined);
+  } else if (type === "DUMMY") {
+    void trackLineSystemAccount(next, `op:${type}`).catch(() => undefined);
+  }
   if (type === "NOTIFIED_READ_MESSAGE") {
     // LINE sends this as param1=chat MID, param2=reader MID and
     // param3=the highest message id they have read. It is a peer event, not
@@ -1935,7 +2299,7 @@ async function handleTalkOperation(next: Client, operation: any): Promise<void> 
     const chatId = String(operation?.param1 ?? "").trim();
     const readerMid = String(operation?.param2 ?? "").trim();
     const messageId = String(operation?.param3 ?? "").trim();
-    const selfMid = midString(next.base.profile?.mid);
+    const selfMid = midString(LineJsAdapter.profileMid(next));
     if (chatId && messageId && readerMid && readerMid !== selfMid) {
       emit({ type: "event.message.read", source: "talk", chatId, messageId, readerMid });
     }
@@ -1972,17 +2336,23 @@ async function handleTalkOperation(next: Client, operation: any): Promise<void> 
   if (!encrypted || typeof encrypted !== "object") return;
   let raw = encrypted;
   try {
-    raw = await next.base.e2ee.decryptE2EEMessage(encrypted);
+    raw = await LineJsAdapter.decryptE2EEMessage(next, encrypted);
   } catch (error) {
     // A single message with a missing/rotated E2EE key must not terminate the
-    // event consumer. Preserve the envelope as a readable placeholder and
-    // continue consuming later operations.
+    // event consumer. Keep the envelope for later recovery, but surface an
+    // explicit placeholder instead of silently turning it into an empty chat.
+    const fallbackText = "ข้อความเข้ารหัส — ไม่สามารถถอดรหัสได้";
+    raw = { ...encrypted, text: fallbackText, lineyE2eeDecodeError: true };
     emit({ type: "event.message.decode_error", source: "talk", error: errorInfo(error).message });
+    const eventKind = type === "EDIT_MESSAGE" || type === "NOTIFIED_EDIT_MESSAGE" ? "edit" : "message";
+    await handleTalkMessage(next, { raw, text: fallbackText }, raw, eventKind);
+    return;
   }
-  await handleTalkMessage(next, new TalkMessage({ raw, client: next }), raw);
+  const eventKind = type === "EDIT_MESSAGE" || type === "NOTIFIED_EDIT_MESSAGE" ? "edit" : "message";
+  await handleTalkMessage(next, createTalkMessage(next, raw), raw, eventKind);
 }
 
-async function handleSquareOperation(next: Client, operation: any): Promise<void> {
+async function handleSquareOperation(next: LineClient, operation: any): Promise<void> {
   const type = operationTypeName(operation?.type, SQUARE_OPERATION_NAMES);
   const payload = operation?.payload ?? {};
   if (type === "NOTIFIED_DESTROY_MESSAGE") {
@@ -2012,19 +2382,20 @@ async function handleSquareOperation(next: Client, operation: any): Promise<void
   const fallbackName = String(envelope?.senderDisplayName ?? payload?.senderDisplayName ?? "").trim();
   await handleSquareMessage(
     next,
-    new SquareMessage({ raw: squareRaw, client: next }),
+    createSquareMessage(next, squareRaw),
     isMine,
     fallbackName,
     envelope?.messageReactionStatus,
   );
 }
 
-async function consumeTalkEvents(next: Client, signal: AbortSignal, push: any): Promise<void> {
+async function consumeTalkEvents(next: LineClient, signal: AbortSignal, push: any): Promise<void> {
   while (!signal.aborted && client === next) {
-    const stream = push.opStream.stream;
+    const stream = LineJsAdapter.pushStream(push, "op");
     try {
       for await (const operation of stream as AsyncIterable<any>) {
         if (signal.aborted || client !== next) return;
+        lastTalkPushEventAt = Date.now();
         void handleTalkOperation(next, operation).catch((error) => {
           if (!signal.aborted) emit({ type: "event.message.error", source: "talk", error: errorInfo(error).message });
         });
@@ -2033,18 +2404,19 @@ async function consumeTalkEvents(next: Client, signal: AbortSignal, push: any): 
       if (!signal.aborted) emit({ type: "event.transport.error", transport: "talk", error: errorInfo(error).message });
     }
     if (!signal.aborted && client === next) {
-      push.opStream.renew();
+      LineJsAdapter.renewPushStream(push, "op");
       await waitForSignal(50, signal);
     }
   }
 }
 
-async function consumeSquareEvents(next: Client, signal: AbortSignal, push: any): Promise<void> {
+async function consumeSquareEvents(next: LineClient, signal: AbortSignal, push: any): Promise<void> {
   while (!signal.aborted && client === next) {
-    const stream = push.sqStream.stream;
+    const stream = LineJsAdapter.pushStream(push, "sq");
     try {
       for await (const operation of stream as AsyncIterable<any>) {
         if (signal.aborted || client !== next) return;
+        lastSquarePushEventAt = Date.now();
         void handleSquareOperation(next, operation).catch((error) => {
           if (!signal.aborted) emit({ type: "event.message.error", source: "openchat", error: errorInfo(error).message });
         });
@@ -2053,7 +2425,7 @@ async function consumeSquareEvents(next: Client, signal: AbortSignal, push: any)
       if (!signal.aborted) emit({ type: "event.transport.error", transport: "openchat", error: errorInfo(error).message });
     }
     if (!signal.aborted && client === next) {
-      push.sqStream.renew();
+      LineJsAdapter.renewPushStream(push, "sq");
       await waitForSignal(50, signal);
     }
   }
@@ -2063,13 +2435,21 @@ function isPushHealthy(): boolean {
   return pushHealthy && pushConnectedSince > 0 && Date.now() - pushConnectedSince >= 2_000;
 }
 
-async function consumeTalkPolling(next: Client, signal: AbortSignal): Promise<void> {
+function isTalkPushFresh(): boolean {
+  return isPushHealthy() && lastTalkPushEventAt > 0 && Date.now() - lastTalkPushEventAt < 15_000;
+}
+
+function isSquarePushFresh(): boolean {
+  return isPushHealthy() && lastSquarePushEventAt > 0 && Date.now() - lastSquarePushEventAt < 15_000;
+}
+
+async function consumeTalkPolling(next: LineClient, signal: AbortSignal): Promise<void> {
   while (!signal.aborted && client === next) {
-    if (isPushHealthy()) {
+    if (isTalkPushFresh()) {
       await waitForSignal(5_000, signal);
       continue;
     }
-    const polling = next.base.createPolling() as any;
+    const polling = LineJsAdapter.createPolling(next) as any;
     try {
       for await (const operation of polling._listenTalkEvents({
         signal,
@@ -2079,7 +2459,7 @@ async function consumeTalkPolling(next: Client, signal: AbortSignal): Promise<vo
         },
       }) as AsyncIterable<any>) {
         if (signal.aborted || client !== next) return;
-        if (isPushHealthy()) break;
+        if (isTalkPushFresh()) break;
         void handleTalkOperation(next, operation).catch((error) => {
           if (!signal.aborted) emit({ type: "event.message.error", source: "talk-poll", error: errorInfo(error).message });
         });
@@ -2087,17 +2467,17 @@ async function consumeTalkPolling(next: Client, signal: AbortSignal): Promise<vo
     } catch (error) {
       if (!signal.aborted) emit({ type: "event.transport.error", transport: "talk-poll", error: errorInfo(error).message });
     }
-    if (!signal.aborted && client === next && !isPushHealthy()) await waitForSignal(1_000, signal);
+    if (!signal.aborted && client === next && !isTalkPushFresh()) await waitForSignal(1_000, signal);
   }
 }
 
-async function consumeSquarePolling(next: Client, signal: AbortSignal): Promise<void> {
+async function consumeSquarePolling(next: LineClient, signal: AbortSignal): Promise<void> {
   while (!signal.aborted && client === next) {
-    if (isPushHealthy()) {
+    if (isSquarePushFresh()) {
       await waitForSignal(5_000, signal);
       continue;
     }
-    const polling = next.base.createPolling() as any;
+    const polling = LineJsAdapter.createPolling(next) as any;
     try {
       for await (const operation of polling._listenSquareEvents({
         signal,
@@ -2107,7 +2487,7 @@ async function consumeSquarePolling(next: Client, signal: AbortSignal): Promise<
         },
       }) as AsyncIterable<any>) {
         if (signal.aborted || client !== next) return;
-        if (isPushHealthy()) break;
+        if (isSquarePushFresh()) break;
         void handleSquareOperation(next, operation).catch((error) => {
           if (!signal.aborted) emit({ type: "event.message.error", source: "openchat-poll", error: errorInfo(error).message });
         });
@@ -2115,28 +2495,30 @@ async function consumeSquarePolling(next: Client, signal: AbortSignal): Promise<
     } catch (error) {
       if (!signal.aborted) emit({ type: "event.transport.error", transport: "openchat-poll", error: errorInfo(error).message });
     }
-    if (!signal.aborted && client === next && !isPushHealthy()) await waitForSignal(1_000, signal);
+    if (!signal.aborted && client === next && !isSquarePushFresh()) await waitForSignal(1_000, signal);
   }
 }
 
-async function supervisePush(next: Client, signal: AbortSignal, push: any): Promise<void> {
+async function supervisePush(next: LineClient, signal: AbortSignal, push: any): Promise<void> {
   let backoff = 1_000;
   const stop = () => {
-    void closePushConnections(push);
-    try { push.opStream.close(); } catch { /* best effort */ }
-    try { push.sqStream.close(); } catch { /* best effort */ }
+    void LineJsAdapter.closePushConnections(push);
+    LineJsAdapter.closePushStream(push, "op");
+    LineJsAdapter.closePushStream(push, "sq");
   };
   signal.addEventListener("abort", stop, { once: true });
   try {
-    while (!signal.aborted && client === next && next.authToken) {
+    while (!signal.aborted && client === next && LineJsAdapter.authToken(next)) {
       const cycleStartedAt = Date.now();
       try {
-        push.islisten = true;
-        await push.initializeConn(1, [3, 8]);
+        LineJsAdapter.setPushListening(push, true);
+        await LineJsAdapter.initializePushConnection(push, 1, [3, 8]);
         pushHealthy = true;
         pushConnectedSince = Date.now();
+        lastTalkPushEventAt = pushConnectedSince;
+        lastSquarePushEventAt = pushConnectedSince;
         emit({ type: "event.transport", transport: "line", state: "connected" });
-        await push.InitAndRead([3, 8]);
+        await LineJsAdapter.readPush(push, [3, 8]);
         // A connection that drops immediately is not healthy. Increase the
         // delay for those loops so a broken PUSH endpoint cannot spin and
         // starve the REST fallback; reset only after a stable connection.
@@ -2153,7 +2535,7 @@ async function supervisePush(next: Client, signal: AbortSignal, push: any): Prom
         if (!signal.aborted) {
           emit({ type: "event.transport", transport: "line", state: "reconnecting", error: errorInfo(error).message });
         }
-        await closePushConnections(push);
+        await LineJsAdapter.closePushConnections(push);
         backoff = Math.min(backoff * 2, 30_000);
       }
       if (signal.aborted || client !== next) break;
@@ -2163,18 +2545,18 @@ async function supervisePush(next: Client, signal: AbortSignal, push: any): Prom
     pushHealthy = false;
     pushConnectedSince = 0;
     signal.removeEventListener("abort", stop);
-    push.islisten = false;
-    await closePushConnections(push);
+    LineJsAdapter.setPushListening(push, false);
+    await LineJsAdapter.closePushConnections(push);
   }
 }
 
-function attachEvents(next: Client) {
+function attachEvents(next: LineClient) {
   listenerAbort?.abort();
   listenerAbort = new AbortController();
   const signal = listenerAbort.signal;
-  const push = next.base.push as any;
+  const push = LineJsAdapter.push(next) as any;
 
-  next.base.on("update:authtoken", () => {
+  LineJsAdapter.on(next, "update:authtoken", () => {
     void persistCredential(next).catch(() => undefined);
   });
 
@@ -2182,10 +2564,10 @@ function attachEvents(next: Client) {
   // decryption/handler error and silently stops delivering every later event.
   // Consuming the raw streams lets us isolate each operation and supervise
   // the HTTP/2 push connection independently.
-  push.opStream.renew();
-  push.sqStream.renew();
+  LineJsAdapter.renewPushStreams(push);
   void consumeTalkEvents(next, signal, push);
   void consumeSquareEvents(next, signal, push);
+  void consumeSystemAccountTracking(next, signal);
   if (process.env.LINEY_DISABLE_EVENT_POLLING !== "1") {
     void consumeTalkPolling(next, signal);
     void consumeSquarePolling(next, signal);
@@ -2193,11 +2575,12 @@ function attachEvents(next: Client) {
   void supervisePush(next, signal, push);
 }
 
-async function finishAuthentication(next: Client, restored: boolean) {
+async function finishAuthentication(next: LineClient, restored: boolean) {
   // Validate the session against LINE before declaring it ready.  Full sync is
   // deliberately *not* part of this critical path: waiting for hundreds of
   // rooms here held the entire Tauri login screen in "starting" state.
   const profile: any = await next.getMyProfile();
+  const account = await activateAccount(profile);
   client = next;
   currentProfile = normalize(profile);
   database.upsertAccount(ACCOUNT_ID, {
@@ -2211,15 +2594,14 @@ async function finishAuthentication(next: Client, restored: boolean) {
     type: "auth.ready",
     restored,
     profile: normalize(profile),
-    authTokenPresent: Boolean(next.authToken),
+    authTokenPresent: Boolean(LineJsAdapter.authToken(next)),
     storage: credentialPersisted ? "wallet" : "session-only",
+    accountChanged: account.changed && !account.migrated,
   });
   // Full sync is intentionally opt-in on login. It can touch many rooms and
   // media previews; running it at every desktop start made the native UI hot.
   if (process.env.LINEY_FULL_SYNC_ON_LOGIN === "1" && process.env.LINEY_LIGHT_START !== "1") {
-    void startSync().catch((error) => {
-      emit({ type: "sync.error", error: errorInfo(error).message });
-    });
+    void startSync().catch(() => undefined);
   }
   void resumePendingOutbox();
 }
@@ -2230,6 +2612,7 @@ async function startQrLogin(id: string) {
     return;
   }
   loginInFlight = true;
+  const generation = ++authGeneration;
   try {
     listenerAbort?.abort();
     client = null;
@@ -2247,6 +2630,7 @@ async function startQrLogin(id: string) {
         storage: store,
       },
     );
+    if (generation !== authGeneration) return;
     await finishAuthentication(next, false);
     emit({ id, ok: true, result: { authenticated: true } });
   } catch (error) {
@@ -2274,6 +2658,7 @@ async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: un
   }
 
   loginInFlight = true;
+  const generation = ++authGeneration;
   try {
     listenerAbort?.abort();
     client = null;
@@ -2290,6 +2675,7 @@ async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: un
         storage: store,
       },
     );
+    if (generation !== authGeneration) return;
     await finishAuthentication(next, false);
     emit({ id, ok: true, result: { authenticated: true } });
   } catch (error) {
@@ -2303,11 +2689,17 @@ async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: un
 }
 
 async function restoreToken(id: string, token: unknown) {
+  if (client) {
+    emit({ id, ok: true, result: { authenticated: true, restored: true } });
+    return;
+  }
+  const generation = ++authGeneration;
   try {
     const next = await loginWithAuthToken(token as any, {
       device: "DESKTOPWIN",
       storage: store,
     });
+    if (generation !== authGeneration) return;
     await finishAuthentication(next, true);
     emit({ id, ok: true, result: { authenticated: true } });
   } catch (error) {
@@ -2318,12 +2710,14 @@ async function restoreToken(id: string, token: unknown) {
 async function autoRestore() {
   const credential = readCredential();
   if (!credential) return;
+  const generation = authGeneration;
   emit({ type: "auth.restoring" });
   try {
     const next = await loginWithAuthToken(credential as any, {
       device: "DESKTOPWIN",
       storage: store,
     });
+    if (generation !== authGeneration) return;
     await finishAuthentication(next, true);
   } catch (error) {
     client = null;
@@ -2409,11 +2803,11 @@ async function sendRemoteMessage(record: OutboxRecord): Promise<unknown> {
     ...(record.relatedMessageId ? { relatedMessageId: record.relatedMessageId } : {}),
   };
   if (record.kind === "openchat") {
-    const chat: any = await client.getSquareChat(record.chatId);
+    const chat: any = await LineJsAdapter.getSquareChat(client, record.chatId);
     return chat.sendMessage(options);
   }
   try {
-    return await client.base.talk.sendMessage({
+    return await LineJsAdapter.sendTalkMessage(client, {
       to: record.chatId,
       ...options,
       // LINE stickers carry their payload in contentMetadata.  Encrypting an
@@ -2423,7 +2817,7 @@ async function sendRemoteMessage(record: OutboxRecord): Promise<unknown> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (!message.includes("E2EE_RETRY_PLAIN")) throw error;
-    return client.base.talk.sendMessage({
+    return LineJsAdapter.sendTalkMessage(client, {
       to: record.chatId,
       ...options,
       e2ee: false,
@@ -2443,7 +2837,7 @@ async function sendRemoteMedia(record: OutboxRecord, jobId: string, signal: Abor
 
   if (record.kind === "openchat") {
     mediaWorker.assertActive(signal);
-    const uploaded = await client.base.obs.uploadObjTalk(
+    const uploaded = await LineJsAdapter.uploadObjTalk(client,
       record.chatId,
       objectType,
       blob,
@@ -2456,37 +2850,21 @@ async function sendRemoteMedia(record: OutboxRecord, jobId: string, signal: Abor
     return { objId: uploaded.objId, objHash: uploaded.objHash };
   }
 
-  // Reserve the media message at the raw Talk layer. The high-level
-  // TalkMessage wrapper assumes E2EE metadata exists and can throw on plain
-  // media rooms even after LINE has accepted the reservation.
+  // Talk media follows LINEJS's E2EE OBS path. Liney's adapter extends the
+  // upstream helper with relatedMessageId so replying with media does not
+  // silently downgrade the attachment to a plaintext OBS object.
   mediaWorker.assertActive(signal);
-  const contentNames: Record<MediaObjectType, string> = {
-    image: "IMAGE",
-    video: "VIDEO",
-    audio: "AUDIO",
-    file: "FILE",
-  };
-  const reserved: any = await client.base.talk.sendMessage({
+  const sent = await LineJsAdapter.sendTalkMediaE2EE(client, {
     to: record.chatId,
-    contentType: contentNames[objectType],
-    text: "",
-    e2ee: false,
-    ...(record.relatedMessageId ? { relatedMessageId: record.relatedMessageId } : {}),
-  });
-  const messageId = String(reserved?.id ?? "");
-  if (!messageId) throw new Error("LINE did not return a media message id");
-  mediaWorker.assertActive(signal);
-  const uploaded = await client.base.obs.uploadObjTalk(
-    record.chatId,
-    objectType,
-    blob,
-    messageId,
+    oType: objectType,
+    data: blob,
     filename,
     durationMs,
-  );
+    ...(record.relatedMessageId ? { relatedMessageId: record.relatedMessageId } : {}),
+  });
   mediaWorker.assertActive(signal);
   emit({ type: "media.progress", jobId, phase: "uploading", done: bytes.byteLength, total: bytes.byteLength });
-  return { messageId, upload: { objId: uploaded.objId, objHash: uploaded.objHash } };
+  return sent;
 }
 
 async function sendOutbox(record: OutboxRecord): Promise<unknown> {
@@ -2712,7 +3090,7 @@ async function reactToMessage(
   const numericId = requireMessageId(messageId, kind);
   let result: any;
   if (kind === "openchat") {
-    result = await client.base.square.reactToMessage({
+    result = await LineJsAdapter.reactToSquareMessage(client, {
       request: {
         reqSeq: 0,
         reactionType: reaction as any,
@@ -2721,14 +3099,14 @@ async function reactToMessage(
       },
     });
   } else if (reaction === REACTION_CODES.UNDO) {
-    result = await client.base.talk.cancelReaction({
+    result = await LineJsAdapter.cancelTalkReaction(client, {
       cancelReactionRequest: {
-        reqSeq: await client.base.getReqseq(),
+        reqSeq: await LineJsAdapter.getReqseq(client),
         messageId: BigInt(numericId),
       },
     });
   } else {
-    result = await client.base.talk.react({
+    result = await LineJsAdapter.reactToTalkMessage(client, {
       id: BigInt(numericId),
       reaction: reaction as any,
     });
@@ -2739,7 +3117,7 @@ async function reactToMessage(
     && result?.status
     && typeof result.status === "object";
   const authoritative = hasAuthoritativeStatus
-    ? squareReactionSummaries(result.status, midString(client.base.profile?.mid))
+    ? squareReactionSummaries(result.status, midString(LineJsAdapter.profileMid(client)))
     : [];
   const reactions = hasAuthoritativeStatus
     ? authoritative
@@ -2762,8 +3140,8 @@ async function unsendMessage(chatId: string, kind: "dm" | "group" | "openchat", 
   if (!stored) throw new Error("message is not available in local history");
   if (!stored.isMine) throw new Error("cannot unsend another user's message");
   const result = kind === "openchat"
-    ? await client.base.square.unsendMessage({ messageId: numericId, squareChatMid: chatId })
-    : await client.base.talk.unsendMessage({ messageId: numericId });
+    ? await LineJsAdapter.unsendSquareMessage(client, { messageId: numericId, squareChatMid: chatId })
+    : await LineJsAdapter.unsendTalkMessage(client, { messageId: numericId });
   database.markMessageUnsent(ACCOUNT_ID, chatId, numericId);
   await removeMessageArtifacts(numericId, kind === "openchat");
   emit({ type: "event.message.unsent", source: kind === "openchat" ? "openchat" : "talk", chatId, messageId: numericId });
@@ -2803,6 +3181,69 @@ async function assertPublicAssetUrl(url: URL): Promise<void> {
   if (!records.length || records.some((record) => isPrivateAssetAddress(record.address))) throw new Error("asset host resolves to a private address");
 }
 
+async function assertPublicLinkUrl(url: URL): Promise<void> {
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) {
+    throw new Error("link URL must be public HTTP(S)");
+  }
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (!host || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) {
+    throw new Error("link host is not public");
+  }
+  if (isIP(host)) {
+    if (isPrivateAssetAddress(host)) throw new Error("link host is not public");
+    return;
+  }
+  const records = await lookup(host, { all: true, verbatim: true });
+  if (!records.length || records.some((record) => isPrivateAssetAddress(record.address))) {
+    throw new Error("link host resolves to a private address");
+  }
+}
+
+async function readResponseTextLimited(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) throw new Error("link page exceeds 3 MB");
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, total).toString("utf8");
+}
+
+async function readResponseBytesLimited(response: Response, maxBytes: number): Promise<Buffer> {
+  if (!response.body) {
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length > maxBytes) throw new Error("asset exceeds 8 MB");
+    return bytes;
+  }
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) throw new Error("asset exceeds 8 MB");
+      chunks.push(Buffer.from(value));
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, total);
+}
+
 async function fetchUiAssetDataUrl(rawUrl: string): Promise<{ dataUrl: string; mime: string; size: number }> {
   let url = new URL(rawUrl);
   let response: Response | undefined;
@@ -2826,9 +3267,11 @@ async function fetchUiAssetDataUrl(rawUrl: string): Promise<{ dataUrl: string; m
   if (!mime.startsWith("image/")) throw new Error("asset is not an image");
   const declared = Number(response.headers.get("content-length") ?? 0);
   if (Number.isFinite(declared) && declared > 8 * 1024 * 1024) throw new Error("asset exceeds 8 MB");
-  const bytes = Buffer.from(await response.arrayBuffer());
-  if (!bytes.length || bytes.length > 8 * 1024 * 1024) throw new Error("asset exceeds 8 MB");
-  return { dataUrl: `data:${mime};base64,${bytes.toString("base64")}`, mime, size: bytes.length };
+  const bytes = await readResponseBytesLimited(response, 8 * 1024 * 1024);
+  if (!bytes.length) throw new Error("asset exceeds 8 MB");
+  const normalizedMime = detectImageMime(bytes, mime);
+  if (!normalizedMime) throw new Error("asset is not an image");
+  return { dataUrl: `data:${normalizedMime};base64,${bytes.toString("base64")}`, mime: normalizedMime, size: bytes.length };
 }
 
 function htmlMeta(html: string, prop: string): string | undefined {
@@ -2857,6 +3300,9 @@ async function fetchLinkPreview(rawUrl: string): Promise<Record<string, unknown>
   if (!["http:", "https:"].includes(url.protocol)) throw new Error("link must be http(s)");
   let response: Response | undefined;
   for (let redirect = 0; redirect <= 5; redirect++) {
+    // Validate every hop. Checking only the initial URL lets an attacker use
+    // a public redirector to reach localhost or a private service.
+    await assertPublicLinkUrl(url);
     response = await fetch(url, {
       redirect: "manual",
       signal: AbortSignal.timeout(12_000),
@@ -2873,7 +3319,7 @@ async function fetchLinkPreview(rawUrl: string): Promise<Record<string, unknown>
   if (!response?.ok) throw new Error(`link fetch failed (${response?.status ?? "network"})`);
   const declared = Number(response.headers.get("content-length") ?? 0);
   if (Number.isFinite(declared) && declared > 3 * 1024 * 1024) throw new Error("link page exceeds 3 MB");
-  const text = (await response.text()).slice(0, 3 * 1024 * 1024);
+  const text = await readResponseTextLimited(response, 3 * 1024 * 1024);
 
   const title = htmlMeta(text, "og:title") ?? /<title[^>]*>([^<]*)<\/title>/i.exec(text)?.[1]?.trim();
   const description =
@@ -2892,6 +3338,105 @@ async function fetchLinkPreview(rawUrl: string): Promise<Record<string, unknown>
   };
 }
 
+function isCacheReadMethod(method: string): boolean {
+  return method === "chat.list"
+    || method === "chats.list"
+    || method === "friends.list"
+    || method === "openchat.list"
+    || method === "call.history"
+    || method === "message.list"
+    || method === "messages.list";
+}
+
+async function serveCachedRequest(id: string, method: string, request: any): Promise<boolean> {
+  if (method === "call.history") {
+    const result = listCallHistory(Math.max(1, Math.min(Number(request?.params?.limit ?? 200), 500)));
+    if (!result.length) return false;
+    emit({ id, ok: true, result });
+    return true;
+  }
+
+  if (method === "chat.list" || method === "chats.list") {
+    if (preSyncedChats) {
+      const synced = preSyncedChats;
+      preSyncedChats = null;
+      emit({ id, ok: true, result: synced });
+      return true;
+    }
+    const cached = database.listConversationChats(ACCOUNT_ID);
+    if (!cached.length) return false;
+    emit({ id, ok: true, result: cached });
+    if (client) refreshChatListInBackground("talk", loadChatsList);
+    return true;
+  }
+
+  if (method === "friends.list") {
+    if (preSyncedFriends) {
+      const synced = preSyncedFriends;
+      preSyncedFriends = null;
+      emit({ id, ok: true, result: synced });
+      return true;
+    }
+    const cached = database.listChats(ACCOUNT_ID, "dm");
+    if (!cached.length) return false;
+    emit({ id, ok: true, result: cached });
+    if (client) refreshChatListInBackground("friends", loadFriendsList);
+    return true;
+  }
+
+  if (method === "openchat.list") {
+    if (preSyncedOpenChats) {
+      const synced = preSyncedOpenChats;
+      preSyncedOpenChats = null;
+      emit({ id, ok: true, result: synced });
+      return true;
+    }
+    const cached = database.listChats(ACCOUNT_ID, "openchat");
+    if (!cached.length) return false;
+    emit({ id, ok: true, result: cached });
+    if (client) refreshChatListInBackground("openchat", loadOpenChatList);
+    return true;
+  }
+
+  if (method !== "message.list" && method !== "messages.list") return false;
+  // A room can have newer metadata than the local SQLite message window when
+  // a push operation was missed. Explicit refresh must bypass cache so the
+  // authenticated handler can reconcile against LINE history.
+  if (request?.params?.refresh === true) return false;
+  const chatId = String(request?.params?.chatId ?? "").trim();
+  if (!chatId) return false;
+  const kind = String(request?.params?.kind ?? "talk");
+  const limit = Math.max(1, Math.min(Number(request?.params?.limit ?? 50), 100));
+  const openchat = kind === "openchat";
+  const cacheKey = `${openchat ? "openchat" : "talk"}:${chatId}`;
+  const transient = preSyncedMessages.get(cacheKey);
+  if (transient) {
+    preSyncedMessages.delete(cacheKey);
+    const visible = transient.filter((message: any) => !database.isMessageHidden(
+      ACCOUNT_ID,
+      chatId,
+      openchat ? "openchat" : chatKindFor(chatId, false),
+      String(message?.id ?? ""),
+    ));
+    const result = client
+      ? await recoverMissingStickerMetadata(chatId, openchat, visible.slice(-limit), limit)
+      : decorateStoredMessages(visible.slice(-limit));
+    emit({ id, ok: true, result });
+    return true;
+  }
+
+  const stored = database.listMessages(ACCOUNT_ID, chatId, limit);
+  if (!stored.length) return false;
+  // Do not make the first usable cached response wait for a profile request.
+  // Authenticated refreshes can enrich the same rows on a later request/event.
+  const result = client
+    ? await recoverMissingStickerMetadata(chatId, openchat, await enrichStoredTalkSenders(stored), limit)
+    : decorateStoredMessages(stored);
+  emit({ id, ok: true, result });
+  if (client) refreshChatListInBackground(openchat ? "openchat" : "talk", openchat ? loadOpenChatList : loadChatsList);
+  return true;
+}
+
 async function handle(request: any) {
   const id = String(request?.id ?? crypto.randomUUID());
   const method = String(request?.method ?? "");
@@ -2906,12 +3451,41 @@ async function handle(request: any) {
     return;
   }
 
+  // Logout must be able to cancel an in-progress session restore instead of
+  // waiting behind the restore promise it is meant to invalidate.
+  if (method === "auth.logout") {
+    await clearLocalSession();
+    emit({ type: "auth.logged_out" });
+    emit({ id, ok: true, result: { authenticated: false } });
+    return;
+  }
+
+  if (isCacheReadMethod(method) && await serveCachedRequest(id, method, request)) return;
+
+  // Public image proxying does not require a LINE session. Handle it before
+  // auth restore so a failed WebView image does not wait on startup network
+  // work before the fallback can be resolved.
+  if (method === "asset.preview") {
+    const url = String(request?.params?.url ?? "").trim();
+    if (!url) {
+      replyError(id, new Error("url is required"));
+      return;
+    }
+    try {
+      emit({ id, ok: true, result: await fetchUiAssetDataUrl(url) });
+    } catch (error) {
+      replyError(id, error);
+    }
+    return;
+  }
+
   await restorePromise;
 
   if (method === "capabilities") {
     const callStatus = callManager.status;
-    const features = ["talk", "openchat", "media", "e2ee", "session-restore", "history-sqlite", "outbox"];
+    const features = ["talk", "openchat", "media", "asset-proxy", "e2ee", "session-restore", "history-sqlite", "outbox", "talk-read-range", "e2ee-media"];
     if (callStatus.enabled) features.push("call-audio-1to1");
+    if (callStatus.incomingAnswer) features.push("call-audio-incoming");
     emit({
       id,
       ok: true,
@@ -2961,13 +3535,6 @@ async function handle(request: any) {
     return;
   }
 
-  if (method === "auth.logout") {
-    await clearLocalSession();
-    emit({ type: "auth.logged_out" });
-    emit({ id, ok: true, result: { authenticated: false } });
-    return;
-  }
-
   if (method === "call.status") {
     emit({ id, ok: true, result: callManager.status });
     return;
@@ -3003,20 +3570,6 @@ async function handle(request: any) {
     return;
   }
 
-  if (method === "asset.preview") {
-    const url = String(request?.params?.url ?? "").trim();
-    if (!url) {
-      replyError(id, new Error("url is required"));
-      return;
-    }
-    try {
-      emit({ id, ok: true, result: await fetchUiAssetDataUrl(url) });
-    } catch (error) {
-      replyError(id, error);
-    }
-    return;
-  }
-
   if (method === "sticker.cache.clear") {
     ownedStickerCache = null;
     if (!stickerCatalogCache.clear()) {
@@ -3028,13 +3581,21 @@ async function handle(request: any) {
   }
 
   if (!client) {
+    if (isCacheReadMethod(method)) {
+      if ((method === "message.list" || method === "messages.list") && !String(request?.params?.chatId ?? "").trim()) {
+        replyError(id, new Error("chatId is required"));
+      } else {
+        emit({ id, ok: true, result: [] });
+      }
+      return;
+    }
     replyError(id, new Error("not authenticated"));
     return;
   }
 
   try {
     if (method === "profile.get") {
-      const profile = currentProfile ?? await client.getMyProfile();
+      const profile = currentProfile ?? await LineJsAdapter.getMyProfile(client);
       currentProfile = normalize(profile);
       database.upsertAccount(ACCOUNT_ID, {
         mid: String((profile as any)?.mid ?? ""),
@@ -3046,15 +3607,15 @@ async function handle(request: any) {
 
     if (method === "chat.list" || method === "chats.list") {
       if (preSyncedChats) {
-        emit({ id, ok: true, result: preSyncedChats });
+        const synced = preSyncedChats;
+        preSyncedChats = null;
+        emit({ id, ok: true, result: synced });
         return;
       }
       const cached = database.listConversationChats(ACCOUNT_ID);
       if (cached.length) {
         emit({ id, ok: true, result: cached });
-        void loadChatsList().then((fresh) => {
-          emit({ type: "event.chats.updated", kind: "talk", chats: fresh });
-        }).catch(() => undefined);
+        refreshChatListInBackground("talk", loadChatsList);
         return;
       }
       try {
@@ -3069,16 +3630,16 @@ async function handle(request: any) {
 
     if (method === "friends.list") {
       if (preSyncedFriends) {
-        emit({ id, ok: true, result: preSyncedFriends });
+        const synced = preSyncedFriends;
+        preSyncedFriends = null;
+        emit({ id, ok: true, result: synced });
         return;
       }
       const cached = database.listChats(ACCOUNT_ID, "dm");
       if (cached.length) {
         // Cache may contain non-friend dm as well; better to show cache than fail offline
         emit({ id, ok: true, result: cached });
-        void loadFriendsList().then((fresh) => {
-          emit({ type: "event.chats.updated", kind: "friends", chats: fresh });
-        }).catch(() => undefined);
+        refreshChatListInBackground("friends", loadFriendsList);
         return;
       }
       try {
@@ -3093,15 +3654,15 @@ async function handle(request: any) {
 
     if (method === "openchat.list") {
       if (preSyncedOpenChats) {
-        emit({ id, ok: true, result: preSyncedOpenChats });
+        const synced = preSyncedOpenChats;
+        preSyncedOpenChats = null;
+        emit({ id, ok: true, result: synced });
         return;
       }
       const cached = database.listChats(ACCOUNT_ID, "openchat");
       if (cached.length) {
         emit({ id, ok: true, result: cached });
-        void loadOpenChatList().then((fresh) => {
-          emit({ type: "event.chats.updated", kind: "openchat", chats: fresh });
-        }).catch(() => undefined);
+        refreshChatListInBackground("openchat", loadOpenChatList);
         return;
       }
       try {
@@ -3111,6 +3672,106 @@ async function handle(request: any) {
         if (cached.length) emit({ id, ok: true, result: cached });
         else throw error;
       }
+      return;
+    }
+
+    if (method === "friend.add_by_id") {
+      const userId = String(request?.params?.userId ?? "").trim();
+      if (!userId) throw new Error("LINE ID is required");
+      if (userId.length > 100) throw new Error("LINE ID is too long");
+
+      const contact: any = await LineJsAdapter.findContactBySearchIdOrTicketV3(client, userId);
+      const mid = String(contact?.mid ?? "").trim();
+      if (!mid.startsWith("u")) throw new Error("LINE ID นี้ไม่พบผู้ใช้ที่เพิ่มเป็นเพื่อนได้");
+      await LineJsAdapter.addFriendByUserId(client, userId);
+
+      // Refresh the durable friend cache so the new friend is immediately
+      // available to New Chat without restarting Liney.
+      const friends = await loadFriendsList(true);
+      const friend = friends.find((item: any) => String(item?.id ?? "") === mid) ?? {
+        id: mid,
+        name: String(contact?.displayNameOverridden || contact?.displayName || userId),
+        kind: "dm",
+        avatarUrl: talkProfileImageUrl(mid, contact?.pictureStatus || contact?.picturePath),
+        statusMessage: String(contact?.statusMessage ?? ""),
+      };
+      emit({ id, ok: true, result: friend });
+      emit({ type: "event.chats.updated", kind: "friends", chats: friends });
+      return;
+    }
+
+    if (method === "chat.create_group") {
+      const name = String(request?.params?.name ?? "").trim();
+      const selfMid = midString(LineJsAdapter.profileMid(client));
+      const targetUserMids = [...new Set(
+        (Array.isArray(request?.params?.memberMids) ? request.params.memberMids : [])
+          .map((value: unknown) => String(value ?? "").trim())
+          .filter((mid: string) => mid.startsWith("u") && mid !== selfMid),
+      )];
+      if (!name) throw new Error("group name is required");
+      if (name.length > 50) throw new Error("group name must be 50 characters or fewer");
+      if (!targetUserMids.length) throw new Error("select at least one friend");
+      if (targetUserMids.length > 100) throw new Error("too many members selected");
+
+      const created: any = await LineJsAdapter.createTalkChat(client, name, targetUserMids);
+      const createdMid = String(created?.chat?.chatMid ?? "").trim();
+      // Re-read Talk metadata after creation so the returned row has the same
+      // normalized shape as the rest of Liney and is persisted to SQLite.
+      const chats = await loadChatsList(true);
+      const chat = chats.find((item: any) => String(item?.id ?? "") === createdMid) ?? {
+        id: createdMid,
+        name: String(created?.chat?.chatName || name),
+        kind: "group",
+        avatarUrl: cdnUrl(created?.chat?.picturePath),
+        preview: "กลุ่มใหม่",
+        unread: 0,
+        lastMessageTime: Date.now(),
+      };
+      emit({ id, ok: true, result: chat });
+      emit({ type: "event.chats.updated", kind: "talk", chats });
+      return;
+    }
+
+    if (method === "openchat.create") {
+      const name = String(request?.params?.name ?? "").trim();
+      const description = String(request?.params?.description ?? "").trim();
+      const searchable = request?.params?.searchable !== false;
+      if (!name) throw new Error("OpenChat name is required");
+      if (name.length > 50) throw new Error("OpenChat name must be 50 characters or fewer");
+      if (description.length > 500) throw new Error("OpenChat description is too long");
+
+      const displayName = String(currentProfile?.displayName ?? "Liney").trim() || "Liney";
+      const created: any = await LineJsAdapter.createSquare(client, {
+        squareName: name,
+        displayName,
+        description: description || undefined,
+        searchable,
+      });
+      const squareChat = created?.squareChat ?? {};
+      const createdMid = String(squareChat?.squareChatMid ?? "").trim();
+      const openChats = await loadOpenChatList(true);
+      const chat = openChats.find((item: any) => String(item?.id ?? "") === createdMid) ?? {
+        id: createdMid,
+        name: String(squareChat?.name || name),
+        kind: "openchat",
+        avatarUrl: cdnUrl(squareChat?.chatImageObsHash),
+        preview: "OpenChat ใหม่",
+        unread: 0,
+        memberCount: 1,
+        lastMessageTime: 0,
+      };
+      if (!chat.id) throw new Error("LINE did not return the created OpenChat id");
+      emit({ id, ok: true, result: chat });
+      emit({ type: "event.chats.updated", kind: "openchat", chats: openChats });
+      return;
+    }
+
+    if (method === "call.history") {
+      emit({
+        id,
+        ok: true,
+        result: listCallHistory(Math.max(1, Math.min(Number(request?.params?.limit ?? 200), 500))),
+      });
       return;
     }
 
@@ -3133,14 +3794,32 @@ async function handle(request: any) {
       return;
     }
 
+    if (method === "sync.cancel") {
+      getSyncCoordinator().cancel();
+      invalidateChatListRefreshes();
+      preSyncedChats = null;
+      preSyncedFriends = null;
+      preSyncedOpenChats = null;
+      preSyncedMessages.clear();
+      emit({ id, ok: true, result: { cancelled: true } });
+      return;
+    }
+
     if (method === "message.list" || method === "messages.list") {
       const chatId = String(request?.params?.chatId ?? "");
       const kind = String(request?.params?.kind ?? "talk");
       const limit = Math.max(1, Math.min(Number(request?.params?.limit ?? 50), 100));
+      const refresh = request?.params?.refresh === true;
       if (!chatId) throw new Error("chatId is required");
 
       const cacheKey = `${kind === "openchat" ? "openchat" : "talk"}:${chatId}`;
-      const cached = preSyncedMessages.get(cacheKey);
+      const storedBeforeRefresh = refresh ? database.listMessages(ACCOUNT_ID, chatId, 100) : [];
+      const knownBeforeRefresh = new Set(storedBeforeRefresh.map((message) => String(message.id)));
+      const newestBeforeRefresh = storedBeforeRefresh.reduce(
+        (latest, message) => Math.max(latest, Number(message.createdTime ?? 0)),
+        0,
+      );
+      const cached = refresh ? undefined : preSyncedMessages.get(cacheKey);
       if (cached) {
         preSyncedMessages.delete(cacheKey);
         const visibleCached = cached.filter((message: any) => !database.isMessageHidden(
@@ -3159,7 +3838,9 @@ async function handle(request: any) {
         return;
       }
 
-      const stored = database.listMessages(ACCOUNT_ID, chatId, limit);
+      const stored = refresh
+        ? []
+        : await enrichStoredTalkSenders(database.listMessages(ACCOUNT_ID, chatId, limit));
       if (stored.length) {
         for (const message of stored) {
           if (message.raw && Number(message.contentType ?? 0) === 1) {
@@ -3176,6 +3857,11 @@ async function handle(request: any) {
         return;
       }
 
+      if (refresh && kind !== "openchat") {
+        // Force a fresh MessageBox cursor as well; otherwise an old cached
+        // cursor can cap getPreviousMessages at the same stale message.
+        talkMessageBoxCache.delete(chatId);
+      }
       const result = kind === "openchat"
         ? await fetchOpenChatMessagesNormalized(chatId, limit)
         : await fetchTalkMessagesNormalized(chatId, limit);
@@ -3186,7 +3872,46 @@ async function handle(request: any) {
         String(message?.id ?? ""),
       ));
       persistNormalizedMessages(chatId, kind === "openchat", visibleResult);
+      if (refresh && newestBeforeRefresh > 0) {
+        // A forced history reconciliation means the live stream missed at
+        // least part of this room. Apply only messages that were not already
+        // in SQLite and are newer than our previous tail so preview/time/unread
+        // survive restarts without double-counting repeated refreshes.
+        const recovered = visibleResult
+          .filter((message: any) => !knownBeforeRefresh.has(String(message?.id ?? ""))
+            && Number(message?.createdTime ?? 0) > newestBeforeRefresh)
+          .sort((left: any, right: any) => Number(left?.createdTime ?? 0) - Number(right?.createdTime ?? 0));
+        for (const message of recovered) {
+          database.recordMessageActivity(ACCOUNT_ID, {
+            chatId,
+            kind: kind === "openchat" ? "openchat" : chatKindFor(chatId, false),
+            name: message?.senderName,
+            avatarUrl: message?.senderAvatarUrl,
+            preview: compactPreview(message?.text, message?.contentType, message?.raw),
+            createdTime: finiteMessageTime(message?.createdTime),
+            isMine: Boolean(message?.isMine),
+            isNew: true,
+          });
+        }
+      }
       emit({ id, ok: true, result: visibleResult });
+      return;
+    }
+
+    if (method === "message.read_state") {
+      const chatId = String(request?.params?.chatId ?? "").trim();
+      const kind = String(request?.params?.kind ?? "talk");
+      const rawMessageIds = Array.isArray(request?.params?.messageIds) ? request.params.messageIds : [];
+      const messageIds = [...new Set(rawMessageIds.map((value: unknown) => String(value ?? "").trim()).filter(Boolean))].slice(0, 200);
+      if (!chatId) throw new Error("chatId is required");
+      if (kind === "openchat" || !messageIds.length) {
+        emit({ id, ok: true, result: [] });
+        return;
+      }
+      const ranges = await LineJsAdapter.getTalkMessageReadRanges(client, [chatId]);
+      const range = ranges.find((item) => item.chatId === chatId);
+      const selfMid = midString(LineJsAdapter.profileMid(client));
+      emit({ id, ok: true, result: talkReadStateForMessages(range, messageIds, selfMid) });
       return;
     }
 
@@ -3248,7 +3973,7 @@ async function handle(request: any) {
       if (kind === "openchat") {
         if (!messageId) {
           try {
-            const status: any = await client.base.square.getSquareChatStatus({
+            const status: any = await LineJsAdapter.getSquareChatStatus(client, {
               request: { squareChatMid: chatId },
             });
             messageId = String(status?.chatStatus?.lastMessage?.message?.id ?? "");
@@ -3257,19 +3982,19 @@ async function handle(request: any) {
           }
         }
         if (messageId) {
-          await client.base.square.markAsRead({
+          await LineJsAdapter.markSquareMessageRead(client, {
             request: { squareChatMid: chatId, messageId },
           });
         } else {
           // Fallback for rooms whose latest message is unavailable.
-          await client.base.square.markChatsAsRead({
+          await LineJsAdapter.markSquareChatsRead(client, {
             request: { chatMids: [chatId] },
           });
         }
       } else {
         if (!messageId) {
           try {
-            const recent: any[] = await client.base.talk.getRecentMessagesV2({
+            const recent: any[] = await LineJsAdapter.getRecentMessages(client, {
               messageBoxId: chatId,
               messagesCount: 1,
             });
@@ -3279,11 +4004,7 @@ async function handle(request: any) {
           }
         }
         if (messageId) {
-          await client.base.talk.sendChatChecked({
-            chatMid: chatId,
-            lastMessageId: messageId,
-            seq: await client.base.getReqseq(),
-          });
+          await LineJsAdapter.markTalkMessageRead(client, chatId, messageId);
         }
       }
       database.markChatRead(ACCOUNT_ID, chatId);
@@ -3520,8 +4241,8 @@ async function handle(request: any) {
     }
 
     if (method === "call.accept") {
-      await callManager.accept();
-      emit({ id, ok: true, result: { accepted: true } });
+      const result = await callManager.accept();
+      emit({ id, ok: true, result: { accepted: true, ...result } });
       return;
     }
 

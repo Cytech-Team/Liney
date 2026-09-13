@@ -2,10 +2,12 @@ import { AnimatePresence, motion } from "motion/react";
 import { QRCodeSVG } from "qrcode.react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import { listen } from "@tauri-apps/api/event";
+import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { createPortal } from "react-dom";
 import {
+  ArrowLeft,
   Bell,
   ChevronDown,
   Ellipsis,
@@ -41,16 +43,20 @@ import {
   Trash,
   Undo2,
   Users,
+  UserPlus,
   Video,
   Volume2,
   X,
 } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import "./App.css";
 import { chats as seedChats, messages as seedMessages, type Chat, type Message } from "./data/mock";
 import { FlexMessage, type FlexAction } from "./components/FlexMessage";
 import { RichMessage } from "./components/RichMessage";
+import { RemoteImage } from "./components/RemoteImage";
 import { EngineRequestError, lineyEngine } from "./lib/engine";
+import { callMessagePreview, liveMessagePreview, notificationSenderName, officialLineMessageUrl } from "./lib/message-presentation";
+import { MarketingSite, type MarketingView } from "./marketing/MarketingSite";
 
 type Section = "messages" | "friends" | "openchat" | "calls";
 type ImageEditorTool = "view" | "draw" | "blur" | "text";
@@ -58,7 +64,8 @@ type ThemeMode = "system" | "light" | "dark";
 type AuthMode = "qr" | "password";
 type EngineState = "browser-mock" | "starting" | "ready" | "error";
 type CallState = "idle" | "incoming" | "acquiring" | "connecting" | "ringing" | "in-call" | "ending" | "ended" | "failed";
-type LiveChatResult = { id: string; name: string; kind: "dm" | "group" | "openchat"; avatarUrl?: string; preview?: string; unread?: number; lastMessageTime?: number; memberCount?: number; pinned?: boolean; favoriteTimestamp?: number; statusMessage?: string; isFavorite?: boolean; favoriteTime?: number };
+const LINE_SYSTEM_ACCOUNT_MID = "u085311ecd9e3e3d74ae4c9f5437cbcb5";
+type LiveChatResult = { id: string; name: string; kind: "dm" | "group" | "openchat"; avatarUrl?: string; preview?: string; unread?: number; lastMessageTime?: number; memberCount?: number; pinned?: boolean; favoriteTimestamp?: number; statusMessage?: string; isFavorite?: boolean; favoriteTime?: number; historyState?: "available" | "new" | "unavailable" };
 type LiveMessageResult = {
   id: string;
   localId?: string;
@@ -67,14 +74,20 @@ type LiveMessageResult = {
   createdTime: number;
   chatId?: string;
   contentType?: number;
+  readCount?: number;
+  edited?: boolean;
+  updatedTime?: number;
   senderId?: string;
   senderName?: string;
   senderAvatarUrl?: string;
+  officialClientUrl?: string;
+  isOfficialAccount?: boolean;
   stickerUrl?: string;
   emojiUrl?: string;
   flex?: Message["flex"];
   filename?: string;
   postNotification?: Message["postNotification"];
+  call?: Message["call"];
   rich?: Message["rich"];
   reactions?: Message["reactions"];
   replyTo?: Message["replyTo"];
@@ -82,6 +95,23 @@ type LiveMessageResult = {
   unsent?: boolean;
   readByPeer?: boolean;
   status?: Message["status"];
+  systemNotificationTracked?: boolean;
+  trackedUnread?: number;
+};
+type LiveMessageReadState = {
+  messageId: string;
+  readCount: number;
+  readerMids?: string[];
+};
+type LiveCallHistoryResult = {
+  id: string;
+  chatId: string;
+  kind: "dm" | "group";
+  name: string;
+  avatarUrl?: string;
+  isMine: boolean;
+  createdTime: number;
+  call: NonNullable<Message["call"]>;
 };
 type ReplyTarget = NonNullable<Message["replyTo"]>;
 type MediaPreviewResult = { dataUrl: string };
@@ -92,6 +122,7 @@ type ProfileResult = { displayName?: string; mid?: string; pictureStatus?: strin
 type RecentSticker = { packageId: string; stickerId: string; version: string; option?: string; owned: boolean };
 type RecentEmoji = { productId: string; sticonId: string; version: string; resourceType: string; owned: boolean };
 type SyncProgressState = { visible: boolean; phase: "metadata" | "friends" | "chats" | "history" | "complete" | "error"; done: number; total: number; failed: number; summary?: { friends?: number; talkChats?: number; openChats?: number; histories?: number; failedHistories?: number; elapsedMs?: number } };
+type ImageGalleryPayload = { title: string; index: number; loop: boolean; items: Array<{ id: string; src: string; time?: string }> };
 
 function messageIdAtOrBefore(messageId: string, boundary: string): boolean {
   if (/^\d+$/.test(messageId) && /^\d+$/.test(boundary)) return BigInt(messageId) <= BigInt(boundary);
@@ -134,6 +165,13 @@ type AppSettings = {
   openchat: boolean;
   liveTalk: boolean;
   autoMedia: boolean;
+  markReadOnBottom: boolean;
+  showUnreadDivider: boolean;
+  autoScrollNewMessages: boolean;
+  showReadCount: boolean;
+  openImagesInWindow: boolean;
+  loopImageGallery: boolean;
+  openchatRealtimeRefresh: boolean;
   density: "Compact" | "Comfortable" | "Spacious";
   radius: "Soft" | "Round";
 };
@@ -147,6 +185,13 @@ const defaultSettings: AppSettings = {
   openchat: true,
   liveTalk: false,
   autoMedia: true,
+  markReadOnBottom: true,
+  showUnreadDivider: true,
+  autoScrollNewMessages: true,
+  showReadCount: true,
+  openImagesInWindow: true,
+  loopImageGallery: true,
+  openchatRealtimeRefresh: true,
   density: "Comfortable",
   radius: "Round",
 };
@@ -168,22 +213,77 @@ function readSettings(): AppSettings {
   }
 }
 
-function liveMessagePreview(message: LiveMessageResult): string {
-  const richAltText = String(message.rich?.altText ?? "").replace(/\s+/g, " ").trim();
-  if (Number(message.contentType ?? 0) === 17 && richAltText) return richAltText;
-  const text = String(message.text ?? "").replace(/\s+/g, " ").trim();
-  if (text && !["IMAGE", "VIDEO", "AUDIO", "STICKER", "FILE", "FLEX"].includes(text.toUpperCase())) return text;
-  switch (Number(message.contentType ?? 0)) {
-    case 1: return "รูปภาพ";
-    case 2: return "วิดีโอ";
-    case 3: return "เสียง";
-    case 7: return "สติกเกอร์";
-    case 14: return "ไฟล์";
-    case 16: return "มีโพสต์ใหม่";
-    case 17: return richAltText || "Rich message";
-    case 22: return "Flex message";
-    default: return text || "ข้อความใหม่";
+function currentTalkAvatarUrl(item: Pick<LiveChatResult, "id" | "kind" | "avatarUrl">): string | undefined {
+  if (item.kind === "dm" && /^u[0-9a-f]{32}$/i.test(item.id)) {
+    return `https://obs.line-scdn.net/r/talk/p/${encodeURIComponent(item.id)}`;
   }
+  return item.avatarUrl || undefined;
+}
+
+function mapLiveChatResult(item: LiveChatResult, index: number): Chat {
+  const lineSystemAccount = item.id === LINE_SYSTEM_ACCOUNT_MID;
+  return {
+    id: item.id,
+    name: item.name,
+    subtitle: lineSystemAccount
+      ? (item.preview || "บัญชีระบบ LINE · อ่าน payload ผ่าน Talk API ไม่ได้")
+      : item.historyState === "new"
+        ? "ยังไม่เคยแชท"
+        : item.historyState === "unavailable"
+          ? (item.preview || "ประวัติเก่าอ่านไม่ได้ · Live mode")
+          : item.preview || (item.kind === "openchat" ? "OpenChat" : item.kind === "dm" ? "เพื่อน · LINE" : "กลุ่ม · LINE"),
+    detail: item.kind === "openchat"
+      ? `OpenChat${item.memberCount ? ` · ${item.memberCount.toLocaleString("th-TH")} คน` : ""}`
+      : lineSystemAccount
+        ? "LINE System Account · เห็นเวลา/activity แต่เนื้อหาถูกซ่อน"
+        : item.historyState === "new"
+          ? "ยังไม่เคยคุย · ส่งข้อความแรกได้เลย"
+          : item.historyState === "unavailable"
+            ? "ประวัติเก่าบางส่วนไม่พร้อม · ข้อความใหม่ใช้งานได้"
+            : item.kind === "dm" ? "เพื่อน · LINE" : "กลุ่ม · LINE",
+    time: lineSystemAccount ? formatListTime(item.lastMessageTime ?? 0) : item.historyState === "new" ? "" : formatListTime(item.lastMessageTime ?? 0),
+    unread: item.unread || undefined,
+    kind: item.kind,
+    avatar: initials(item.name),
+    avatarUrl: currentTalkAvatarUrl(item),
+    accent: avatarColor(index),
+    lastMessageTime: item.historyState === "new" ? 0 : item.lastMessageTime ?? 0,
+    pinned: item.pinned,
+    favoriteTimestamp: item.favoriteTimestamp,
+    historyState: item.historyState ?? "available",
+  };
+}
+
+function sortLiveChats(chats: Chat[]): Chat[] {
+  return [...chats].sort((a, b) => {
+    if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
+    if ((a.lastMessageTime ?? 0) !== (b.lastMessageTime ?? 0)) return (b.lastMessageTime ?? 0) - (a.lastMessageTime ?? 0);
+    return (b.favoriteTimestamp ?? 0) - (a.favoriteTimestamp ?? 0);
+  });
+}
+
+function mapLiveFriendResult(item: LiveChatResult, index: number): Chat {
+  return {
+    id: item.id,
+    name: item.name,
+    subtitle: item.statusMessage?.trim() || "เพื่อน · LINE",
+    detail: "เพื่อน · LINE",
+    time: "",
+    kind: "dm",
+    avatar: initials(item.name),
+    avatarUrl: currentTalkAvatarUrl(item),
+    accent: avatarColor(index),
+    isFavorite: item.isFavorite,
+    favoriteTime: item.favoriteTime,
+  };
+}
+
+function sortLiveFriends(chats: Chat[]): Chat[] {
+  return [...chats].sort((a, b) => {
+    if (Boolean(a.isFavorite) !== Boolean(b.isFavorite)) return a.isFavorite ? -1 : 1;
+    if ((a.favoriteTime ?? 0) !== (b.favoriteTime ?? 0)) return (b.favoriteTime ?? 0) - (a.favoriteTime ?? 0);
+    return a.name.localeCompare(b.name, "th");
+  });
 }
 
 async function notifyDesktop(
@@ -218,14 +318,51 @@ const navItems: { id: Section; label: string; icon: typeof MessageCircle }[] = [
 ];
 
 export default function App() {
-  return <MainApp />;
+  const detachedView = new URLSearchParams(window.location.search).get("liney-view");
+  if (lineyEngine.isNative && detachedView === "image-viewer") return <DetachedImageViewer />;
+  if (lineyEngine.isNative) return <MainApp />;
+  return <BrowserSite />;
+}
+
+function BrowserSite() {
+  const [path, setPath] = useState(() => normalizeBrowserPath(window.location.pathname));
+
+  useEffect(() => {
+    const onPopState = () => setPath(normalizeBrowserPath(window.location.pathname));
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  useEffect(() => {
+    document.title = path === "/login" ? "Liney — Login preview" : path === "/chat" ? "Liney — Chat preview" : "Liney — Chat closer on Linux";
+  }, [path]);
+
+  const navigate = (nextPath: string) => {
+    const next = normalizeBrowserPath(nextPath);
+    window.history.pushState({}, "", next);
+    setPath(next);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  if (path === "/chat") return <MainApp />;
+  const view: MarketingView = path === "/login" ? "login" : "home";
+  return <MarketingSite view={view} onNavigate={navigate} />;
+}
+
+function normalizeBrowserPath(path: string): "/" | "/login" | "/chat" {
+  if (path === "/login" || path === "/chat") return path;
+  return "/";
 }
 
 function MainApp() {
   const [section, setSection] = useState<Section>("messages");
   const [activeChatId, setActiveChatId] = useState(lineyEngine.isNative ? "" : "nagi");
+  const [mobileConversationOpen, setMobileConversationOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [newChatOpen, setNewChatOpen] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState("ทั่วไป");
+  const [messageRefreshNonce, setMessageRefreshNonce] = useState(0);
   const [callOpen, setCallOpen] = useState(false);
   const [callState, setCallState] = useState<CallState>("idle");
   const [, setCallId] = useState("");
@@ -250,6 +387,7 @@ function MainApp() {
   const [notificationJump, setNotificationJump] = useState<{ chatId: string; messageId: string; nonce: number } | null>(null);
   const [liveChats, setLiveChats] = useState<Chat[] | null>(null);
   const [liveFriends, setLiveFriends] = useState<Chat[] | null>(null);
+  const [callHistory, setCallHistory] = useState<LiveCallHistoryResult[] | null>(lineyEngine.isNative ? null : []);
   const [listFilter, setListFilter] = useState<"all" | "unread" | "pinned" | "favorites">("all");
   const [localPins, setLocalPins] = useState<Record<string, number>>(() => {
     try {
@@ -289,14 +427,30 @@ function MainApp() {
   );
   const settingsRef = useRef(settings);
   const activeChatRef = useRef(activeChatId);
+  const authenticatedRef = useRef(authenticated);
   const liveChatsRef = useRef<Chat[] | null>(null);
   const liveFriendsRef = useRef<Chat[] | null>(null);
   const liveChatsLoadGenerationRef = useRef(0);
   const liveFriendsLoadGenerationRef = useRef(0);
+  const callHistoryLoadGenerationRef = useRef(0);
   const messageLoadGenerationRef = useRef(new Map<string, number>());
   const readMarkedRef = useRef(new Set<string>());
+  const sessionReadReadersRef = useRef(new Map<string, Map<string, Set<string>>>());
+  const imageGalleryPayloadRef = useRef<ImageGalleryPayload | null>(null);
   const notificationDedupRef = useRef(new Map<string, number>());
   const liveEventDedupRef = useRef(new Map<string, number>());
+  const liveChatEventGenerationRef = useRef(new Map<string, number>());
+  const messageMapRef = useRef(messageMap);
+  const localReadThroughTimeRef = useRef(new Map<string, number>());
+  const historyDiscoveredMessageIdsRef = useRef(new Set<string>());
+  const sidebarCatchupRef = useRef(new Map<string, { target: number; attempts: number }>());
+
+  const clearReadMarks = (chatId: string) => {
+    const prefix = `${chatId}:`;
+    for (const key of readMarkedRef.current) {
+      if (key.startsWith(prefix)) readMarkedRef.current.delete(key);
+    }
+  };
 
   // Being the selected chat is not enough to acknowledge a message.  KDE can
   // leave the webview selected while the window is minimized or behind another
@@ -309,6 +463,10 @@ function MainApp() {
   useEffect(() => {
     activeChatRef.current = activeChatId;
   }, [activeChatId]);
+
+  useEffect(() => {
+    authenticatedRef.current = authenticated;
+  }, [authenticated]);
 
   useEffect(() => {
     const syncWindowActivity = () => {
@@ -332,6 +490,10 @@ function MainApp() {
   useEffect(() => {
     liveFriendsRef.current = liveFriends;
   }, [liveFriends]);
+
+  useEffect(() => {
+    messageMapRef.current = messageMap;
+  }, [messageMap]);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -369,6 +531,7 @@ function MainApp() {
     setSection(chat?.kind === "openchat" ? "openchat" : "messages");
     setListFilter("all");
     setActiveChatId(chatId);
+    setMobileConversationOpen(true);
     setNotificationJump({ chatId, messageId, nonce: Date.now() });
     if (lineyEngine.isNative) {
       void getCurrentWindow().show().then(() => getCurrentWindow().setFocus()).catch(() => undefined);
@@ -388,6 +551,7 @@ function MainApp() {
     if (!lineyEngine.isNative) return;
     let reconnectTimer: number | undefined;
     let liveChatRefreshTimer: number | undefined;
+    let liveFriendsRefreshTimer: number | undefined;
     let connectInFlight = false;
     const scheduleLiveChatRefresh = () => {
       if (liveChatRefreshTimer !== undefined) return;
@@ -395,6 +559,17 @@ function MainApp() {
         liveChatRefreshTimer = undefined;
         void loadLiveChats();
       }, 700);
+    };
+    const scheduleLiveFriendsRefresh = () => {
+      if (liveFriendsRefreshTimer !== undefined) return;
+      liveFriendsRefreshTimer = window.setTimeout(() => {
+        liveFriendsRefreshTimer = undefined;
+        void loadLiveFriends();
+      }, 700);
+    };
+    const scheduleLiveRefresh = () => {
+      scheduleLiveChatRefresh();
+      scheduleLiveFriendsRefresh();
     };
     const scheduleReconnect = () => {
       if (reconnectTimer !== undefined) return;
@@ -413,6 +588,7 @@ function MainApp() {
       if (caps?.storage?.mode === "wallet" || caps?.storage?.mode === "session-only") setStorageMode(caps.storage.mode);
       setEngineState("ready");
       if (caps?.authenticated) {
+        authenticatedRef.current = true;
         setAuthenticated(true);
         try {
           const restoredProfile = await lineyEngine.request<ProfileResult>("profile.get", {}, 20_000);
@@ -420,10 +596,14 @@ function MainApp() {
         } catch {}
         // Defer list loads so the auth.ready event (which also populates them)
         // doesn't trigger a second, duplicate network refresh at startup.
-        scheduleLiveChatRefresh();
+        scheduleLiveRefresh();
       } else {
+        authenticatedRef.current = false;
         setAuthenticated(false);
         setAuthOpen(true);
+        // Keep the cached desktop view usable while a session is unavailable.
+        // The next auth.ready event will schedule the same refresh against LINE.
+        scheduleLiveRefresh();
       }
     };
     const connect = async () => {
@@ -445,9 +625,50 @@ function MainApp() {
       if (event.type === "engine.closed") {
         setEngineState("error");
         setAuthBusy(false);
+        liveChatEventGenerationRef.current.clear();
         scheduleReconnect();
       }
       if (event.type === "auth.persistence") setStorageMode("session-only");
+      if (event.type === "event.chats.updated" && authenticatedRef.current && Array.isArray(event.chats)) {
+        const kind = event.kind === "friends" ? "friends" : event.kind === "openchat" ? "openchat" : "talk";
+        const refreshGeneration = Number(event.refreshGeneration ?? 0);
+        if (Number.isFinite(refreshGeneration) && refreshGeneration > 0) {
+          const previousGeneration = liveChatEventGenerationRef.current.get(kind) ?? 0;
+          if (refreshGeneration < previousGeneration) return;
+          liveChatEventGenerationRef.current.set(kind, refreshGeneration);
+        }
+        const results = event.chats as LiveChatResult[];
+        if (kind === "friends") {
+          const mappedFriends = sortLiveFriends(results.map(mapLiveFriendResult));
+          const nextFriends = mappedFriends.length || !liveFriendsRef.current ? mappedFriends : liveFriendsRef.current;
+          liveFriendsRef.current = nextFriends;
+          setLiveFriends(nextFriends);
+        } else if (kind !== "openchat" || settingsRef.current.openchat) {
+          const previous = liveChatsRef.current ?? [];
+          const previousById = new Map(previous.map((chat) => [chat.id, chat]));
+          const mappedRemote = results
+            .filter((item) => kind === "openchat" ? item.kind === "openchat" : item.kind !== "openchat")
+            .map((item, index) => {
+              const mapped = mapLiveChatResult(item, index);
+              const prior = previousById.get(mapped.id);
+              const readThrough = localReadThroughTimeRef.current.get(mapped.id) ?? 0;
+              const unread = (mapped.lastMessageTime ?? 0) <= readThrough
+                ? undefined
+                : Math.max(mapped.unread ?? 0, prior?.unread ?? 0) || undefined;
+              return { ...mapped, unread };
+            });
+          const next = sortLiveChats([
+            ...mappedRemote,
+            ...previous.filter((chat) => kind === "openchat" ? chat.kind !== "openchat" : chat.kind === "openchat"),
+          ].filter((chat, index, list) => list.findIndex((item) => item.id === chat.id) === index));
+          liveChatsRef.current = next;
+          setLiveChats(next);
+          setActiveChatId((current) => next.some((chat) => chat.id === current)
+            || Boolean(liveFriendsRef.current?.some((chat) => chat.id === current))
+            ? current
+            : (next[0]?.id ?? ""));
+        }
+      }
       if (event.type === "sync.start") {
         setSyncStatus("กำลังเตรียมข้อมูล LINE…");
         setSyncProgress({ visible: true, phase: "metadata", done: 0, total: 0, failed: 0 });
@@ -466,6 +687,8 @@ function MainApp() {
         const summary = event.summary && typeof event.summary === "object" ? event.summary as SyncProgressState["summary"] : undefined;
         setSyncStatus("");
         setSyncProgress((current) => ({ ...current, visible: true, phase: "complete", summary, failed: Number(summary?.failedHistories ?? current.failed) }));
+        scheduleLiveRefresh();
+        void loadCallHistory();
       }
       if (event.type === "sync.error") {
         setSyncStatus("ซิงก์บางส่วนไม่สำเร็จ");
@@ -500,6 +723,7 @@ function MainApp() {
       }
       if (event.type === "auth.pin" && typeof event.pin === "string") setPin(event.pin);
       if (event.type === "auth.ready") {
+        authenticatedRef.current = true;
         setAuthBusy(false);
         setAuthenticated(true);
         setQrUrl("");
@@ -508,16 +732,35 @@ function MainApp() {
         setAuthOpen(false);
         if (event.storage === "wallet" || event.storage === "session-only") setStorageMode(event.storage);
         if (event.profile && typeof event.profile === "object") setProfile(event.profile as ProfileResult);
-        void loadLiveChats();
-        void loadLiveFriends();
+        if (event.accountChanged === true) {
+          liveChatsLoadGenerationRef.current += 1;
+          liveFriendsLoadGenerationRef.current += 1;
+          liveChatsRef.current = null;
+          liveFriendsRef.current = null;
+          localReadThroughTimeRef.current.clear();
+          historyDiscoveredMessageIdsRef.current.clear();
+          sidebarCatchupRef.current.clear();
+          setLiveChats([]);
+          setLiveFriends([]);
+          setCallHistory([]);
+          setActiveChatId("");
+          setMessageMap({});
+          setReplyTarget(null);
+        }
+        // The capabilities path can observe auth.ready in the same startup
+        // window. Share one debounced refresh instead of launching both list
+        // requests twice.
+        scheduleLiveRefresh();
       }
       if (event.type === "auth.restore_failed") {
+        authenticatedRef.current = false;
         setAuthBusy(false);
         setAuthenticated(false);
         setAuthOpen(true);
         setAuthError("Session เดิมใช้ต่อไม่ได้ กรุณาเข้าสู่ระบบด้วย QR หรือ Email/Password ใหม่");
       }
       if (event.type === "auth.logged_out") {
+        authenticatedRef.current = false;
         setAuthBusy(false);
         setAuthenticated(false);
         liveChatsLoadGenerationRef.current += 1;
@@ -525,9 +768,15 @@ function MainApp() {
         liveChatsRef.current = null;
         liveFriendsRef.current = null;
         liveEventDedupRef.current.clear();
+        liveChatEventGenerationRef.current.clear();
+        localReadThroughTimeRef.current.clear();
+        historyDiscoveredMessageIdsRef.current.clear();
+        sidebarCatchupRef.current.clear();
         setLiveChats([]);
         setLiveFriends([]);
+        setCallHistory([]);
         setProfile(null);
+        readMarkedRef.current.clear();
         setReplyTarget(null);
         setActiveChatId("");
         setMessageMap({});
@@ -557,6 +806,37 @@ function MainApp() {
           }));
         }
       }
+      if (event.type === "event.message.updated" && event.message && typeof event.message === "object") {
+        const raw = event.message as LiveMessageResult;
+        const chatId = String(raw.chatId ?? event.chatId ?? "").trim();
+        const messageId = String(raw.id ?? event.messageId ?? "").trim();
+        if (chatId && messageId) {
+          setMessageMap((current) => ({
+            ...current,
+            [chatId]: (current[chatId] ?? []).map((item) => item.id === messageId ? {
+              ...item,
+              senderId: raw.senderId ?? item.senderId,
+              senderName: raw.senderName ?? item.senderName,
+              senderAvatarUrl: raw.senderAvatarUrl ?? item.senderAvatarUrl,
+              officialClientUrl: raw.officialClientUrl ?? item.officialClientUrl,
+              isOfficialAccount: raw.isOfficialAccount ?? item.isOfficialAccount,
+              text: raw.text !== undefined ? raw.text : item.text,
+              contentType: raw.contentType ?? item.contentType,
+              edited: raw.edited ?? item.edited,
+              updatedTime: raw.updatedTime ?? item.updatedTime,
+              filename: raw.filename ?? item.filename,
+              stickerUrl: raw.stickerUrl ?? item.stickerUrl,
+              flex: raw.flex ?? item.flex,
+              rich: raw.rich ?? item.rich,
+              call: raw.call ?? item.call,
+              postNotification: raw.postNotification ?? item.postNotification,
+              reactions: raw.reactions ?? item.reactions,
+              replyTo: raw.replyTo ?? item.replyTo,
+              replyToId: raw.replyToId ?? item.replyToId,
+            } : item),
+          }));
+        }
+      }
       if (event.type === "event.message.reaction") {
         const chatId = String(event.chatId ?? "").trim();
         const messageId = String(event.messageId ?? "").trim();
@@ -571,15 +851,23 @@ function MainApp() {
       if (event.type === "event.message.read") {
         const chatId = String(event.chatId ?? "").trim();
         const messageId = String(event.messageId ?? "").trim();
+        const readerMid = String(event.readerMid ?? "").trim();
         if (chatId && messageId) {
-          setMessageMap((current) => ({
-            ...current,
-            [chatId]: (current[chatId] ?? []).map((item) => (
-              item.author === "me" && messageIdAtOrBefore(item.id, messageId)
-                ? { ...item, readByPeer: true }
-                : item
-            )),
-          }));
+          setMessageMap((current) => {
+            const roomReaders = sessionReadReadersRef.current.get(chatId) ?? new Map<string, Set<string>>();
+            sessionReadReadersRef.current.set(chatId, roomReaders);
+            return {
+              ...current,
+              [chatId]: (current[chatId] ?? []).map((item) => {
+                if (item.author !== "me" || !messageIdAtOrBefore(item.id, messageId)) return item;
+                const readers = roomReaders.get(item.id) ?? new Set<string>();
+                if (readerMid) readers.add(readerMid);
+                roomReaders.set(item.id, readers);
+                const readCount = Math.max(item.readCount ?? 0, readers.size, 1);
+                return { ...item, readByPeer: true, readCount };
+              }),
+            };
+          });
         }
       }
       if (event.type === "event.message.removed") {
@@ -590,6 +878,7 @@ function MainApp() {
             ...current,
             [chatId]: (current[chatId] ?? []).filter((item) => item.id !== messageId),
           }));
+          setCallHistory((current) => current?.filter((item) => item.id !== messageId) ?? current);
         }
       }
       if (event.type === "event.message.unsent") {
@@ -608,10 +897,12 @@ function MainApp() {
               reactions: undefined,
               replyTo: undefined,
               replyToId: undefined,
+              call: undefined,
               unsent: true,
               status: "sent",
             } : item),
           }));
+          setCallHistory((current) => current?.filter((item) => item.id !== messageId) ?? current);
         }
       }
       if (event.type === "event.message" && event.message && typeof event.message === "object") {
@@ -620,7 +911,9 @@ function MainApp() {
         const contentType = Number(raw.contentType ?? 0);
         const preview = liveMessagePreview(raw);
         const eventMessageId = String(raw.id ?? raw.localId ?? "").trim();
-        const eventSource = String(event.source ?? "").startsWith("openchat") ? "openchat" : "talk";
+        const rawEventSource = String(event.source ?? "");
+        const systemNotificationTracked = rawEventSource === "talk-system" || Boolean(raw.systemNotificationTracked);
+        const eventSource = rawEventSource.startsWith("openchat") ? "openchat" : "talk";
         const eventDedupKey = eventMessageId && chatId
           ? `${eventSource}:${chatId}:${eventMessageId}`
           : "";
@@ -637,44 +930,59 @@ function MainApp() {
             ? "openchat"
             : chatId.startsWith("u") ? "dm" : "group");
 
+          if (eventSource === "talk" && contentType === 6 && raw.call) {
+            const callEntry: LiveCallHistoryResult = {
+              id: eventMessageId,
+              chatId,
+              kind: chatKind === "group" ? "group" : "dm",
+              name: knownChat?.name || raw.senderName || (chatId.startsWith("u") ? "LINE User" : "LINE Group"),
+              avatarUrl: knownChat?.avatarUrl || raw.senderAvatarUrl,
+              isMine: raw.isMine,
+              createdTime: Number(raw.createdTime || Date.now()),
+              call: raw.call,
+            };
+            setCallHistory((current) => [callEntry, ...(current ?? []).filter((item) => item.id !== callEntry.id)]
+              .sort((left, right) => right.createdTime - left.createdTime));
+          }
+
           // Update the denormalized sidebar locally as soon as the event
           // arrives. A later list refresh is only needed for a newly-created
           // or previously hidden room.
           setLiveChats((current) => {
             if (!current) return current;
             const existing = current.find((chat) => chat.id === chatId);
+            let next = current;
             if (existing) {
-              return current.map((chat) => chat.id === chatId
+              next = current.map((chat) => chat.id === chatId
                 ? {
                   ...chat,
                   subtitle: preview,
                   time: formatListTime(raw.createdTime || Date.now()),
                   lastMessageTime: Math.max(chat.lastMessageTime ?? 0, raw.createdTime || Date.now()),
-                  unread: raw.isMine || isChatActuallyVisible(chatId)
-                    ? undefined
-                    : duplicateLiveEvent ? chat.unread : (chat.unread ?? 0) + 1,
+                  unread: raw.isMine
+                    ? chat.unread
+                    : systemNotificationTracked
+                      ? Math.max(0, Number(raw.trackedUnread ?? 0)) || undefined
+                      : duplicateLiveEvent ? chat.unread : (chat.unread ?? 0) + 1,
                 }
                 : chat);
+            } else {
+              const friend = liveFriendsRef.current?.find((chat) => chat.id === chatId);
+              if (friend && chatKind === "dm") {
+                next = [...current, {
+                  ...friend,
+                  subtitle: preview,
+                  time: formatListTime(raw.createdTime || Date.now()),
+                  lastMessageTime: raw.createdTime || Date.now(),
+                  unread: raw.isMine ? undefined : 1,
+                }];
+              }
             }
-            const friend = liveFriendsRef.current?.find((chat) => chat.id === chatId);
-            if (friend && chatKind === "dm") {
-              return [...current, {
-                ...friend,
-                subtitle: preview,
-                time: formatListTime(raw.createdTime || Date.now()),
-                lastMessageTime: raw.createdTime || Date.now(),
-                unread: raw.isMine ? undefined : 1,
-              }];
-            }
-            return current;
+            next = sortLiveChats(next);
+            liveChatsRef.current = next;
+            return next;
           });
           if (!knownChat || !(liveChatsRef.current ?? []).some((chat) => chat.id === chatId)) scheduleLiveChatRefresh();
-          if (!raw.isMine && isChatActuallyVisible(chatId)) {
-            void lineyEngine.request("chat.mark_read", {
-              chatId,
-              kind: chatKind === "openchat" ? "openchat" : "talk",
-            }, 20_000).catch(() => undefined);
-          }
           const autoLoadOpenChatMedia = event.source !== "openchat" || settingsRef.current.autoMedia;
           const sentKey = `${chatId}\u0000${raw.text}`;
           const queue = recentSentRef.current.get(sentKey) ?? [];
@@ -699,10 +1007,15 @@ function MainApp() {
                     createdTime: raw.createdTime || item.createdTime,
                     time: formatTime(raw.createdTime || item.createdTime || Date.now()),
                     contentType: raw.contentType,
-                    stickerUrl: raw.stickerUrl,
-                    flex: raw.flex,
-                    rich: raw.rich,
-                    reactions: raw.reactions,
+                     stickerUrl: raw.stickerUrl,
+                     flex: raw.flex,
+                     rich: raw.rich,
+                     call: raw.call,
+                     reactions: raw.reactions,
+                    readCount: Math.max(item.readCount ?? 0, Number(raw.readCount ?? 0)),
+                    readByPeer: item.readByPeer || Number(raw.readCount ?? 0) > 0,
+                    edited: raw.edited ?? item.edited,
+                    updatedTime: raw.updatedTime ?? item.updatedTime,
                     replyTo: raw.replyTo ?? (raw.replyToId ? { id: raw.replyToId, text: "ข้อความ" } : undefined),
                     replyToId: raw.replyToId,
                     unsent: raw.unsent,
@@ -724,18 +1037,25 @@ function MainApp() {
             time: formatTime(raw.createdTime || Date.now()),
             createdTime: raw.createdTime || Date.now(),
             contentType: raw.contentType,
-            stickerUrl: raw.stickerUrl,
-            flex: raw.flex,
-            rich: raw.rich,
-            filename: raw.filename,
-            senderId: raw.senderId,
-            senderName: raw.senderName,
-            senderAvatarUrl: raw.senderAvatarUrl,
-            postNotification: raw.postNotification,
+             stickerUrl: raw.stickerUrl,
+             flex: raw.flex,
+             rich: raw.rich,
+             call: raw.call,
+             filename: raw.filename,
+             senderId: raw.senderId,
+             senderName: raw.senderName,
+             senderAvatarUrl: raw.senderAvatarUrl,
+             officialClientUrl: raw.officialClientUrl,
+             isOfficialAccount: raw.isOfficialAccount,
+             postNotification: raw.postNotification,
             reactions: raw.reactions,
             replyTo: raw.replyTo ?? (raw.replyToId ? { id: raw.replyToId, text: "ข้อความ" } : undefined),
             replyToId: raw.replyToId,
             unsent: raw.unsent,
+            readCount: Math.max(0, Number(raw.readCount ?? 0)),
+            readByPeer: Number(raw.readCount ?? 0) > 0,
+            edited: raw.edited,
+            updatedTime: raw.updatedTime,
             status: raw.status ?? "sent",
           };
           setMessageMap((current) => {
@@ -757,17 +1077,22 @@ function MainApp() {
                 time: message.time,
                 createdTime: message.createdTime,
                 contentType: raw.contentType,
-                stickerUrl: raw.stickerUrl,
-                flex: raw.flex,
-                rich: raw.rich,
+                 stickerUrl: raw.stickerUrl,
+                 flex: raw.flex,
+                 call: raw.call,
+                 rich: raw.rich,
                 filename: raw.filename,
-                senderId: raw.senderId,
-                senderName: raw.senderName,
-                senderAvatarUrl: raw.senderAvatarUrl,
-                reactions: raw.reactions,
+                 senderId: raw.senderId,
+                 senderName: raw.senderName,
+                 senderAvatarUrl: raw.senderAvatarUrl,
+                 officialClientUrl: raw.officialClientUrl,
+                 isOfficialAccount: raw.isOfficialAccount,
+                 reactions: raw.reactions,
                 replyTo: raw.replyTo ?? (raw.replyToId ? { id: raw.replyToId, text: "ข้อความ" } : undefined),
                 replyToId: raw.replyToId,
                 unsent: raw.unsent,
+                edited: raw.edited ?? next[optimisticIndex].edited,
+                updatedTime: raw.updatedTime ?? next[optimisticIndex].updatedTime,
                 status: "sent",
               };
               return { ...current, [chatId]: next };
@@ -784,7 +1109,7 @@ function MainApp() {
             if (!notificationDedupRef.current.has(notificationKey)) {
               notificationDedupRef.current.set(notificationKey, now);
               void notifyDesktop(
-                raw.senderName || "LINE",
+                notificationSenderName(raw, knownChat),
                 settingsRef.current.notificationPreview ? (raw.text || "มีสื่อใหม่") : "มีข้อความใหม่",
                 settingsRef.current.desktopNotifications,
                 settingsRef.current.notificationSound,
@@ -833,6 +1158,7 @@ function MainApp() {
       off();
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       if (liveChatRefreshTimer !== undefined) window.clearTimeout(liveChatRefreshTimer);
+      if (liveFriendsRefreshTimer !== undefined) window.clearTimeout(liveFriendsRefreshTimer);
     };
   }, []);
 
@@ -874,15 +1200,17 @@ function MainApp() {
   }, [localPins]);
 
   const allFriends = useMemo(
-    () => lineyEngine.isNative ? (authenticated ? (liveFriends ?? []) : []) : seedChats.filter((chat) => chat.kind === "dm"),
-    [authenticated, liveFriends],
+    () => lineyEngine.isNative ? (liveFriends ?? []) : seedChats.filter((chat) => chat.kind === "dm"),
+    [liveFriends],
   );
   const favoriteFriendMap = useMemo(
     () => new Map(allFriends.filter((friend) => friend.isFavorite).map((friend) => [friend.id, friend])),
     [allFriends],
   );
   const allChats = useMemo(() => {
-    const base = lineyEngine.isNative ? (authenticated ? (liveChats ?? []) : []) : seedChats;
+    const base = lineyEngine.isNative
+      ? (settings.openchat ? (liveChats ?? []) : (liveChats ?? []).filter((chat) => chat.kind !== "openchat"))
+      : seedChats;
     return base
       .map((chat) => {
         const localPinTimestamp = localPins[chat.id] ?? 0;
@@ -897,10 +1225,42 @@ function MainApp() {
       })
       .sort((a, b) => {
         if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
-        if ((a.favoriteTimestamp ?? 0) !== (b.favoriteTimestamp ?? 0)) return (b.favoriteTimestamp ?? 0) - (a.favoriteTimestamp ?? 0);
-        return (b.lastMessageTime ?? 0) - (a.lastMessageTime ?? 0);
+        if ((a.lastMessageTime ?? 0) !== (b.lastMessageTime ?? 0)) return (b.lastMessageTime ?? 0) - (a.lastMessageTime ?? 0);
+        return (b.favoriteTimestamp ?? 0) - (a.favoriteTimestamp ?? 0);
       });
-  }, [authenticated, liveChats, favoriteFriendMap, localPins]);
+  }, [liveChats, favoriteFriendMap, localPins, settings.openchat]);
+  const totalUnread = useMemo(
+    () => allChats.reduce((sum, chat) => sum + Math.max(0, chat.unread ?? 0), 0),
+    [allChats],
+  );
+  const callChats = useMemo(() => {
+    const latestByChat = new Map<string, LiveCallHistoryResult>();
+    for (const entry of callHistory ?? []) {
+      if (!latestByChat.has(entry.chatId)) latestByChat.set(entry.chatId, entry);
+    }
+    return [...latestByChat.values()].map((entry, index): Chat => {
+      const base = allChats.find((chat) => chat.id === entry.chatId)
+        ?? allFriends.find((friend) => friend.id === entry.chatId);
+      const name = base?.name || entry.name || (entry.chatId.startsWith("u") ? "LINE User" : "LINE Group");
+      return {
+        ...(base ?? {
+          id: entry.chatId,
+          name,
+          subtitle: "การโทร",
+          time: "",
+          kind: entry.kind,
+          avatar: initials(name),
+          accent: avatarColor(index),
+        }),
+        id: entry.chatId,
+        name,
+        subtitle: callMessagePreview(entry.call),
+        time: formatListTime(entry.createdTime),
+        lastMessageTime: entry.createdTime,
+        unread: undefined,
+      };
+    });
+  }, [allChats, allFriends, callHistory]);
   const visibleChats = useMemo(() => {
     const hasQuery = Boolean(query.trim());
     let items = section === "friends"
@@ -908,7 +1268,7 @@ function MainApp() {
       : section === "openchat"
       ? settings.openchat ? allChats.filter((chat) => chat.kind === "openchat") : []
       : section === "calls"
-      ? []
+      ? callChats
       : allChats;
 
     // The main search box says "ค้นหาแชตหรือเพื่อน". While searching from
@@ -926,7 +1286,12 @@ function MainApp() {
       items = items.filter((chat) => `${chat.name} ${chat.subtitle}`.toLocaleLowerCase("th").includes(needle));
     }
     return items;
-  }, [query, section, listFilter, allChats, allFriends, settings.openchat]);
+  }, [query, section, listFilter, allChats, allFriends, callChats, settings.openchat]);
+
+  useEffect(() => {
+    if (!lineyEngine.isNative || section !== "calls") return;
+    void loadCallHistory();
+  }, [section, authenticated]);
 
   const placeholderChat: Chat = {
     id: "__liney__",
@@ -937,40 +1302,143 @@ function MainApp() {
     avatar: "L",
     accent: "#22c55e",
   };
-  const activePool = [...allChats, ...allFriends];
+  const activePool = [...allChats, ...allFriends, ...callChats];
   const activeChat = activePool.find((chat) => chat.id === activeChatId) ?? visibleChats[0] ?? activePool[0] ?? placeholderChat;
   const activeMessages = activeChat.id === "__liney__"
     ? []
     : messageMap[activeChat.id] ?? (activeChat.kind === "dm" && liveChats && !liveChats.some((item) => item.id === activeChat.id) ? [] : undefined);
+  const activeMessagesLoaded = activeMessages !== undefined;
+  const activeMessageLatestTime = activeMessages?.reduce(
+    (latest, message) => Math.max(latest, Number(message.createdTime ?? 0)),
+    0,
+  ) ?? 0;
 
-  // Auto-selected rooms must not be acknowledged while Liney is in the
-  // background.  When the app becomes active again this effect runs and marks
-  // only the conversation the user can see as read.
+  // The sidebar can learn about a message from Talk metadata before the push
+  // operation reaches the renderer. If its timestamp is newer than the loaded
+  // conversation, actively catch the room up instead of leaving two panes out
+  // of sync. Bounded retries avoid hammering LINE when history is delayed.
   useEffect(() => {
-    if (!windowActive || !authenticated || !liveChats || !activeChatId) return;
-    const chat = liveChats.find((item) => item.id === activeChatId);
-    if (!chat?.unread) return;
-    const readKey = `${activeChatId}:${chat.unread}`;
+    if (!lineyEngine.isNative || !authenticated || activeChat.id === "__liney__" || !activeMessagesLoaded) return;
+    const target = Number(activeChat.lastMessageTime ?? 0);
+    if (!target || activeMessageLatestTime >= target) {
+      sidebarCatchupRef.current.delete(activeChat.id);
+      return;
+    }
+    const previous = sidebarCatchupRef.current.get(activeChat.id);
+    const attempts = previous?.target === target ? previous.attempts : 0;
+    if (attempts >= 6) return;
+    const timer = window.setTimeout(() => {
+      sidebarCatchupRef.current.set(activeChat.id, { target, attempts: attempts + 1 });
+      setMessageRefreshNonce((value) => value + 1);
+    }, attempts === 0 ? 250 : Math.min(2_000, 500 + attempts * 300));
+    return () => window.clearTimeout(timer);
+  }, [authenticated, activeChat.id, activeChat.lastMessageTime, activeMessagesLoaded, activeMessageLatestTime, messageRefreshNonce]);
+
+  async function markChatReadAtBottom(chat: Chat, lastMessageId?: string) {
+    const unread = chat.unread ?? 0;
+    if (!authenticated || !windowActive || !unread || chat.id === "__liney__") return;
+    const readKey = `${chat.id}:${lastMessageId || unread}`;
     if (readMarkedRef.current.has(readKey)) return;
     readMarkedRef.current.add(readKey);
-    void lineyEngine.request("chat.mark_read", {
-      chatId: chat.id,
-      kind: chat.kind === "openchat" ? "openchat" : "talk",
-    }, 20_000).catch(() => undefined);
-  }, [windowActive, authenticated, activeChatId, liveChats]);
+    clearReadMarks(chat.id);
+    readMarkedRef.current.add(readKey);
+    const previousReadThrough = localReadThroughTimeRef.current.get(chat.id);
+    localReadThroughTimeRef.current.set(chat.id, Math.max(previousReadThrough ?? 0, chat.lastMessageTime ?? Date.now()));
+    setLiveChats((current) => {
+      if (!current) return current;
+      const next = current.map((item) => item.id === chat.id ? { ...item, unread: undefined } : item);
+      liveChatsRef.current = next;
+      return next;
+    });
+    try {
+      await lineyEngine.request("chat.mark_read", {
+        chatId: chat.id,
+        kind: chat.kind === "openchat" ? "openchat" : "talk",
+        ...(lastMessageId ? { messageId: lastMessageId } : {}),
+      }, 20_000);
+    } catch {
+      readMarkedRef.current.delete(readKey);
+      if (previousReadThrough === undefined) localReadThroughTimeRef.current.delete(chat.id);
+      else localReadThroughTimeRef.current.set(chat.id, previousReadThrough);
+      setLiveChats((current) => current?.map((item) => item.id === chat.id
+        ? { ...item, unread: Math.max(item.unread ?? 0, unread) }
+        : item) ?? current);
+    }
+  }
+
+  async function refreshTalkReadState(chatId: string, messages: Message[], requestGeneration: number) {
+    const messageIds = [...new Set(messages
+      .filter((message) => message.author === "me" && /^\d+$/.test(message.id))
+      .map((message) => message.id))];
+    if (!messageIds.length) return;
+    try {
+      const states = await lineyEngine.request<LiveMessageReadState[]>("message.read_state", {
+        chatId,
+        kind: "talk",
+        messageIds,
+      }, 20_000);
+      if (messageLoadGenerationRef.current.get(chatId) !== requestGeneration) return;
+      const byId = new Map(states.map((state) => [state.messageId, state]));
+      const roomReaders = sessionReadReadersRef.current.get(chatId) ?? new Map<string, Set<string>>();
+      sessionReadReadersRef.current.set(chatId, roomReaders);
+      setMessageMap((current) => {
+        if (messageLoadGenerationRef.current.get(chatId) !== requestGeneration) return current;
+        const existing = current[chatId];
+        if (!existing) return current;
+        let changed = false;
+        const nextMessages = existing.map((message) => {
+          if (message.author !== "me") return message;
+          const state = byId.get(message.id);
+          if (!state) return message;
+          const readers = roomReaders.get(message.id) ?? new Set<string>();
+          for (const readerMid of state.readerMids ?? []) {
+            if (readerMid) readers.add(readerMid);
+          }
+          if (readers.size) roomReaders.set(message.id, readers);
+          const readCount = Math.max(message.readCount ?? 0, state.readCount, readers.size);
+          if (readCount === (message.readCount ?? 0) && Boolean(message.readByPeer) === (readCount > 0)) return message;
+          changed = true;
+          return { ...message, readCount, readByPeer: readCount > 0 };
+        });
+        if (!changed) return current;
+        const nextState = { ...current, [chatId]: nextMessages };
+        messageMapRef.current = nextState;
+        return nextState;
+      });
+    } catch {
+      // Read ranges are supplementary metadata. Cached history must stay usable
+      // when the endpoint is unavailable or the session is briefly offline.
+    }
+  }
 
   useEffect(() => {
-    if (!authenticated || !liveChats || !activeChatId) return;
+    if (!lineyEngine.isNative || !authenticated || !settings.openchat || !settings.openchatRealtimeRefresh) return;
+    const listTimer = window.setInterval(() => { void loadLiveChats(); }, 12_000);
+    return () => window.clearInterval(listTimer);
+  }, [authenticated, settings.openchat, settings.openchatRealtimeRefresh]);
+
+  useEffect(() => {
+    if (!lineyEngine.isNative || !authenticated || activeChat.kind !== "openchat" || !settings.openchatRealtimeRefresh) return;
+    const messageTimer = window.setInterval(() => setMessageRefreshNonce((value) => value + 1), 4_000);
+    return () => window.clearInterval(messageTimer);
+  }, [authenticated, activeChat.id, activeChat.kind, settings.openchatRealtimeRefresh]);
+
+  useEffect(() => {
+    if (!lineyEngine.isNative || !liveChats || !activeChatId) return;
     const chat = [...liveChats, ...(liveFriends ?? [])].find((item) => item.id === activeChatId);
     if (!chat) return;
     const requestGeneration = (messageLoadGenerationRef.current.get(chat.id) ?? 0) + 1;
     messageLoadGenerationRef.current.set(chat.id, requestGeneration);
 
+    const catchup = sidebarCatchupRef.current.get(chat.id);
+    const forceRefresh = Boolean(catchup)
+      || (chat.kind === "openchat" && settingsRef.current.openchatRealtimeRefresh && messageRefreshNonce > 0);
     void lineyEngine
       .request<LiveMessageResult[]>("message.list", {
         chatId: chat.id,
         kind: chat.kind === "openchat" ? "openchat" : "talk",
         limit: chat.kind === "openchat" ? 40 : 50,
+        ...(forceRefresh ? { refresh: true } : {}),
       }, chat.kind === "openchat" ? 45_000 : 30_000)
       .then((list) => {
         if (messageLoadGenerationRef.current.get(chat.id) !== requestGeneration) return;
@@ -988,20 +1456,57 @@ function MainApp() {
           time: formatTime(item.createdTime),
           createdTime: item.createdTime,
           contentType: item.contentType,
+          readCount: Math.max(0, Number(item.readCount ?? 0)),
+          readByPeer: Number(item.readCount ?? 0) > 0,
+          edited: item.edited,
+          updatedTime: item.updatedTime,
           filename: item.filename,
           senderId: item.senderId,
           senderName: item.senderName,
           senderAvatarUrl: item.senderAvatarUrl,
+          officialClientUrl: item.officialClientUrl,
+          isOfficialAccount: item.isOfficialAccount,
           stickerUrl: item.stickerUrl,
           flex: item.flex,
-          rich: item.rich,
-          postNotification: item.postNotification,
-          reactions: item.reactions,
+           rich: item.rich,
+           postNotification: item.postNotification,
+           call: item.call,
+           reactions: item.reactions,
           replyTo: item.replyTo ?? (item.replyToId ? { id: item.replyToId, text: "ข้อความ" } : undefined),
           replyToId: item.replyToId,
           unsent: item.unsent,
           status: item.status ?? "sent",
         }));
+        const existingSnapshot = messageMapRef.current[chat.id] ?? [];
+        const existingIds = new Set(existingSnapshot.map((item) => item.id));
+        const previousNewestTime = existingSnapshot.reduce((latest, item) => Math.max(latest, Number(item.createdTime ?? 0)), 0);
+        let discoveredUnread = 0;
+        if (previousNewestTime > 0) {
+          for (const item of baseMapped) {
+            if (item.author !== "them" || existingIds.has(item.id) || Number(item.createdTime ?? 0) <= previousNewestTime) continue;
+            const key = `${chat.id}:${item.id}`;
+            if (historyDiscoveredMessageIdsRef.current.has(key)) continue;
+            historyDiscoveredMessageIdsRef.current.add(key);
+            discoveredUnread += 1;
+          }
+        }
+        if (discoveredUnread > 0) {
+          const latestRemote = sorted.at(-1);
+          const latestPreview = latestRemote ? liveMessagePreview(latestRemote) : chat.subtitle;
+          const latestTime = Number(latestRemote?.createdTime ?? chat.lastMessageTime ?? Date.now());
+          setLiveChats((current) => {
+            if (!current) return current;
+            const next = sortLiveChats(current.map((item) => item.id === chat.id ? {
+              ...item,
+              subtitle: latestPreview || item.subtitle,
+              time: formatListTime(latestTime),
+              lastMessageTime: Math.max(item.lastMessageTime ?? 0, latestTime),
+              unread: (item.unread ?? 0) + discoveredUnread,
+            } : item));
+            liveChatsRef.current = next;
+            return next;
+          });
+        }
         setMessageMap((current) => {
           if (messageLoadGenerationRef.current.get(chat.id) !== requestGeneration) return current;
           const existing = current[chat.id] ?? [];
@@ -1013,9 +1518,11 @@ function MainApp() {
             const previous = previousById.get(item.id);
             const keepImage = Boolean(previous?.image)
               && (chat.kind !== "openchat" || settingsRef.current.autoMedia);
+            const readCount = Math.max(item.readCount ?? 0, previous?.readCount ?? 0);
+            const readState = readCount > 0 || previous?.readByPeer ? { readByPeer: true, readCount } : {};
             return keepImage
-              ? { ...item, image: previous?.image, text: undefined, ...(previous?.readByPeer ? { readByPeer: true } : {}) }
-              : previous?.readByPeer ? { ...item, readByPeer: true } : item;
+              ? { ...item, image: previous?.image, text: undefined, ...readState }
+              : { ...item, ...readState };
           });
           const serverIds = new Set(mapped.map((item) => item.id));
           const newestServerTime = mapped.reduce((max, item) => Math.max(max, item.createdTime ?? 0), 0);
@@ -1030,8 +1537,11 @@ function MainApp() {
           });
           const merged = [...mapped, ...localOnly]
             .sort((a, b) => (a.createdTime ?? 0) - (b.createdTime ?? 0));
-          return { ...current, [chat.id]: merged };
+          const nextState = { ...current, [chat.id]: merged };
+          messageMapRef.current = nextState;
+          return nextState;
         });
+        if (chat.kind !== "openchat") void refreshTalkReadState(chat.id, baseMapped, requestGeneration);
         void hydrateImagePreviews(chat.id, sorted, chat.kind === "openchat" ? "openchat" : "talk", requestGeneration);
       })
       .catch((error) => {
@@ -1040,7 +1550,7 @@ function MainApp() {
         setMessageMap((current) => current[chat.id] ? current : ({ ...current, [chat.id]: [] }));
         setAuthError(error instanceof Error ? error.message : String(error));
       });
-  }, [activeChatId, authenticated, liveChats, liveFriends, settings.autoMedia]);
+  }, [activeChatId, authenticated, liveChats, liveFriends, settings.autoMedia, messageRefreshNonce]);
 
   async function hydrateImagePreview(
     chatId: string,
@@ -1118,9 +1628,12 @@ function MainApp() {
 
   async function loadLiveChats() {
     const requestGeneration = ++liveChatsLoadGenerationRef.current;
+    const includeOpenchat = settingsRef.current.openchat;
     const [talkResult, squareResult] = await Promise.allSettled([
       lineyEngine.request<LiveChatResult[]>("chats.list", {}, 45_000),
-      lineyEngine.request<LiveChatResult[]>("openchat.list", {}, 45_000),
+      includeOpenchat
+        ? lineyEngine.request<LiveChatResult[]>("openchat.list", {}, 45_000)
+        : Promise.resolve<LiveChatResult[]>([]),
     ]);
     if (liveChatsLoadGenerationRef.current !== requestGeneration) return;
     const talkSucceeded = talkResult.status === "fulfilled" && Array.isArray(talkResult.value);
@@ -1134,39 +1647,27 @@ function MainApp() {
     const preserved = previous.filter((chat) => {
       if (remoteIds.has(chat.id)) return false;
       const isOpenChat = chat.kind === "openchat";
+      if (isOpenChat && !includeOpenchat) return false;
       const keepCategory = isOpenChat
         ? !squareSucceeded || square.length === 0 || square.length < previousSquareCount
         : !talkSucceeded || talk.length === 0 || talk.length < previousTalkCount;
       return keepCategory;
     });
-    const mappedRemote = [...talk, ...square]
-      .map<Chat>((item, index) => ({
-        id: item.id,
-        name: item.name,
-        subtitle: item.preview || (item.kind === "openchat" ? "OpenChat" : item.kind === "dm" ? "เพื่อน · LINE" : "กลุ่ม · LINE"),
-        detail: item.kind === "openchat"
-          ? `OpenChat${item.memberCount ? ` · ${item.memberCount.toLocaleString("th-TH")} คน` : ""}`
-          : item.kind === "dm" ? "เพื่อน · LINE" : "กลุ่ม · LINE",
-        time: formatListTime(item.lastMessageTime ?? 0),
-        unread: item.unread || undefined,
-        kind: item.kind,
-        avatar: initials(item.name),
-        avatarUrl: item.avatarUrl || undefined,
-        accent: avatarColor(index),
-        lastMessageTime: item.lastMessageTime ?? 0,
-        pinned: item.pinned,
-        favoriteTimestamp: item.favoriteTimestamp,
-      }));
+    const previousById = new Map(previous.map((chat) => [chat.id, chat]));
+    const mappedRemote = [...talk, ...square].map((item, index) => {
+      const mapped = mapLiveChatResult(item, index);
+      const prior = previousById.get(mapped.id);
+      const readThrough = localReadThroughTimeRef.current.get(mapped.id) ?? 0;
+      const unread = (mapped.lastMessageTime ?? 0) <= readThrough
+        ? undefined
+        : Math.max(mapped.unread ?? 0, prior?.unread ?? 0) || undefined;
+      return { ...mapped, unread };
+    });
     const mappedById = new Map<string, Chat>();
     for (const chat of [...mappedRemote, ...preserved]) {
       if (!mappedById.has(chat.id)) mappedById.set(chat.id, chat);
     }
-    const mapped = [...mappedById.values()]
-      .sort((a, b) => {
-        if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
-        if ((a.favoriteTimestamp ?? 0) !== (b.favoriteTimestamp ?? 0)) return (b.favoriteTimestamp ?? 0) - (a.favoriteTimestamp ?? 0);
-        return (b.lastMessageTime ?? 0) - (a.lastMessageTime ?? 0);
-      });
+    const mapped = sortLiveChats([...mappedById.values()]);
     liveChatsRef.current = mapped;
     setLiveChats(mapped);
     setActiveChatId((current) => mapped.some((chat) => chat.id === current)
@@ -1183,29 +1684,28 @@ function MainApp() {
     }
   }
 
+  async function loadCallHistory() {
+    const requestGeneration = ++callHistoryLoadGenerationRef.current;
+    try {
+      const result = await lineyEngine.request<LiveCallHistoryResult[]>("call.history", { limit: 200 }, 20_000);
+      if (callHistoryLoadGenerationRef.current !== requestGeneration) return;
+      setCallHistory(Array.isArray(result) ? result : []);
+    } catch (error) {
+      if (callHistoryLoadGenerationRef.current !== requestGeneration) return;
+      setCallHistory((current) => current ?? []);
+      if (authenticatedRef.current) {
+        const message = error instanceof Error ? error.message : String(error);
+        setAuthError(`โหลดประวัติการโทรไม่สำเร็จ: ${message}`);
+      }
+    }
+  }
+
   async function loadLiveFriends(allowRetry = true) {
     const requestGeneration = ++liveFriendsLoadGenerationRef.current;
     try {
       const result = await lineyEngine.request<LiveChatResult[]>("friends.list", {}, 60_000);
       if (liveFriendsLoadGenerationRef.current !== requestGeneration) return;
-      const mapped = result.map<Chat>((item, index) => ({
-        id: item.id,
-        name: item.name,
-        subtitle: item.statusMessage?.trim() || "เพื่อน · LINE",
-        detail: "เพื่อน · LINE",
-        time: "",
-        kind: "dm",
-        avatar: initials(item.name),
-        avatarUrl: item.avatarUrl || undefined,
-        accent: avatarColor(index),
-        isFavorite: item.isFavorite,
-        favoriteTime: item.favoriteTime,
-      }));
-      mapped.sort((a, b) => {
-        if (Boolean(a.isFavorite) !== Boolean(b.isFavorite)) return a.isFavorite ? -1 : 1;
-        if ((a.favoriteTime ?? 0) !== (b.favoriteTime ?? 0)) return (b.favoriteTime ?? 0) - (a.favoriteTime ?? 0);
-        return a.name.localeCompare(b.name, "th");
-      });
+      const mapped = sortLiveFriends(result.map(mapLiveFriendResult));
       const next = mapped.length || !liveFriendsRef.current ? mapped : liveFriendsRef.current;
       liveFriendsRef.current = next;
       setLiveFriends(next);
@@ -1236,27 +1736,87 @@ function MainApp() {
     const chat = [...(liveChats ?? []), ...(liveFriends ?? [])].find((item) => item.id === chatId);
     setReplyTarget(null);
     setActiveChatId(chatId);
+    setMobileConversationOpen(true);
     if (!chat || !authenticated) return;
 
-    // LINE Desktop clears unread immediately when the conversation is opened.
-    // Keep that responsive UX locally, then persist the read receipt upstream.
-    setLiveChats((current) => current?.map((item) =>
-      item.id === chatId ? { ...item, unread: undefined } : item
-    ) ?? current);
+    // Keep unread state until the viewport reaches the newest message.
+  }
 
-    const currentMessages = messageMap[chatId] ?? [];
-    const lastMessageId = currentMessages.length
-      ? currentMessages[currentMessages.length - 1]?.id
-      : undefined;
-    void lineyEngine.request(
-      "chat.mark_read",
-      {
-        chatId,
-        kind: chat.kind === "openchat" ? "openchat" : "talk",
-        messageId: lastMessageId,
-      },
-      20_000,
-    ).catch(() => undefined);
+  function startDirectChat(friend: Chat) {
+    const draft: Chat = {
+      ...friend,
+      subtitle: friend.subtitle || "เพื่อน · LINE",
+      time: "",
+      lastMessageTime: friend.lastMessageTime ?? 0,
+      unread: undefined,
+      historyState: friend.historyState ?? "new",
+    };
+    setLiveChats((current) => {
+      const existing = current ?? [];
+      if (existing.some((chat) => chat.id === friend.id)) return current ?? existing;
+      const next = sortLiveChats([...existing, draft]);
+      liveChatsRef.current = next;
+      return next;
+    });
+    setSection("messages");
+    setListFilter("all");
+    setQuery("");
+    setReplyTarget(null);
+    setActiveChatId(friend.id);
+    setMobileConversationOpen(true);
+    setNewChatOpen(false);
+  }
+
+  async function addFriendByLineId(userId: string): Promise<Chat> {
+    const result = await lineyEngine.request<LiveChatResult>("friend.add_by_id", { userId }, 45_000);
+    const friend = mapLiveFriendResult(result, liveFriendsRef.current?.length ?? 0);
+    setLiveFriends((current) => {
+      const existing = current ?? [];
+      const next = sortLiveFriends([friend, ...existing.filter((item) => item.id !== friend.id)]);
+      liveFriendsRef.current = next;
+      return next;
+    });
+    return friend;
+  }
+
+  async function createGroupChat(name: string, memberMids: string[]): Promise<Chat> {
+    const result = await lineyEngine.request<LiveChatResult>("chat.create_group", { name, memberMids }, 60_000);
+    if (!result?.id) throw new Error("LINE ไม่ส่งรหัสกลุ่มกลับมา");
+    const group = mapLiveChatResult({ ...result, kind: "group" }, liveChatsRef.current?.length ?? 0);
+    setLiveChats((current) => {
+      const existing = current ?? [];
+      const next = sortLiveChats([group, ...existing.filter((item) => item.id !== group.id)]);
+      liveChatsRef.current = next;
+      return next;
+    });
+    setSection("messages");
+    setListFilter("all");
+    setQuery("");
+    setReplyTarget(null);
+    setActiveChatId(group.id);
+    setMobileConversationOpen(true);
+    setNewChatOpen(false);
+    return group;
+  }
+
+  async function createOpenChatRoom(name: string, description: string, searchable: boolean): Promise<Chat> {
+    const result = await lineyEngine.request<LiveChatResult>("openchat.create", { name, description, searchable }, 60_000);
+    if (!result?.id) throw new Error("LINE ไม่ส่งรหัส OpenChat กลับมา");
+    const room = mapLiveChatResult({ ...result, kind: "openchat" }, liveChatsRef.current?.length ?? 0);
+    setLiveChats((current) => {
+      const existing = current ?? [];
+      const next = sortLiveChats([room, ...existing.filter((item) => item.id !== room.id)]);
+      liveChatsRef.current = next;
+      return next;
+    });
+    setSection("openchat");
+    setListFilter("all");
+    setQuery("");
+    setReplyTarget(null);
+    setActiveChatId(room.id);
+    setMobileConversationOpen(true);
+    setNewChatOpen(false);
+    return room;
   }
 
   function startQrLogin() {
@@ -1333,11 +1893,28 @@ function MainApp() {
       [chatId]: [...(current[chatId] ?? []), message],
     }));
     // Update the sidebar immediately too; do not wait for LINE's list endpoint.
-    setLiveChats((current) => current?.map((chat) =>
-      chat.id === chatId
-        ? { ...chat, subtitle: text.replace(/\s+/g, " ").trim(), time: formatListTime(now), lastMessageTime: now, unread: undefined }
-        : chat
-    ) ?? current);
+    // A direct chat can be started from the friend picker before LINE has ever
+    // created a recent-conversation row, so insert that row on first send.
+    setLiveChats((current) => {
+      const existing = current ?? [];
+      const preview = text.replace(/\s+/g, " ").trim();
+      if (existing.some((chat) => chat.id === chatId)) {
+        const next = sortLiveChats(existing.map((chat) =>
+          chat.id === chatId
+            ? { ...chat, subtitle: preview, time: formatListTime(now), lastMessageTime: now, unread: undefined, historyState: "available" }
+            : chat
+        ));
+        liveChatsRef.current = next;
+        return next;
+      }
+      const friend = liveFriendsRef.current?.find((item) => item.id === chatId);
+      const nextChat: Chat = friend
+        ? { ...friend, subtitle: preview, time: formatListTime(now), lastMessageTime: now, unread: undefined, historyState: "available" }
+        : { ...activeChat, subtitle: preview, time: formatListTime(now), lastMessageTime: now, unread: undefined, historyState: "available" };
+      const next = sortLiveChats([...existing, nextChat]);
+      liveChatsRef.current = next;
+      return next;
+    });
     if (textOverride === undefined) setComposer("");
     setReplyTarget(null);
     try {
@@ -1378,18 +1955,20 @@ function MainApp() {
     const id = crypto.randomUUID();
     const now = Date.now();
     const chatId = activeChat.id;
+    const chatKind = activeChat.kind;
     const stickerUrl = `https://stickershop.line-scdn.net/stickershop/v1/sticker/${encodeURIComponent(sticker.stickerId)}/android/${sticker.option === "A" ? "sticker_animation.png" : "sticker.png"}`;
     setMessageMap((current) => ({
       ...current,
       [chatId]: [...(current[chatId] ?? []), { id, author: "me", time: formatTime(now), createdTime: now, contentType: 7, stickerUrl, status: "sending" }],
     }));
     setLiveChats((current) => current?.map((chat) => chat.id === chatId
-      ? { ...chat, subtitle: "สติกเกอร์", time: formatListTime(now), lastMessageTime: now, unread: undefined }
+      ? { ...chat, subtitle: "สติกเกอร์", time: formatListTime(now), lastMessageTime: now, unread: undefined, historyState: "available" }
       : chat) ?? current);
+    setReplyTarget(null);
     try {
       await lineyEngine.request("message.sendSticker", {
         chatId,
-        kind: activeChat.kind === "openchat" ? "openchat" : "talk",
+        kind: chatKind === "openchat" ? "openchat" : "talk",
         packageId: sticker.packageId,
         stickerId: sticker.stickerId,
         version: sticker.version,
@@ -1407,19 +1986,27 @@ function MainApp() {
   }
 
   async function sendLineEmoji(emoji: RecentEmoji) {
-    if (!authenticated || activeChat.id === "__liney__") return;
+    if (!authenticated || activeChat.id === "__liney__") {
+      setAuthOpen(true);
+      return;
+    }
     const id = crypto.randomUUID();
     const now = Date.now();
     const chatId = activeChat.id;
+    const chatKind = activeChat.kind;
     const emojiUrl = `https://stickershop.line-scdn.net/sticonshop/v1/sticon/${encodeURIComponent(emoji.productId)}/android/${encodeURIComponent(emoji.sticonId)}.png`;
     setMessageMap((current) => ({
       ...current,
       [chatId]: [...(current[chatId] ?? []), { id, author: "me", time: formatTime(now), createdTime: now, emojiUrl, status: "sending" }],
     }));
+    setLiveChats((current) => current?.map((chat) => chat.id === chatId
+      ? { ...chat, subtitle: "LINE Emoji", time: formatListTime(now), lastMessageTime: now, unread: undefined, historyState: "available" }
+      : chat) ?? current);
+    setReplyTarget(null);
     try {
       await lineyEngine.request("message.sendEmoji", {
         chatId,
-        kind: activeChat.kind === "openchat" ? "openchat" : "talk",
+        kind: chatKind === "openchat" ? "openchat" : "talk",
         productId: emoji.productId,
         sticonId: emoji.sticonId,
         version: emoji.version,
@@ -1428,6 +2015,7 @@ function MainApp() {
         createdAt: now,
       }, 45_000);
       setMessageMap((current) => ({ ...current, [chatId]: (current[chatId] ?? []).map((item) => item.id === id ? { ...item, status: "sent" } : item) }));
+      window.setTimeout(() => void loadLiveChats(), 700);
     } catch (error) {
       const uncertain = error instanceof EngineRequestError && error.code === "TIMEOUT";
       setMessageMap((current) => ({ ...current, [chatId]: (current[chatId] ?? []).map((item) => item.id === id ? { ...item, status: uncertain ? "unknown" : "error" } : item) }));
@@ -1462,6 +2050,18 @@ function MainApp() {
     } catch {
       setAuthError("ลิงก์ใน Flex Message ไม่ปลอดภัยหรือไม่ถูกต้อง");
     }
+  }
+
+  function openOfficialLineMessage(message: Message) {
+    if (!activeChat.id || activeChat.id === "__liney__" || !message.id) return;
+    const url = message.officialClientUrl || officialLineMessageUrl(activeChat.id, message.id);
+    if (lineyEngine.isNative) {
+      void invoke("open_external_url", { url }).catch((error) => {
+        setAuthError(`เปิดข้อความใน LINE ทางการไม่ได้: ${error instanceof Error ? error.message : String(error)}`);
+      });
+      return;
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
   async function retryMessage(localId: string, chatId: string) {
@@ -1561,6 +2161,12 @@ function MainApp() {
       setAuthOpen(true);
       return;
     }
+    if (activeChat.kind === "openchat" && replyTarget) {
+      // LINEJS documents that OpenChat media is created by OBS reqseq mode,
+      // which has no relatedMessageId slot. Do not silently drop the reply.
+      setAuthError("OpenChat ยังตอบกลับด้วยรูป/วิดีโอ/ไฟล์ไม่ได้ผ่าน LINE protocol ตอนนี้ — ยกเลิกการตอบกลับก่อนส่งสื่อ");
+      return;
+    }
     const filePath = selectedPath || (file as (File & { path?: string }) | null)?.path;
     const filename = file?.name || selectedPath?.split(/[\\/]/).at(-1) || defaultMediaFilename(file?.type);
     const mime = file?.type || mimeFromFilename(filename);
@@ -1599,6 +2205,9 @@ function MainApp() {
       status: "sending",
     };
     setMessageMap((current) => ({ ...current, [chatId]: [...(current[chatId] ?? []), message] }));
+    setLiveChats((current) => current?.map((chat) => chat.id === chatId
+      ? { ...chat, subtitle: mediaLabel(contentType, filename), time: formatListTime(now), lastMessageTime: now, unread: undefined, historyState: "available" }
+      : chat) ?? current);
     setReplyTarget(null);
     try {
       await lineyEngine.request("media.send", {
@@ -1617,6 +2226,7 @@ function MainApp() {
         ...current,
         [chatId]: (current[chatId] ?? []).map((item) => item.id === id ? { ...item, status: "sent" } : item),
       }));
+      window.setTimeout(() => void loadLiveChats(), 700);
     } catch (error) {
       const uncertain = error instanceof EngineRequestError && error.code === "TIMEOUT";
       setMessageMap((current) => ({
@@ -1682,6 +2292,8 @@ function MainApp() {
       liveFriendsLoadGenerationRef.current += 1;
       liveChatsRef.current = null;
       liveFriendsRef.current = null;
+      authenticatedRef.current = false;
+      liveChatEventGenerationRef.current.clear();
       setAuthenticated(false);
       setLiveChats([]);
       setProfile(null);
@@ -1689,6 +2301,7 @@ function MainApp() {
       setMediaProgress({});
       setReplyTarget(null);
       setActiveChatId("");
+      setMobileConversationOpen(false);
       setAuthOpen(false);
     }
   }
@@ -1724,8 +2337,9 @@ function MainApp() {
     setCallError("");
     setCallState("connecting");
     try {
-      await lineyEngine.request("call.accept", {}, 60_000);
-      setCallState("in-call");
+      const result = await lineyEngine.request<{ callId?: string; state?: CallState }>("call.accept", {}, 60_000);
+      if (result?.callId) setCallId(result.callId);
+      setCallState(result?.state ?? "in-call");
     } catch (error) {
       setCallState("failed");
       setCallError(error instanceof Error ? error.message : String(error));
@@ -1768,7 +2382,15 @@ function MainApp() {
   }
 
   function updateAppSettings(key: keyof AppSettings, value: boolean) {
+    if (key === "openchat") settingsRef.current = { ...settingsRef.current, openchat: value };
     updateSetting(key, value);
+    const selectedChat = [...(liveChatsRef.current ?? []), ...(liveFriendsRef.current ?? [])]
+      .find((chat) => chat.id === activeChatRef.current);
+    if (key === "openchat" && !value && selectedChat?.kind === "openchat") {
+      const fallback = liveChatsRef.current?.find((chat) => chat.kind !== "openchat") ?? liveFriendsRef.current?.[0];
+      setActiveChatId(fallback?.id ?? "");
+    }
+    if (key === "openchat" && value) void loadLiveChats();
   }
 
   async function clearLocalHistory() {
@@ -1793,12 +2415,88 @@ function MainApp() {
     }
   }
 
+  async function startFullSync() {
+    if (!authenticated) return;
+    setAuthError("");
+    try {
+      await lineyEngine.request("sync.start", {}, 15 * 60_000);
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function cancelFullSync() {
+    let cancelled = false;
+    try {
+      const result = await lineyEngine.request<{ cancelled?: boolean }>("sync.cancel", {}, 10_000);
+      cancelled = Boolean(result?.cancelled);
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : String(error));
+    }
+    if (!cancelled) return;
+    setSyncStatus("");
+    setSyncProgress((current) => ({ ...current, visible: false }));
+    void loadLiveChats();
+    void loadLiveFriends();
+  }
+
   async function openImageViewer(dataUrl: string) {
     if (!dataUrl || dataUrl === "food") return;
-    // The thumbnail is already loaded by this WebKit view. Opening here avoids
-    // the Linux WebKitGTK cross-window storage boundary that caused silent opens.
-    setImageViewerSrc(dataUrl);
+    const loadedImages = (activeMessages ?? [])
+      .filter((message) => Boolean(message.image && message.image !== "food"))
+      .map((message) => ({ id: message.id, src: message.image!, time: message.time }));
+    const currentIndex = Math.max(0, loadedImages.findIndex((item) => item.src === dataUrl));
+    const windowStart = Math.max(0, Math.min(currentIndex - 12, Math.max(0, loadedImages.length - 30)));
+    const items = loadedImages.length
+      ? loadedImages.slice(windowStart, windowStart + 30)
+      : [{ id: `image-${Date.now()}`, src: dataUrl }];
+    const payload: ImageGalleryPayload = {
+      title: activeChat.name || "รูปภาพ",
+      index: Math.max(0, items.findIndex((item) => item.src === dataUrl)),
+      loop: settingsRef.current.loopImageGallery,
+      items,
+    };
+
+    if (!lineyEngine.isNative || !settingsRef.current.openImagesInWindow) {
+      setImageViewerSrc(dataUrl);
+      return;
+    }
+
+    imageGalleryPayloadRef.current = payload;
+    try {
+      const existing = await WebviewWindow.getByLabel("image-viewer");
+      if (existing) {
+        await emitTo("image-viewer", "liney://image-gallery", payload);
+        await existing.show();
+        await existing.setFocus();
+        return;
+      }
+      const viewer = new WebviewWindow("image-viewer", {
+        url: "/?liney-view=image-viewer",
+        title: `Liney · ${payload.title}`,
+        width: 1120,
+        height: 780,
+        minWidth: 680,
+        minHeight: 480,
+        center: true,
+        resizable: true,
+      });
+      viewer.once("tauri://created", () => { void viewer.setFocus(); });
+      viewer.once("tauri://error", () => setImageViewerSrc(dataUrl));
+    } catch {
+      setImageViewerSrc(dataUrl);
+    }
   }
+
+  useEffect(() => {
+    if (!lineyEngine.isNative) return;
+    let unlisten: (() => void) | undefined;
+    void listen("liney://image-viewer-ready", () => {
+      const payload = imageGalleryPayloadRef.current;
+      if (payload) void emitTo("image-viewer", "liney://image-gallery", payload);
+    }).then((fn) => { unlisten = fn; });
+    return () => unlisten?.();
+  }, []);
 
   const renderAuthDialog = (required: boolean) => (
     <AuthModal
@@ -1836,12 +2534,12 @@ function MainApp() {
   }
 
   if (lineyEngine.isNative && authenticated && syncProgress.visible && syncProgress.phase !== "error") {
-    return <FullSyncGate progress={syncProgress} />;
+    return <FullSyncGate progress={syncProgress} onCancel={() => void cancelFullSync()} />;
   }
 
   return (
-    <div className="app-shell">
-      <NavRail section={section} onSection={(next) => { setSection(next); setListFilter("all"); }} onSettings={() => setSettingsOpen(true)} onProfile={() => setAuthOpen(true)} authenticated={authenticated} openchatEnabled={settings.openchat} />
+    <div className={`app-shell ${mobileConversationOpen ? "mobile-conversation-open" : ""}`}>
+      <NavRail section={section} onSection={(next) => { setSection(next); setListFilter("all"); setMobileConversationOpen(false); setReplyTarget(null); }} onNotifications={() => { setSection("messages"); setListFilter("unread"); setMobileConversationOpen(false); setReplyTarget(null); }} onSettings={() => { setSettingsInitialTab("ทั่วไป"); setSettingsOpen(true); }} onProfile={() => setAuthOpen(true)} authenticated={authenticated} openchatEnabled={settings.openchat} unreadCount={totalUnread} />
       <ChatList
         section={section}
         chats={visibleChats}
@@ -1852,6 +2550,7 @@ function MainApp() {
         filter={listFilter}
         onFilter={setListFilter}
         onTogglePin={toggleLocalPin}
+        onCreate={() => setNewChatOpen(true)}
       />
       <Conversation
         key={activeChat.id}
@@ -1874,23 +2573,105 @@ function MainApp() {
         onReply={beginReply}
         onDeleteForMe={(message) => void deleteMessageForMe(message)}
         onUnsend={(message) => void unsendMessage(message)}
+        onOpenOfficialMessage={openOfficialLineMessage}
         replyTarget={replyTarget}
         onCancelReply={() => setReplyTarget(null)}
-        canSend={authenticated && activeChat.id !== "__liney__"}
+        onBack={() => { setMobileConversationOpen(false); setReplyTarget(null); }}
+         canSend={authenticated && activeChat.id !== "__liney__"}
         callAvailable={callAvailable && activeChat.kind === "dm"}
-        onCall={() => void startCall()}
+          onCall={() => void startCall()}
+        windowActive={windowActive}
+        markReadOnBottom={settings.markReadOnBottom}
+        showUnreadDivider={settings.showUnreadDivider}
+        autoScrollNewMessages={settings.autoScrollNewMessages}
+        showReadCount={settings.showReadCount}
+        onReadLatest={(lastMessageId) => void markChatReadAtBottom(activeChat, lastMessageId)}
         jumpToMessageId={notificationJump?.chatId === activeChat.id ? notificationJump.messageId : undefined}
         jumpNonce={notificationJump?.chatId === activeChat.id ? notificationJump.nonce : 0}
       />
       <EnginePill state={engineState} version={engineVersion} authenticated={authenticated} syncStatus={syncStatus} onClick={() => setAuthOpen(true)} />
 
       <AnimatePresence>
+        {newChatOpen && (
+          <NewChatModal
+            friends={allFriends}
+            onStartChat={startDirectChat}
+            onAddFriend={addFriendByLineId}
+            onCreateGroup={createGroupChat}
+            onCreateOpenChat={createOpenChatRoom}
+            onClose={() => setNewChatOpen(false)}
+          />
+        )}
         {imageViewerSrc && <ImageViewerOverlay src={imageViewerSrc} onClose={() => setImageViewerSrc(null)} />}
-        {settingsOpen && <SettingsModal themeMode={themeMode} dark={dark} settings={settings} callAvailable={callAvailable} onThemeMode={setThemeMode} onSetting={updateAppSettings} onDensity={(value) => updateSetting("density", value)} onRadius={(value) => updateSetting("radius", value)} onClearHistory={() => void clearLocalHistory()} onClearStickerCache={() => void clearStickerCache()} onClose={() => setSettingsOpen(false)} />}
+        {settingsOpen && <SettingsModal initialTab={settingsInitialTab} themeMode={themeMode} dark={dark} settings={settings} callAvailable={callAvailable} onThemeMode={setThemeMode} onSetting={updateAppSettings} onDensity={(value) => updateSetting("density", value)} onRadius={(value) => updateSetting("radius", value)} onClearHistory={() => void clearLocalHistory()} onClearStickerCache={() => void clearStickerCache()} onFullSync={() => void startFullSync()} onClose={() => setSettingsOpen(false)} />}
         {callOpen && <CallModal chat={activeChat} peer={callPeer} state={callState} muted={callMuted} error={callError} incomingSupported={callIncomingAvailable} outputDevices={callOutputs} outputTarget={callOutputTarget} onAccept={() => void acceptCall()} onReject={() => void rejectCall()} onMute={() => void toggleCallMute()} onOutput={(target) => void changeCallOutput(target)} onClose={() => void endCall()} />}
         {authOpen && renderAuthDialog(false)}
       </AnimatePresence>
     </div>
+  );
+}
+
+function DetachedImageViewer() {
+  const [gallery, setGallery] = useState<ImageGalleryPayload | null>(null);
+  const [index, setIndex] = useState(0);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<ImageGalleryPayload>("liney://image-gallery", (event) => {
+      const payload = event.payload;
+      if (!payload?.items?.length) return;
+      setGallery(payload);
+      setIndex(Math.min(Math.max(0, payload.index ?? 0), payload.items.length - 1));
+      document.title = `Liney · ${payload.title || "รูปภาพ"}`;
+    }).then((fn) => {
+      unlisten = fn;
+      void emitTo("main", "liney://image-viewer-ready");
+    });
+    return () => unlisten?.();
+  }, []);
+
+  const move = useCallback((delta: number) => {
+    if (!gallery?.items.length) return;
+    setIndex((current) => {
+      const next = current + delta;
+      if (gallery.loop) return (next + gallery.items.length) % gallery.items.length;
+      return Math.min(Math.max(next, 0), gallery.items.length - 1);
+    });
+  }, [gallery]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "ArrowLeft") move(-1);
+      else if (event.key === "ArrowRight") move(1);
+      else if (event.key === "Escape") void getCurrentWindow().close();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [move]);
+
+  if (!gallery?.items.length) {
+    return <main className="detached-image-viewer loading"><LoaderCircle className="spin" size={24} /><span>กำลังเปิดรูปภาพ…</span></main>;
+  }
+  const item = gallery.items[index];
+  const hasPrevious = gallery.loop || index > 0;
+  const hasNext = gallery.loop || index < gallery.items.length - 1;
+  return (
+    <main className="detached-image-viewer">
+      <header className="detached-image-header">
+        <div><strong>{gallery.title}</strong><span>{index + 1} / {gallery.items.length}{item.time ? ` · ${item.time}` : ""}</span></div>
+        <button className="icon-button" type="button" title="ปิด" onClick={() => void getCurrentWindow().close()}><X size={19} /></button>
+      </header>
+      <section className="detached-image-stage">
+        <button className="gallery-nav previous" type="button" aria-label="รูปก่อนหน้า" disabled={!hasPrevious} onClick={() => move(-1)}><ArrowLeft size={24} /></button>
+        <motion.img key={item.id} src={item.src} alt="รูปภาพ" initial={{ opacity: 0, scale: .985 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: .16 }} />
+        <button className="gallery-nav next" type="button" aria-label="รูปถัดไป" disabled={!hasNext} onClick={() => move(1)}><ArrowLeft size={24} /></button>
+      </section>
+      <footer className="detached-image-strip">
+        {gallery.items.map((thumb, thumbIndex) => (
+          <button key={thumb.id} className={thumbIndex === index ? "active" : ""} type="button" onClick={() => setIndex(thumbIndex)}><img src={thumb.src} alt="" loading="lazy" /></button>
+        ))}
+      </footer>
+    </main>
   );
 }
 
@@ -2080,7 +2861,7 @@ function ImageViewerOverlay({ src, onClose }: { src: string; onClose: () => void
   );
 }
 
-function NavRail({ section, onSection, onSettings, onProfile, authenticated, openchatEnabled }: { section: Section; onSection: (s: Section) => void; onSettings: () => void; onProfile: () => void; authenticated: boolean; openchatEnabled: boolean }) {
+function NavRail({ section, onSection, onNotifications, onSettings, onProfile, authenticated, openchatEnabled, unreadCount }: { section: Section; onSection: (s: Section) => void; onNotifications: () => void; onSettings: () => void; onProfile: () => void; authenticated: boolean; openchatEnabled: boolean; unreadCount: number }) {
   return (
     <aside className="nav-rail">
       <button className={`brand-orb ${authenticated ? "connected" : ""}`} aria-label="Liney account" onClick={onProfile}>
@@ -2104,9 +2885,9 @@ function NavRail({ section, onSection, onSettings, onProfile, authenticated, ope
         })}
       </div>
       <div className="nav-bottom">
-        <button className="rail-button" title="การแจ้งเตือน">
+        <button className="rail-button" onClick={onNotifications} title={unreadCount ? `ยังไม่อ่าน ${unreadCount} ข้อความ` : "ไม่มีข้อความที่ยังไม่อ่าน"}>
           <Bell size={19} />
-          <span className="status-dot" />
+          {unreadCount > 0 ? <span className="nav-unread-badge">{unreadCount > 99 ? "99+" : unreadCount}</span> : null}
         </button>
         <button className="rail-button" onClick={onSettings} title="ตั้งค่า">
           <Settings size={19} />
@@ -2126,6 +2907,7 @@ function ChatList({
   filter,
   onFilter,
   onTogglePin,
+  onCreate,
 }: {
   section: Section;
   chats: Chat[];
@@ -2136,6 +2918,7 @@ function ChatList({
   filter: "all" | "unread" | "pinned" | "favorites";
   onFilter: (filter: "all" | "unread" | "pinned" | "favorites") => void;
   onTogglePin: (id: string) => void;
+  onCreate: () => void;
 }) {
   const [contextMenu, setContextMenu] = useState<{ chat: Chat; x: number; y: number } | null>(null);
   useEffect(() => {
@@ -2156,7 +2939,7 @@ function ChatList({
           <p className="eyebrow">LINE DESKTOP</p>
           <h1>{title}</h1>
         </div>
-        <button className="icon-button" type="button" disabled title="สร้างแชตใหม่ยังไม่รองรับ"><Plus size={19} /></button>
+        <button className="icon-button" type="button" onClick={onCreate} title="เริ่มแชตใหม่"><Plus size={19} /></button>
       </header>
       <div className="search-box">
         <Search size={16} />
@@ -2234,7 +3017,13 @@ function Avatar({ chat, size = "normal" }: { chat: Chat; size?: "normal" | "larg
   return (
     <span className={`avatar ${size === "large" ? "avatar-large" : ""}`} style={{ "--avatar-color": chat.accent } as React.CSSProperties}>
       {chat.avatarUrl && !failed ? (
-        <img src={chat.avatarUrl} alt="" loading="lazy" onError={() => setFailed(true)} />
+        <RemoteImage
+          src={chat.avatarUrl}
+          alt={chat.name}
+          loading="lazy"
+          fallback={chat.avatar}
+          onStatus={(status) => { if (status === "failed") setFailed(true); }}
+        />
       ) : chat.avatar}
       {chat.kind === "openchat" ? <span className="openchat-mark"><Sparkles size={11} strokeWidth={2.5} /></span> : null}
     </span>
@@ -2259,9 +3048,46 @@ function MessageAvatar({ message, chat }: { message: Message; chat: Chat }) {
       style={{ "--avatar-color": senderAccent(message.senderId || name) } as React.CSSProperties}
       title={name}
     >
-      {url && !failed ? <img src={url} alt={name} loading="lazy" onError={() => setFailed(true)} /> : fallback}
+      {url && !failed ? (
+        <RemoteImage
+          src={url}
+          alt={name}
+          loading="lazy"
+          fallback={fallback}
+          onStatus={(status) => { if (status === "failed") setFailed(true); }}
+        />
+      ) : fallback}
     </span>
   );
+}
+
+function MessageSenderLabel({ message, chat, onOpenOfficialMessage }: { message: Message; chat: Chat; onOpenOfficialMessage: (message: Message) => void }) {
+  if (message.author !== "them" || chat.kind === "dm") return null;
+  const name = String(message.senderName ?? "").trim() || "LINE User";
+  return (
+    <div className="message-sender-name">
+      {message.isOfficialAccount ? (
+        <button className="message-sender-link" type="button" title="เปิดข้อความนี้ใน LINE ทางการ" onClick={() => onOpenOfficialMessage(message)}>{name}</button>
+      ) : name}
+    </div>
+  );
+}
+
+function CallHistoryCard({ data }: { data: NonNullable<Message["call"]> }) {
+  return (
+    <div className={`call-history-card call-history-${data.status}`} role="status">
+      <span className="call-history-icon"><Phone size={17} /></span>
+      <span className="call-history-copy">
+        <strong>{callMessagePreview(data)}</strong>
+        <span>โทรด้วยเสียงผ่าน LINE</span>
+      </span>
+    </div>
+  );
+}
+
+function OfficialMessageFallback({ message, chat, onOpenOfficialMessage }: { message: Message; chat: Chat; onOpenOfficialMessage: (message: Message) => void }) {
+  if (message.author === "me" || chat.kind === "openchat" || !message.isOfficialAccount) return null;
+  return <button className="official-message-link" type="button" title="เปิดข้อความนี้ใน LINE ทางการ" onClick={() => onOpenOfficialMessage(message)}>เปิดข้อความใน LINE ทางการ</button>;
 }
 
 function stickerCandidateUrls(src: string): string[] {
@@ -2385,11 +3211,19 @@ function Conversation({
   onReply,
   onDeleteForMe,
   onUnsend,
+  onOpenOfficialMessage,
   replyTarget,
   onCancelReply,
+  onBack,
   canSend,
   callAvailable,
   onCall,
+  windowActive,
+  markReadOnBottom,
+  showUnreadDivider,
+  autoScrollNewMessages,
+  showReadCount,
+  onReadLatest,
   jumpToMessageId,
   jumpNonce,
 }: {
@@ -2412,16 +3246,26 @@ function Conversation({
   onReply: (message: Message) => void;
   onDeleteForMe: (message: Message) => void | Promise<void>;
   onUnsend: (message: Message) => void | Promise<void>;
+  onOpenOfficialMessage: (message: Message) => void;
   replyTarget: ReplyTarget | null;
   onCancelReply: () => void;
+  onBack: () => void;
   canSend: boolean;
   callAvailable: boolean;
   onCall: () => void;
+  windowActive: boolean;
+  markReadOnBottom: boolean;
+  showUnreadDivider: boolean;
+  autoScrollNewMessages: boolean;
+  showReadCount: boolean;
+  onReadLatest: (lastMessageId?: string) => void;
   jumpToMessageId?: string;
   jumpNonce: number;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messageStageRef = useRef<HTMLDivElement>(null);
+  const unreadDividerRef = useRef<HTMLDivElement>(null);
+  const onReadLatestRef = useRef(onReadLatest);
   const stickToBottomRef = useRef(true);
   const programmaticScrollRef = useRef(false);
   const programmaticScrollTimerRef = useRef<number | null>(null);
@@ -2443,15 +3287,26 @@ function Conversation({
   const [selectedStickerPackId, setSelectedStickerPackId] = useState<string | null>(null);
   const [selectedEmojiPackId, setSelectedEmojiPackId] = useState<string | null>(null);
   const empty = chat.id === "__liney__";
+  const historyState = chat.historyState ?? "available";
+  const lineSystemAccount = chat.id === LINE_SYSTEM_ACCOUNT_MID;
+  const historyUnavailable = historyState === "unavailable";
+  const neverChatted = historyState === "new" && !lineSystemAccount;
   const lastMessage = messages?.at(-1);
   const lastMessageId = lastMessage?.id;
   const lastMessageImage = lastMessage?.image;
   const activeMenuMessage = messages?.find((item) => item.id === messageMenuId);
   const activeMenuMessageId = activeMenuMessage?.id;
   const activeMenuMessageAuthor = activeMenuMessage?.author;
-  const lastReadMineId = messages?.reduce<string | undefined>((latest, message) => (
-    message.author === "me" && message.readByPeer ? message.id : latest
-  ), undefined);
+  const unreadStartIndex = useMemo(() => {
+    const unread = chat.unread ?? 0;
+    if (!messages?.length || unread <= 0) return -1;
+    let remaining = unread;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index].author !== "me") remaining -= 1;
+      if (remaining <= 0) return index;
+    }
+    return 0;
+  }, [chat.unread, messages]);
 
   useEffect(() => {
     if (!jumpToMessageId || !jumpNonce || chat.id === "__liney__") return;
@@ -2579,7 +3434,11 @@ function Conversation({
     };
   }, [activeMenuMessageAuthor, activeMenuMessageId, messageMenuId, reactionMenuId]);
 
-  const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
+  useEffect(() => {
+    onReadLatestRef.current = onReadLatest;
+  }, [onReadLatest]);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     const stage = messageStageRef.current;
     if (!stage) return;
     stickToBottomRef.current = true;
@@ -2589,11 +3448,14 @@ function Conversation({
     }
     stage.scrollTo({ top: stage.scrollHeight, behavior });
     setShowScrollBottom(false);
+    if (markReadOnBottom && windowActive && (chat.unread ?? 0) > 0) {
+      window.setTimeout(() => onReadLatestRef.current(lastMessageId), behavior === "smooth" ? 620 : 0);
+    }
     programmaticScrollTimerRef.current = window.setTimeout(() => {
       programmaticScrollRef.current = false;
       programmaticScrollTimerRef.current = null;
     }, behavior === "smooth" ? 650 : 80);
-  };
+  }, [chat.unread, lastMessageId, markReadOnBottom, windowActive]);
 
   useEffect(() => () => {
     if (programmaticScrollTimerRef.current !== null) {
@@ -2601,16 +3463,26 @@ function Conversation({
     }
   }, []);
 
-  // A newly opened chat should start at the newest message, like LINE Desktop.
+  // Unread rooms open at the first unread message. Once the user reaches the
+  // newest message the divider disappears and the room is acknowledged.
   useLayoutEffect(() => {
-    if (previousChatRef.current !== chat.id) {
+    const changedChat = previousChatRef.current !== chat.id;
+    if (changedChat) {
       previousChatRef.current = chat.id;
+      if ((chat.unread ?? 0) > 0 && showUnreadDivider) {
+        stickToBottomRef.current = false;
+        const frame = requestAnimationFrame(() => {
+          unreadDividerRef.current?.scrollIntoView({ block: "start", behavior: "auto" });
+          setShowScrollBottom(true);
+        });
+        return () => cancelAnimationFrame(frame);
+      }
       stickToBottomRef.current = true;
     }
-    if (!stickToBottomRef.current) return;
+    if (!stickToBottomRef.current || !autoScrollNewMessages) return;
     const frame = requestAnimationFrame(() => scrollToBottom("auto"));
     return () => cancelAnimationFrame(frame);
-  }, [chat.id, messages?.length, lastMessageId, lastMessageImage]);
+  }, [chat.id, chat.unread, messages?.length, lastMessageId, lastMessageImage, showUnreadDivider, autoScrollNewMessages, scrollToBottom]);
 
   // Images/activity cards can change height after render. Keep the viewport pinned
   // only while the user is already following the newest messages.
@@ -2622,7 +3494,7 @@ function Conversation({
     });
     for (const child of Array.from(stage.children)) observer.observe(child);
     return () => observer.disconnect();
-  }, [chat.id, messages?.length]);
+  }, [chat.id, messages?.length, scrollToBottom]);
 
   const handleMessageScroll = () => {
     const stage = messageStageRef.current;
@@ -2639,6 +3511,7 @@ function Conversation({
     if (nearBottom) {
       stickToBottomRef.current = true;
       setShowScrollBottom(false);
+      if (markReadOnBottom && windowActive && (chat.unread ?? 0) > 0) onReadLatestRef.current(lastMessageId);
       return;
     }
 
@@ -2647,6 +3520,17 @@ function Conversation({
     stickToBottomRef.current = false;
     setShowScrollBottom(distanceFromBottom > 140);
   };
+
+  useEffect(() => {
+    if (!markReadOnBottom || !windowActive || (chat.unread ?? 0) <= 0 || !stickToBottomRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      const stage = messageStageRef.current;
+      if (!stage) return;
+      const distanceFromBottom = stage.scrollHeight - stage.scrollTop - stage.clientHeight;
+      if (distanceFromBottom < 72) onReadLatestRef.current(lastMessageId);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [chat.id, chat.unread, lastMessageId, markReadOnBottom, windowActive]);
 
   const stopFollowingBottom = () => {
     stickToBottomRef.current = false;
@@ -2664,6 +3548,7 @@ function Conversation({
   return (
     <main className="conversation-panel">
       <header className="conversation-header">
+        <button className="conversation-back-button" type="button" aria-label="กลับไปยังรายการแชต" title="กลับไปยังรายการแชต" onClick={onBack}><ArrowLeft size={18} /></button>
         <div className="conversation-person">
           <Avatar chat={chat} />
           <div>
@@ -2677,15 +3562,15 @@ function Conversation({
         <div className="header-actions">
           <button className="icon-button" onClick={onCall} title={callAvailable ? "โทรเสียง" : "สายเสียงยังไม่พร้อม"} disabled={!canSend || !callAvailable}><Phone size={18} /></button>
           <button className="icon-button" title="วิดีโอคอลยังไม่รองรับ" disabled><Video size={19} /></button>
-          <button className="icon-button" disabled={empty}><Search size={18} /></button>
-          <button className="icon-button" disabled={empty}><Info size={19} /></button>
+            <button className="icon-button" disabled={empty}><Search size={18} /></button>
+            <button className="icon-button" disabled={empty}><Info size={19} /></button>
         </div>
       </header>
 
       <div className="message-stage-wrap">
       <div
         ref={messageStageRef}
-        className={`message-stage ${empty ? "message-stage-empty" : ""}`}
+         className={`message-stage ${empty ? "message-stage-empty" : ""}`}
         onScroll={handleMessageScroll}
         onWheel={(event) => {
           if (event.deltaY < 0) stopFollowingBottom();
@@ -2712,15 +3597,41 @@ function Conversation({
         ) : messages === undefined ? (
           <div className="message-loading-state"><LoaderCircle size={22} className="spin" /><span>กำลังโหลดข้อความ…</span></div>
         ) : messages.length === 0 ? (
-          <div className="message-list-empty-state">
-            <MessageCircle size={24} />
-            <strong>ยังไม่มีข้อความ</strong>
-            <span>ส่งข้อความแรกเพื่อเริ่มการสนทนา</span>
-          </div>
+          lineSystemAccount ? (
+            <div className="official-client-only-state" role="status">
+              <div className="official-client-icon"><ShieldCheck size={25} /></div>
+              <h3>บัญชีระบบของ LINE</h3>
+              <p>บัญชีนี้ใช้ส่งการแจ้งเตือนระบบและความปลอดภัย โดย Talk API ที่ Liney ใช้เห็น cursor/เวลา แต่ไม่คืน payload ของข้อความ</p>
+              <span>Liney จึงตรวจได้ว่ามี activity แต่ต้องเปิด LINE ทางการเพื่อดูเนื้อหาการแจ้งเตือน</span>
+            </div>
+          ) : historyUnavailable ? (
+            <div className="official-client-only-state" role="status">
+              <div className="official-client-icon"><ShieldCheck size={25} /></div>
+              <h3>อ่านประวัติเก่าไม่ได้</h3>
+              <p>ห้องนี้มีหลักฐานว่าเคยมีข้อความ แต่ LINE ไม่ส่งประวัติเดิมกลับมาทาง Talk history endpoint ที่ Liney ใช้อยู่</p>
+              <span>ยังส่งข้อความได้ และข้อความใหม่ที่ Liney รับแบบ realtime จะถูกแสดงและเก็บไว้ในเครื่อง</span>
+            </div>
+          ) : (
+            <div className="message-list-empty-state">
+              <MessageCircle size={24} />
+              <strong>{neverChatted ? "ยังไม่เคยคุยกัน" : "ยังไม่มีข้อความ"}</strong>
+              <span>{neverChatted ? `ส่งข้อความแรกถึง ${chat.name} เพื่อเริ่มการสนทนา` : "ส่งข้อความแรกเพื่อเริ่มการสนทนา"}</span>
+            </div>
+          )
         ) : (
           <>
+            {historyUnavailable && !lineSystemAccount ? (
+              <div className="official-history-banner" role="status">
+                <ShieldCheck size={15} />
+                <span><strong>Live mode</strong> · อ่านประวัติเก่าบางส่วนไม่ได้ แต่ข้อความใหม่ใน Liney ใช้งานได้ตามปกติ</span>
+              </div>
+            ) : null}
             <div className="date-divider"><span>ล่าสุด</span></div>
             {messages.map((message, index) => (
+              <div key={`message-wrap-${message.id}`} className="message-wrap">
+                {showUnreadDivider && index === unreadStartIndex ? (
+                  <div ref={unreadDividerRef} className="unread-divider"><span>ข้อความใหม่</span></div>
+                ) : null}
               <motion.div
                 key={message.id}
                 ref={(element) => {
@@ -2734,9 +3645,7 @@ function Conversation({
               >
                 {message.author === "them" ? <MessageAvatar message={message} chat={chat} /> : null}
                 <div className="message-cluster">
-                  {message.author === "them" && chat.kind !== "dm" && message.senderName ? (
-                    <div className="message-sender-name">{message.senderName}</div>
-                  ) : null}
+                  <MessageSenderLabel message={message} chat={chat} onOpenOfficialMessage={onOpenOfficialMessage} />
                   <div
                     className="message-action-anchor"
                     ref={(element) => {
@@ -2764,12 +3673,15 @@ function Conversation({
                         {!message.rich && message.image ? (
                           message.image === "food" ? <FoodCard /> : <button className="message-image-button" type="button" title="เปิดดูรูปภาพ" onClick={() => onViewImage(message.image!)}><img className="message-image" src={message.image} alt="รูปภาพ" /></button>
                         ) : null}
-                         {!message.rich && message.postNotification ? (
-                           <PostNotificationCard data={message.postNotification} />
+                          {message.contentType === 6 ? (
+                            <CallHistoryCard data={message.call ?? { durationMs: 0, result: "", cause: "", status: "unknown" }} />
+                          ) : !message.rich && message.postNotification ? (
+                            <PostNotificationCard data={message.postNotification} />
                          ) : !message.rich && message.text ? (
-                           <div className={`bubble ${message.status === "error" ? "bubble-error" : ""}`}>{message.text}</div>
+                           <div className={`bubble ${message.status === "error" ? "bubble-error" : ""}`}><MessageTextWithLinks text={message.text} /></div>
                          ) : null}
-                         {message.text && message.status !== "sending" ? <LinkPreviewFor text={message.text} /> : null}
+                          {message.text && message.status !== "sending" ? <LinkPreviewFor text={message.text} /> : null}
+                          <OfficialMessageFallback message={message} chat={chat} onOpenOfficialMessage={onOpenOfficialMessage} />
                       </>
                     )}
                     {message.status !== "sending" ? (
@@ -2831,11 +3743,17 @@ function Conversation({
                         <button className="message-retry" type="button" onClick={() => onRetry(message.id)}>ลองใหม่</button>
                       </>
                     ) : null}
-                    {message.id === lastReadMineId ? <span className="message-read-receipt">อ่านแล้ว</span> : null}
+                    {message.edited && !message.unsent ? <span className="message-edited">แก้ไขแล้ว</span> : null}
+                    {message.author === "me" && (message.readByPeer || (message.readCount ?? 0) > 0) ? (
+                      <span className="message-read-receipt">
+                        {showReadCount && (message.readCount ?? 0) > 1 ? `อ่านแล้ว ${message.readCount} คน` : "อ่านแล้ว"}
+                      </span>
+                    ) : null}
                     <time>{message.time}</time>
                   </div>
                 </div>
               </motion.div>
+              </div>
             ))}
           </>
         )}
@@ -3018,6 +3936,72 @@ function PostNotificationCard({ data }: { data: NonNullable<Message["postNotific
 }
 
 const LINK_URL_RE = /(https?:\/\/[^\s<>"']+)/;
+const MESSAGE_LINK_RE = /(?:https?:\/\/|www\.)[^\s<>"']+/gi;
+const TRAILING_LINK_PUNCTUATION_RE = /[.,;:!?\]}>]+$/;
+
+function normalizedMessageHref(value: string): string {
+  return /^www\./i.test(value) ? `https://${value}` : value;
+}
+
+function splitTrailingLinkPunctuation(value: string): { link: string; trailing: string } {
+  let link = value;
+  let trailing = "";
+  while (TRAILING_LINK_PUNCTUATION_RE.test(link)) {
+    trailing = link.slice(-1) + trailing;
+    link = link.slice(0, -1);
+  }
+  // A closing parenthesis is punctuation only when the URL did not open one.
+  while (link.endsWith(")") && (link.match(/\(/g)?.length ?? 0) < (link.match(/\)/g)?.length ?? 0)) {
+    trailing = ")" + trailing;
+    link = link.slice(0, -1);
+  }
+  return { link, trailing };
+}
+
+function openMessageLink(event: React.MouseEvent<HTMLAnchorElement>, href: string) {
+  event.preventDefault();
+  try {
+    const url = new URL(href);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return;
+    if (lineyEngine.isNative) {
+      void invoke("open_external_url", { url: url.toString() });
+    } else {
+      window.open(url.toString(), "_blank", "noopener,noreferrer");
+    }
+  } catch {
+    // Invalid URLs remain visible as text but are not opened.
+  }
+}
+
+function MessageTextWithLinks({ text }: { text: string }) {
+  const source = String(text || "");
+  const nodes: React.ReactNode[] = [];
+  let lastIndex = 0;
+  for (const match of source.matchAll(MESSAGE_LINK_RE)) {
+    if (match.index > lastIndex) nodes.push(source.slice(lastIndex, match.index));
+    const raw = match[0];
+    const { link, trailing } = splitTrailingLinkPunctuation(raw);
+    const href = normalizedMessageHref(link);
+    if (link) {
+      nodes.push(
+        <a
+          key={`${match.index}:${link}`}
+          className="message-text-link"
+          href={href}
+          target="_blank"
+          rel="noreferrer noopener"
+          onClick={(event) => openMessageLink(event, href)}
+        >
+          {link}
+        </a>,
+      );
+    }
+    if (trailing) nodes.push(trailing);
+    lastIndex = match.index + raw.length;
+  }
+  if (lastIndex < source.length) nodes.push(source.slice(lastIndex));
+  return <>{nodes.length ? nodes : source}</>;
+}
 
 function LinkPreviewFor({ text }: { text: string }) {
   const match = LINK_URL_RE.exec(String(text || ""));
@@ -3027,9 +4011,11 @@ function LinkPreviewFor({ text }: { text: string }) {
 }
 
 function LinkPreview({ url }: { url: string }) {
-  const [state, setState] = useState<{ title: string; description?: string; image?: string; siteName?: string } | "loading" | "error">("loading");
+  const [state, setState] = useState<{ title: string; description?: string; image?: string; siteName?: string } | "loading" | "error">(
+    () => lineyEngine.isNative ? "loading" : "error",
+  );
   useEffect(() => {
-    if (!lineyEngine.isNative) { setState("error"); return; }
+    if (!lineyEngine.isNative) return;
     let alive = true;
     lineyEngine
       .request<{ title?: string; description?: string; image?: string; siteName?: string }>("link.preview", { url }, 12_000)
@@ -3080,7 +4066,7 @@ function EnginePill({ state, version, authenticated, syncStatus, onClick }: { st
   );
 }
 
-function FullSyncGate({ progress }: { progress: SyncProgressState }) {
+function FullSyncGate({ progress, onCancel }: { progress: SyncProgressState; onCancel: () => void }) {
   const copy = progress.phase === "metadata"
     ? { title: "กำลังเตรียม Full Sync", detail: "กำลังเชื่อมข้อมูลบัญชี LINE" }
     : progress.phase === "friends"
@@ -3104,6 +4090,7 @@ function FullSyncGate({ progress }: { progress: SyncProgressState }) {
         <div className="full-sync-track" aria-label={`ความคืบหน้า ${percent}%`}><i style={{ width: `${progress.phase === "complete" ? 100 : percent}%` }} /></div>
         <strong className="full-sync-percent">{progress.phase === "complete" ? "100" : percent}%</strong>
         <small>กำลังเตรียมข้อมูลให้ครบก่อนเปิดหน้าแชต คุณจะเข้าใช้งานได้ทันทีเมื่อเสร็จ</small>
+        {progress.phase !== "complete" ? <button className="secondary-button full-sync-cancel" type="button" onClick={onCancel}>ยกเลิก Full sync</button> : null}
       </section>
     </main>
   );
@@ -3238,7 +4225,215 @@ function AuthModal({
   );
 }
 
-function SettingsModal({ themeMode, dark, settings, callAvailable, onThemeMode, onSetting, onDensity, onRadius, onClearHistory, onClearStickerCache, onClose }: {
+type NewChatTab = "chat" | "friend" | "group" | "openchat";
+
+function NewChatModal({
+  friends,
+  onStartChat,
+  onAddFriend,
+  onCreateGroup,
+  onCreateOpenChat,
+  onClose,
+}: {
+  friends: Chat[];
+  onStartChat: (friend: Chat) => void;
+  onAddFriend: (userId: string) => Promise<Chat>;
+  onCreateGroup: (name: string, memberMids: string[]) => Promise<Chat>;
+  onCreateOpenChat: (name: string, description: string, searchable: boolean) => Promise<Chat>;
+  onClose: () => void;
+}) {
+  const [tab, setTab] = useState<NewChatTab>("chat");
+  const [search, setSearch] = useState("");
+  const [lineId, setLineId] = useState("");
+  const [groupName, setGroupName] = useState("");
+  const [openChatName, setOpenChatName] = useState("");
+  const [openChatDescription, setOpenChatDescription] = useState("");
+  const [openChatSearchable, setOpenChatSearchable] = useState(true);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const filteredFriends = useMemo(() => {
+    const needle = search.trim().toLocaleLowerCase("th");
+    if (!needle) return friends;
+    return friends.filter((friend) => `${friend.name} ${friend.subtitle ?? ""}`.toLocaleLowerCase("th").includes(needle));
+  }, [friends, search]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
+
+  const addFriend = async () => {
+    const value = lineId.trim();
+    if (!value || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const friend = await onAddFriend(value);
+      setLineId("");
+      onStartChat(friend);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createGroup = async () => {
+    const name = groupName.trim();
+    if (!name || selected.length === 0 || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await onCreateGroup(name, selected);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createOpenChat = async () => {
+    const name = openChatName.trim();
+    if (!name || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await onCreateOpenChat(name, openChatDescription.trim(), openChatSearchable);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const switchTab = (next: NewChatTab) => {
+    setTab(next);
+    setSearch("");
+    setError("");
+  };
+
+  return (
+    <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+      <motion.section
+        className="new-chat-modal"
+        initial={{ opacity: 0, scale: 0.97, y: 12 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.98, y: 8 }}
+        transition={{ duration: 0.16 }}
+        role="dialog"
+        aria-modal="true"
+        aria-label="เริ่มแชตใหม่"
+      >
+        <header className="new-chat-header">
+          <div><p className="eyebrow">LINEY NEW</p><h2>เริ่มแชตใหม่</h2></div>
+          <button className="icon-button" type="button" onClick={onClose} disabled={busy} title="ปิด"><X size={19} /></button>
+        </header>
+
+        <div className="new-chat-tabs" role="tablist">
+          <button type="button" className={tab === "chat" ? "active" : ""} onClick={() => switchTab("chat")}><MessageCircle size={15}/> แชตใหม่</button>
+          <button type="button" className={tab === "friend" ? "active" : ""} onClick={() => switchTab("friend")}><UserPlus size={15}/> เพิ่มเพื่อน</button>
+          <button type="button" className={tab === "group" ? "active" : ""} onClick={() => switchTab("group")}><Users size={15}/> สร้างกลุ่ม</button>
+          <button type="button" className={tab === "openchat" ? "active" : ""} onClick={() => switchTab("openchat")}><Sparkles size={15}/> OpenChat</button>
+        </div>
+
+        {error ? <div className="new-chat-error"><TriangleAlert size={15}/><span>{error}</span></div> : null}
+
+        {tab === "friend" ? (
+          <div className="new-chat-pane add-friend-pane">
+            <div className="new-chat-hero"><UserPlus size={24}/><div><strong>เพิ่มเพื่อนด้วย LINE ID</strong><span>ค้นหา LINE ID แล้วเพิ่มเข้ารายชื่อเพื่อนโดยตรง</span></div></div>
+            <label className="new-chat-field">
+              <span>LINE ID</span>
+              <div className="new-chat-input-row">
+                <input
+                  value={lineId}
+                  onChange={(event) => setLineId(event.target.value)}
+                  onKeyDown={(event) => { if (event.key === "Enter") void addFriend(); }}
+                  placeholder="เช่น namnarak หรือ @official"
+                  autoFocus
+                  disabled={busy}
+                />
+                <button className="primary-button" type="button" onClick={() => void addFriend()} disabled={!lineId.trim() || busy}>
+                  {busy ? <LoaderCircle className="spin" size={15}/> : <UserPlus size={15}/>} เพิ่มเพื่อน
+                </button>
+              </div>
+            </label>
+            <div className="new-chat-note"><Info size={14}/><span>บัญชีที่ปิดการค้นหาด้วย LINE ID จะค้นหาไม่พบตามข้อจำกัดของ LINE</span></div>
+          </div>
+        ) : tab === "openchat" ? (
+          <div className="new-chat-pane add-friend-pane">
+            <div className="new-chat-hero"><Sparkles size={24}/><div><strong>สร้าง OpenChat</strong><span>สร้าง Square/OpenChat ใหม่ผ่าน LINE โดยตรง</span></div></div>
+            <label className="new-chat-field">
+              <span>ชื่อ OpenChat</span>
+              <input maxLength={50} value={openChatName} onChange={(event) => setOpenChatName(event.target.value)} placeholder="ชื่อ OpenChat" autoFocus disabled={busy} />
+            </label>
+            <label className="new-chat-field">
+              <span>คำอธิบาย</span>
+              <textarea maxLength={500} value={openChatDescription} onChange={(event) => setOpenChatDescription(event.target.value)} placeholder="รายละเอียดของ OpenChat (ไม่บังคับ)" disabled={busy} />
+            </label>
+            <button type="button" className={`new-chat-switch ${openChatSearchable ? "on" : ""}`} onClick={() => setOpenChatSearchable((value) => !value)} disabled={busy}>
+              <span><strong>ค้นหา OpenChat นี้ได้</strong><small>อนุญาตให้คนอื่นค้นหาห้องจาก LINE</small></span>
+              <span className="new-chat-switch-knob" />
+            </button>
+            <div className="new-chat-openchat-action">
+              <button className="primary-button" type="button" onClick={() => void createOpenChat()} disabled={!openChatName.trim() || busy}>
+                {busy ? <LoaderCircle className="spin" size={15}/> : <Sparkles size={15}/>} สร้าง OpenChat
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="new-chat-pane">
+            {tab === "group" ? (
+              <label className="new-chat-field group-name-field">
+                <span>ชื่อกลุ่ม</span>
+                <input maxLength={50} value={groupName} onChange={(event) => setGroupName(event.target.value)} placeholder="ตั้งชื่อกลุ่ม" autoFocus />
+              </label>
+            ) : null}
+            <div className="new-chat-search"><Search size={16}/><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={tab === "group" ? "ค้นหาเพื่อนเพื่อเพิ่มเข้ากลุ่ม" : "ค้นหาเพื่อน"} /></div>
+            <div className="new-chat-friends">
+              {filteredFriends.length ? filteredFriends.map((friend) => {
+                const checked = selected.includes(friend.id);
+                return (
+                  <button
+                    type="button"
+                    key={friend.id}
+                    className={`new-chat-friend ${checked ? "selected" : ""}`}
+                    onClick={() => {
+                      if (tab === "chat") {
+                        onStartChat(friend);
+                        return;
+                      }
+                      setSelected((current) => checked ? current.filter((mid) => mid !== friend.id) : [...current, friend.id]);
+                    }}
+                  >
+                    <Avatar chat={friend} />
+                    <span className="new-chat-friend-copy"><strong>{friend.name}</strong><span>{friend.subtitle || "เพื่อน · LINE"}</span></span>
+                    {tab === "group" ? <span className={`new-chat-check ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span> : <MessageCircle size={17}/>}
+                  </button>
+                );
+              }) : <div className="new-chat-empty"><Search size={22}/><strong>ไม่พบเพื่อน</strong><span>ลองค้นหาด้วยชื่ออื่น หรือเพิ่มเพื่อนด้วย LINE ID</span></div>}
+            </div>
+            {tab === "group" ? (
+              <footer className="new-chat-footer">
+                <span>เลือกแล้ว {selected.length.toLocaleString("th-TH")} คน</span>
+                <button className="primary-button" type="button" onClick={() => void createGroup()} disabled={!groupName.trim() || selected.length === 0 || busy}>
+                  {busy ? <LoaderCircle className="spin" size={15}/> : <Users size={15}/>} สร้างกลุ่ม
+                </button>
+              </footer>
+            ) : null}
+          </div>
+        )}
+      </motion.section>
+    </motion.div>
+  );
+}
+
+function SettingsModal({ initialTab, themeMode, dark, settings, callAvailable, onThemeMode, onSetting, onDensity, onRadius, onClearHistory, onClearStickerCache, onFullSync, onClose }: {
+  initialTab: string;
   themeMode: ThemeMode;
   dark: boolean;
   settings: AppSettings;
@@ -3249,10 +4444,11 @@ function SettingsModal({ themeMode, dark, settings, callAvailable, onThemeMode, 
   onRadius: (value: AppSettings["radius"]) => void;
   onClearHistory: () => void;
   onClearStickerCache: () => void;
+  onFullSync: () => void;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState("ทั่วไป");
-  const tabs = ["ทั่วไป", "การแจ้งเตือน", "แชต", "โทร", "เพื่อน", "OpenChat", "Appearance", "ขั้นสูง", "เกี่ยวกับ"];
+  const [tab, setTab] = useState(initialTab);
+  const tabs = ["ทั่วไป", "การแจ้งเตือน", "แชต", "รูปภาพ", "โทร", "เพื่อน", "OpenChat", "Appearance", "ขั้นสูง", "เกี่ยวกับ"];
   return (
     <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
       <motion.section className="settings-modal" initial={{ opacity: 0, scale: 0.97, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98, y: 8 }} transition={{ duration: 0.18 }}>
@@ -3269,10 +4465,11 @@ function SettingsModal({ themeMode, dark, settings, callAvailable, onThemeMode, 
           {tab === "Appearance" && <AppearanceSettings settings={settings} themeMode={themeMode} dark={dark} onThemeMode={onThemeMode} onDensity={onDensity} onRadius={onRadius} />}
           {tab === "OpenChat" && <OpenChatSettings settings={settings} onSetting={onSetting} />}
           {tab === "การแจ้งเตือน" && <NotificationSettings settings={settings} onSetting={onSetting} />}
-          {tab === "แชต" && <ChatSettings onClearHistory={onClearHistory} onClearStickerCache={onClearStickerCache} />}
+          {tab === "แชต" && <ChatSettings settings={settings} onSetting={onSetting} onClearHistory={onClearHistory} onClearStickerCache={onClearStickerCache} />}
+          {tab === "รูปภาพ" && <MediaSettings settings={settings} onSetting={onSetting} />}
           {tab === "โทร" && <CallSettings available={callAvailable} />}
           {tab === "เพื่อน" && <FeatureSettings title="เพื่อน" body="รายชื่อเพื่อนและรายการโปรดมาจาก LINE โดยตรง" />}
-          {tab === "ขั้นสูง" && <AdvancedSettings onClearHistory={onClearHistory} />}
+          {tab === "ขั้นสูง" && <AdvancedSettings onClearHistory={onClearHistory} onFullSync={onFullSync} />}
           {tab === "เกี่ยวกับ" && <AboutSettings />}
         </div>
       </motion.section>
@@ -3330,26 +4527,50 @@ function OpenChatSettings({ settings, onSetting }: { settings: AppSettings; onSe
     <SettingsGroup title="OpenChat">
       <SettingRow title="แสดง OpenChat แยกจากแชตปกติ" subtitle="เพิ่มแท็บ OpenChat บนแถบซ้าย"><Toggle checked={settings.openchat} onChange={(checked) => onSetting("openchat", checked)} /></SettingRow>
       <SettingRow title="LiveTalk" subtitle="จะเปิดเมื่อมี implementation และ live test ครบ"><span className="settings-status">ยังไม่รองรับ</span></SettingRow>
+      <SettingRow title="อัปเดตแบบ Realtime" subtitle="ใช้ push event และ polling fallback เมื่อ stream ของ Square เงียบ"><Toggle checked={settings.openchatRealtimeRefresh} onChange={(checked) => onSetting("openchatRealtimeRefresh", checked)} /></SettingRow>
       <SettingRow title="ดาวน์โหลดสื่ออัตโนมัติ" subtitle="รูปภาพจากห้อง OpenChat"><Toggle checked={settings.autoMedia} onChange={(checked) => onSetting("autoMedia", checked)} /></SettingRow>
     </SettingsGroup>
   </div>;
 }
 
-function ChatSettings({ onClearHistory, onClearStickerCache }: { onClearHistory: () => void; onClearStickerCache: () => void }) {
+function ChatSettings({ settings, onSetting, onClearHistory, onClearStickerCache }: { settings: AppSettings; onSetting: (key: keyof AppSettings, value: boolean) => void; onClearHistory: () => void; onClearStickerCache: () => void }) {
   return <div className="settings-scroll">
-    <SettingsGroup title="ประวัติข้อความ">
-      <SettingRow title="เก็บประวัติไว้ในเครื่อง" subtitle="SQLite จะเก็บจนกว่าจะกดล้างด้วยตัวเอง"><span className="settings-status status-good">เปิดใช้งาน</span></SettingRow>
-      <SettingRow title="แคชสติกเกอร์ของคุณ" subtitle="รายการแพ็กจากบัญชี LINE เก็บในไฟล์ส่วนตัว 7 วัน เพื่อเปิด picker ให้เร็ว"><button className="secondary-button" type="button" onClick={onClearStickerCache}>ล้างแคชสติกเกอร์</button></SettingRow>
-      <SettingRow title="ล้างประวัติและ media cache" subtitle="ลบข้อมูลข้อความในเครื่องนี้ ไม่กระทบข้อความบน LINE"><button className="secondary-button danger-outline" type="button" onClick={onClearHistory}>ล้างข้อมูล</button></SettingRow>
+    <SettingsGroup title="การอ่านข้อความ">
+      <SettingRow title="อ่านเมื่อเลื่อนถึงข้อความล่าสุด" subtitle="ข้อความใหม่จะยังไม่ถูกอ่านจนกว่าจะเลื่อนถึงด้านล่าง"><Toggle checked={settings.markReadOnBottom} onChange={(checked) => onSetting("markReadOnBottom", checked)} /></SettingRow>
+      <SettingRow title="เส้นข้อความใหม่" subtitle="แสดงคำว่า ‘ข้อความใหม่’ ก่อนข้อความที่ยังไม่ได้อ่าน"><Toggle checked={settings.showUnreadDivider} onChange={(checked) => onSetting("showUnreadDivider", checked)} /></SettingRow>
+      <SettingRow title="จำนวนคนที่อ่าน" subtitle="ข้อความที่คุณส่งจะแสดงจำนวนผู้อ่านเมื่อ LINE ส่งข้อมูลมา"><Toggle checked={settings.showReadCount} onChange={(checked) => onSetting("showReadCount", checked)} /></SettingRow>
+      <SettingRow title="ตามข้อความล่าสุดอัตโนมัติ" subtitle="ถ้าอยู่ท้ายแชต ให้เลื่อนตามข้อความใหม่โดยไม่เด้งตอนกำลังอ่านข้อความเก่า"><Toggle checked={settings.autoScrollNewMessages} onChange={(checked) => onSetting("autoScrollNewMessages", checked)} /></SettingRow>
     </SettingsGroup>
-    <SettingsGroup title="การส่งข้อความ"><SettingRow title="ส่งผ่าน outbox" subtitle="ข้อความมี local ID และกู้คืนสถานะหลัง timeout"><span className="settings-status status-good">พร้อมใช้งาน</span></SettingRow></SettingsGroup>
+    <SettingsGroup title="ประวัติและแคช">
+      <SettingRow title="ล้างประวัติในเครื่อง" subtitle="ล้าง SQLite history และ media cache โดยไม่ลบข้อความบน LINE"><button className="secondary-button danger-outline" type="button" onClick={onClearHistory}>ล้างประวัติ</button></SettingRow>
+      <SettingRow title="ล้างแคชสติกเกอร์" subtitle="ดึงรายการสติกเกอร์ที่เป็นเจ้าของใหม่"><button className="secondary-button" type="button" onClick={onClearStickerCache}>ล้างแคช</button></SettingRow>
+    </SettingsGroup>
+    <SettingsGroup title="การส่งข้อความ"><SettingRow title="Outbox recovery" subtitle="ข้อความมี local ID, retry และกู้สถานะหลัง timeout"><span className="settings-status status-good">เปิดใช้งาน</span></SettingRow></SettingsGroup>
+  </div>;
+}
+
+function MediaSettings({ settings, onSetting }: { settings: AppSettings; onSetting: (key: keyof AppSettings, value: boolean) => void }) {
+  return <div className="settings-scroll">
+    <SettingsGroup title="ตัวดูรูปภาพ">
+      <SettingRow title="เปิดรูปในหน้าต่างแยก" subtitle="ใช้หน้าต่างดูรูปแบบ LINE และไม่บังหน้าต่างแชตหลัก"><Toggle checked={settings.openImagesInWindow} onChange={(checked) => onSetting("openImagesInWindow", checked)} /></SettingRow>
+      <SettingRow title="วนรูปเมื่อถึงรูปสุดท้าย" subtitle="กดลูกศรถัดไปจากรูปสุดท้ายเพื่อกลับไปรูปแรก"><Toggle checked={settings.loopImageGallery} onChange={(checked) => onSetting("loopImageGallery", checked)} /></SettingRow>
+    </SettingsGroup>
+    <SettingsGroup title="การโหลดสื่อ">
+      <SettingRow title="โหลดรูป OpenChat อัตโนมัติ" subtitle="ปิดได้หากต้องการลดการใช้เน็ตใน OpenChat"><Toggle checked={settings.autoMedia} onChange={(checked) => onSetting("autoMedia", checked)} /></SettingRow>
+      <SettingRow title="รูปในแชต" subtitle="แคช preview ในเครื่องและเปิดรูปเต็มจากหน้าต่างดูรูป"><span className="settings-status status-good">Cache-first</span></SettingRow>
+    </SettingsGroup>
   </div>;
 }
 
 function CallSettings({ available }: { available: boolean }) {
   return <div className="settings-scroll">
-    <div className="feature-banner"><div className="feature-icon"><Phone size={21}/></div><div><strong>เสียง 1:1</strong><p>{available ? "PipeWire และ LINEJS call transport พร้อมใช้งาน · ต้องทดสอบกับบัญชีปลายทางจริง" : "ยังไม่รองรับบนระบบนี้"}</p></div><span className={`beta-chip ${available ? "status-good" : ""}`}>{available ? "LOCAL READY" : "DISABLED"}</span></div>
-    <SettingsGroup title="ขอบเขตการโทร"><SettingRow title="เสียง 1:1 ขาออก" subtitle="โทรออก mute เลือกลำโพง และวางสาย"><span className={`settings-status ${available ? "status-good" : ""}`}>{available ? "เปิดใช้งาน" : "ยังไม่พร้อม"}</span></SettingRow><SettingRow title="สายเรียกเข้า" subtitle="จะแจ้งเตือนสายเข้า แต่ปุ่มรับสายยังปิดไว้จนกว่า LINEJS จะมี answer flow ที่เสถียร"><span className="settings-status">แจ้งเตือนเท่านั้น</span></SettingRow><SettingRow title="วิดีโอ / group call / LiveTalk" subtitle="ยังไม่เปิดจนกว่าจะมี implementation และ test แยกครบ"><span className="settings-status">ปิดไว้</span></SettingRow></SettingsGroup>
+    <div className="feature-banner"><div className="feature-icon"><Phone size={21}/></div><div><strong>เสียง 1:1</strong><p>{available ? "PipeWire + Opus พร้อม · ขาออกใช้ PLANET และขาเข้าใช้ Andromeda answer flow" : "ยังไม่รองรับบนระบบนี้"}</p></div><span className={`beta-chip ${available ? "status-good" : ""}`}>{available ? "CALL READY" : "DISABLED"}</span></div>
+    <SettingsGroup title="ขอบเขตการโทร">
+      <SettingRow title="เสียง 1:1 ขาออก" subtitle="PLANET/Cassini · โทรออก mute เลือกลำโพง และวางสาย"><span className={`settings-status ${available ? "status-good" : ""}`}>{available ? "เปิดใช้งาน" : "ยังไม่พร้อม"}</span></SettingRow>
+      <SettingRow title="สายเรียกเข้า" subtitle="Andromeda INVITE → 100/180/200 → ACK + SRTP/Opus"><span className={`settings-status ${available ? "status-good" : ""}`}>{available ? "Experimental · เปิดรับสาย" : "ยังไม่พร้อม"}</span></SettingRow>
+      <SettingRow title="ปฏิเสธสาย" subtitle="ปิดหน้ารับสายในเครื่อง; LINEJS 3.4.2 ยังไม่มี reject RPC ระดับสูง"><span className="settings-status">Local dismiss</span></SettingRow>
+      <SettingRow title="วิดีโอ / group call / LiveTalk" subtitle="ยังไม่เปิดจนกว่า media lifecycle และ live test จะครบ"><span className="settings-status">ปิดไว้</span></SettingRow>
+    </SettingsGroup>
   </div>;
 }
 
@@ -3357,12 +4578,12 @@ function FeatureSettings({ title, body }: { title: string; body: string }) {
   return <div className="settings-scroll"><div className="settings-placeholder"><div className="placeholder-orb"><Users size={25}/></div><h3>{title}</h3><p>{body}</p><span className="settings-status status-good">เชื่อมกับ LINE โดยตรง</span></div></div>;
 }
 
-function AdvancedSettings({ onClearHistory }: { onClearHistory: () => void }) {
-  return <div className="settings-scroll"><SettingsGroup title="การดูแลข้อมูล"><SettingRow title="ล้างข้อมูลในเครื่อง" subtitle="ใช้เมื่อจะส่งต่อเครื่องหรือแก้ปัญหา database"><button className="secondary-button danger-outline" type="button" onClick={onClearHistory}>ล้างประวัติ</button></SettingRow></SettingsGroup><SettingsGroup title="การเชื่อมต่อ"><SettingRow title="Full sync" subtitle="ซิงก์ friends, Talk, OpenChat และประวัติล่าสุดเป็นค่าเริ่มต้น"><span className="settings-status status-good">เปิดใช้งาน</span></SettingRow></SettingsGroup></div>;
+function AdvancedSettings({ onClearHistory, onFullSync }: { onClearHistory: () => void; onFullSync: () => void }) {
+  return <div className="settings-scroll"><SettingsGroup title="การดูแลข้อมูล"><SettingRow title="ล้างข้อมูลในเครื่อง" subtitle="ใช้เมื่อจะส่งต่อเครื่องหรือแก้ปัญหา database"><button className="secondary-button danger-outline" type="button" onClick={onClearHistory}>ล้างประวัติ</button></SettingRow></SettingsGroup><SettingsGroup title="การเชื่อมต่อ"><SettingRow title="Full sync" subtitle="ซิงก์ friends, Talk, OpenChat และประวัติล่าสุดเมื่อสั่งแบบเต็ม"><button className="secondary-button" type="button" onClick={onFullSync}>เริ่ม Full sync</button></SettingRow></SettingsGroup></div>;
 }
 
 function AboutSettings() {
-  return <div className="settings-scroll"><div className="settings-placeholder"><div className="placeholder-orb"><Info size={25}/></div><h3>Liney 0.1.0</h3><p>Native LINE client สำหรับ Linux · JSONL engine · SQLite history · ไม่มีเซิร์ฟเวอร์กลาง</p><span className="settings-status status-good">production patch</span></div></div>;
+  return <div className="settings-scroll"><div className="settings-placeholder"><div className="placeholder-orb"><Info size={25}/></div><h3>Liney 0.1.0</h3><p>Unofficial LINE client สำหรับ Linux · React + Tauri WebView · SQLite history · ไม่มีเซิร์ฟเวอร์กลาง</p><span className="settings-status status-good">production patch</span></div></div>;
 }
 
 function SettingsGroup({ title, children }: { title: string; children: React.ReactNode }) {
@@ -3561,7 +4782,7 @@ function CallModal({
       {state === "incoming" ? (
         <div className="call-actions">
           <button className="hangup" type="button" onClick={onReject}><Phone size={20}/><span>ปฏิเสธ</span></button>
-          <button type="button" disabled={!incomingSupported} title={incomingSupported ? "รับสาย" : "LINEJS ยังไม่มีเส้นทางรับสายขาเข้าที่เสถียร"} onClick={onAccept}><Phone size={20}/><span>{incomingSupported ? "รับสาย" : "รับสายยังไม่พร้อม"}</span></button>
+          <button type="button" disabled={!incomingSupported} title={incomingSupported ? "รับสายเสียงผ่าน LINEJS Andromeda" : "ระบบรับสายยังไม่พร้อมบนเครื่องนี้"} onClick={onAccept}><Phone size={20}/><span>{incomingSupported ? "รับสาย" : "รับสายยังไม่พร้อม"}</span></button>
         </div>
       ) : state === "failed" || state === "ended" ? (
         <button className="secondary-button" type="button" onClick={onClose}>ปิด</button>
@@ -3580,7 +4801,7 @@ function CallModal({
           <button className="hangup" type="button" onClick={onClose}><Phone size={20}/><span>วางสาย</span></button>
         </div>
       )}
-      <div className="call-note">LINE audio · PipeWire · 1:1</div>
+      <div className="call-note">LINE audio · PipeWire · 1:1{state === "incoming" || incomingSupported ? " · Incoming Experimental" : ""}</div>
     </motion.div>
   </motion.div>;
 }

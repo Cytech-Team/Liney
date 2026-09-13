@@ -5,6 +5,7 @@ import { ensurePrivateDirectory } from "./secure-storage";
 import { normalizeJsonValue, parseJsonValue } from "./serialization";
 
 export type ChatKind = "dm" | "group" | "openchat";
+export type ChatHistoryState = "available" | "new" | "unavailable";
 
 export type DatabaseChat = {
   id: string;
@@ -20,6 +21,7 @@ export type DatabaseChat = {
   statusMessage?: string;
   isFavorite?: boolean;
   favoriteTime?: number;
+  historyState?: ChatHistoryState;
   raw?: unknown;
 };
 
@@ -35,6 +37,7 @@ export type DatabaseMessage = {
   senderId?: string;
   senderName?: string;
   senderAvatarUrl?: string;
+  isOfficialAccount?: boolean;
   postNotification?: unknown;
   reactions?: unknown;
   replyToId?: string;
@@ -79,6 +82,19 @@ export type SyncState = {
   status: "idle" | "running" | "ready" | "error";
   error?: string;
   updatedAt: number;
+};
+
+export type ProtocolEventRecord = {
+  eventKey: string;
+  source: string;
+  opType: string;
+  revision?: string;
+  createdTime: number;
+  param1?: string;
+  param2?: string;
+  param3?: string;
+  raw?: unknown;
+  capturedAt?: number;
 };
 
 function asJson(value: unknown): string | null {
@@ -126,6 +142,7 @@ export class LineyDatabase {
         status_message TEXT NOT NULL DEFAULT '',
         is_favorite INTEGER NOT NULL DEFAULT 0,
         favorite_time INTEGER NOT NULL DEFAULT 0,
+        history_state TEXT NOT NULL DEFAULT 'available',
         raw_json TEXT,
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (account_id, chat_id)
@@ -153,6 +170,7 @@ export class LineyDatabase {
         sender_id TEXT,
         sender_name TEXT,
         sender_avatar_url TEXT,
+        is_official_account INTEGER NOT NULL DEFAULT 0,
         post_notification_json TEXT,
         reactions_json TEXT,
         reply_to_id TEXT,
@@ -167,6 +185,8 @@ export class LineyDatabase {
         WHERE server_id IS NOT NULL;
       CREATE INDEX IF NOT EXISTS messages_chat_created
         ON messages(account_id, chat_id, created_time, id);
+      CREATE INDEX IF NOT EXISTS messages_content_created
+        ON messages(account_id, content_type, created_time DESC, id DESC);
       CREATE TABLE IF NOT EXISTS outbox (
         account_id TEXT NOT NULL,
         local_id TEXT NOT NULL,
@@ -202,6 +222,22 @@ export class LineyDatabase {
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (account_id, state_key)
       );
+      CREATE TABLE IF NOT EXISTS protocol_events (
+        account_id TEXT NOT NULL,
+        event_key TEXT NOT NULL,
+        source TEXT NOT NULL,
+        op_type TEXT NOT NULL,
+        revision TEXT,
+        created_time INTEGER NOT NULL DEFAULT 0,
+        param1 TEXT,
+        param2 TEXT,
+        param3 TEXT,
+        raw_json TEXT,
+        captured_at INTEGER NOT NULL,
+        PRIMARY KEY (account_id, event_key)
+      );
+      CREATE INDEX IF NOT EXISTS protocol_events_captured
+        ON protocol_events(account_id, captured_at DESC);
       CREATE TABLE IF NOT EXISTS media_cache (
         account_id TEXT NOT NULL,
         media_key TEXT NOT NULL,
@@ -222,6 +258,21 @@ export class LineyDatabase {
       CREATE INDEX IF NOT EXISTS hidden_messages_chat
         ON hidden_messages(account_id, chat_id, kind);
     `);
+    const chatColumns = this.db.query("PRAGMA table_info(chats)").all() as Array<{ name?: string }>;
+    if (!chatColumns.some((column) => column.name === "history_state")) {
+      this.db.exec("ALTER TABLE chats ADD COLUMN history_state TEXT NOT NULL DEFAULT 'available'");
+      // Existing rows with no locally visible message are safest to treat as
+      // brand-new until the next Talk metadata refresh can distinguish them
+      // from genuinely unavailable old history.
+      this.db.exec(`
+        UPDATE chats SET history_state = 'new'
+        WHERE preview = ''
+          AND NOT EXISTS (
+            SELECT 1 FROM messages m
+            WHERE m.account_id = chats.account_id AND m.chat_id = chats.chat_id
+          )
+      `);
+    }
     const outboxColumns = this.db.query("PRAGMA table_info(outbox)").all() as Array<{ name?: string }>;
     if (!outboxColumns.some((column) => column.name === "duration_ms")) {
       this.db.exec("ALTER TABLE outbox ADD COLUMN duration_ms INTEGER");
@@ -241,6 +292,9 @@ export class LineyDatabase {
     }
     if (!messageColumns.some((column) => column.name === "unsent")) {
       this.db.exec("ALTER TABLE messages ADD COLUMN unsent INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!messageColumns.some((column) => column.name === "is_official_account")) {
+      this.db.exec("ALTER TABLE messages ADD COLUMN is_official_account INTEGER NOT NULL DEFAULT 0");
     }
     if (!outboxColumns.some((column) => column.name === "related_message_id")) {
       this.db.exec("ALTER TABLE outbox ADD COLUMN related_message_id TEXT");
@@ -262,6 +316,49 @@ export class LineyDatabase {
         display_name=excluded.display_name,
         updated_at=excluded.updated_at
     `).run(accountId, profile?.mid ?? null, profile?.displayName ?? "", now);
+  }
+
+  getAccount(accountId: string): { mid: string; displayName: string } | null {
+    const row = this.db.query(
+      "SELECT mid, display_name FROM accounts WHERE account_id = ? LIMIT 1",
+    ).get(accountId) as Record<string, unknown> | null;
+    if (!row) return null;
+    return {
+      mid: String(row.mid ?? ""),
+      displayName: String(row.display_name ?? ""),
+    };
+  }
+
+  findAccountIdByMid(mid: string): string | null {
+    const normalized = mid.trim();
+    if (!normalized) return null;
+    const row = this.db.query(
+      "SELECT account_id FROM accounts WHERE mid = ? ORDER BY updated_at DESC LIMIT 1",
+    ).get(normalized) as { account_id?: unknown } | null;
+    return row?.account_id ? String(row.account_id) : null;
+  }
+
+  latestAccountId(): string | null {
+    const row = this.db.query(
+      "SELECT account_id FROM accounts ORDER BY updated_at DESC LIMIT 1",
+    ).get() as { account_id?: unknown } | null;
+    return row?.account_id ? String(row.account_id) : null;
+  }
+
+  /** Move a legacy/default account only when the destination has no data. */
+  rekeyAccount(fromAccountId: string, toAccountId: string): boolean {
+    if (!fromAccountId || !toAccountId || fromAccountId === toAccountId) return fromAccountId === toAccountId;
+    const tables = ["accounts", "chats", "chat_members", "messages", "outbox", "sync_state", "protocol_events", "media_cache", "hidden_messages"] as const;
+    return this.transactionResult(() => {
+      for (const table of tables) {
+        const existing = this.db.query(`SELECT 1 FROM ${table} WHERE account_id = ? LIMIT 1`).get(toAccountId);
+        if (existing) return false;
+      }
+      for (const table of tables) {
+        this.db.query(`UPDATE ${table} SET account_id = ? WHERE account_id = ?`).run(toAccountId, fromAccountId);
+      }
+      return true;
+    });
   }
 
   upsertChat(accountId: string, chat: DatabaseChat): void {
@@ -307,6 +404,11 @@ export class LineyDatabase {
       asJson(chat.raw),
       now,
     );
+    if (chat.historyState) {
+      this.db.query(
+        "UPDATE chats SET history_state = ?, updated_at = ? WHERE account_id = ? AND chat_id = ?",
+      ).run(chat.historyState, now, accountId, chat.id);
+    }
   }
 
   upsertChats(accountId: string, chats: DatabaseChat[]): void {
@@ -333,6 +435,7 @@ export class LineyDatabase {
       statusMessage: String(row.status_message ?? ""),
       isFavorite: Boolean(row.is_favorite),
       favoriteTime: Number(row.favorite_time ?? 0),
+      historyState: (["available", "new", "unavailable"].includes(String(row.history_state)) ? String(row.history_state) : "available") as ChatHistoryState,
       raw: fromJson(row.raw_json),
     }));
   }
@@ -340,19 +443,27 @@ export class LineyDatabase {
   listConversationChats(accountId: string, kind?: Exclude<ChatKind, "openchat">): DatabaseChat[] {
     const rows = (kind
       ? this.db.query(`
-          SELECT c.* FROM chats c
-          WHERE c.account_id = ? AND c.kind = ?
+            SELECT c.*, EXISTS (
+              SELECT 1 FROM messages m
+              WHERE m.account_id = c.account_id AND m.chat_id = c.chat_id
+            ) AS has_message_history
+            FROM chats c
+            WHERE c.account_id = ? AND c.kind = ?
             AND (
-              c.last_message_time > 0 OR c.preview <> '' OR
+              c.last_message_time > 0 OR c.preview <> '' OR c.history_state IN ('new', 'unavailable') OR
               EXISTS (SELECT 1 FROM messages m WHERE m.account_id = c.account_id AND m.chat_id = c.chat_id)
             )
           ORDER BY c.pinned DESC, c.last_message_time DESC
         `).all(accountId, kind)
       : this.db.query(`
-          SELECT c.* FROM chats c
-          WHERE c.account_id = ? AND c.kind IN ('dm', 'group')
+            SELECT c.*, EXISTS (
+              SELECT 1 FROM messages m
+              WHERE m.account_id = c.account_id AND m.chat_id = c.chat_id
+            ) AS has_message_history
+            FROM chats c
+            WHERE c.account_id = ? AND c.kind IN ('dm', 'group')
             AND (
-              c.last_message_time > 0 OR c.preview <> '' OR
+              c.last_message_time > 0 OR c.preview <> '' OR c.history_state IN ('new', 'unavailable') OR
               EXISTS (SELECT 1 FROM messages m WHERE m.account_id = c.account_id AND m.chat_id = c.chat_id)
             )
           ORDER BY c.pinned DESC, c.last_message_time DESC
@@ -371,6 +482,9 @@ export class LineyDatabase {
       statusMessage: String(row.status_message ?? ""),
       isFavorite: Boolean(row.is_favorite),
       favoriteTime: Number(row.favorite_time ?? 0),
+      historyState: row.has_message_history
+        ? "available"
+        : (["available", "new", "unavailable"].includes(String(row.history_state)) ? String(row.history_state) : "new") as ChatHistoryState,
       raw: fromJson(row.raw_json),
     }));
   }
@@ -381,8 +495,8 @@ export class LineyDatabase {
       INSERT INTO messages(
         account_id, chat_id, kind, id, server_id, text, filename, content_type, is_mine,
         created_time, sender_id, sender_name, sender_avatar_url,
-        post_notification_json, reactions_json, reply_to_id, unsent, status, raw_json, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        is_official_account, post_notification_json, reactions_json, reply_to_id, unsent, status, raw_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(account_id, chat_id, id) DO UPDATE SET
         server_id=COALESCE(excluded.server_id, messages.server_id),
         text=CASE WHEN messages.unsent = 1 THEN messages.text ELSE excluded.text END,
@@ -391,6 +505,7 @@ export class LineyDatabase {
         is_mine=excluded.is_mine, created_time=excluded.created_time,
         sender_id=excluded.sender_id, sender_name=excluded.sender_name,
         sender_avatar_url=excluded.sender_avatar_url,
+        is_official_account=MAX(messages.is_official_account, excluded.is_official_account),
         post_notification_json=excluded.post_notification_json,
         reactions_json=COALESCE(excluded.reactions_json, messages.reactions_json),
         reply_to_id=COALESCE(excluded.reply_to_id, messages.reply_to_id),
@@ -412,6 +527,7 @@ export class LineyDatabase {
       message.senderId ?? null,
       message.senderName ?? null,
       message.senderAvatarUrl ?? null,
+      message.isOfficialAccount ? 1 : 0,
       asJson(message.postNotification),
       asJson(message.reactions),
       message.replyToId ?? null,
@@ -420,6 +536,9 @@ export class LineyDatabase {
       asJson(message.raw),
       now,
     );
+    this.db.query(
+      "UPDATE chats SET history_state = 'available', updated_at = ? WHERE account_id = ? AND chat_id = ?",
+    ).run(now, accountId, message.chatId);
   }
 
   reconcileMessage(accountId: string, localId: string, message: DatabaseMessage, serverId?: string): void {
@@ -491,22 +610,52 @@ export class LineyDatabase {
         preview: activity.preview ?? "",
         unread: activity.isMine || activity.isNew === false ? 0 : 1,
         lastMessageTime: activity.createdTime,
+        historyState: "available",
       });
       return;
     }
     const preview = String(activity.preview ?? "");
+    const createdTime = Number.isFinite(activity.createdTime) ? activity.createdTime : Date.now();
     this.db.query(`
       UPDATE chats SET
-        preview = CASE WHEN ? <> '' THEN ? ELSE preview END,
+        preview = CASE WHEN ? <> '' AND ? >= last_message_time THEN ? ELSE preview END,
         unread = unread + ?,
         last_message_time = MAX(last_message_time, ?),
+        history_state = 'available',
         updated_at = ?
       WHERE account_id = ? AND chat_id = ?
     `).run(
       preview,
+      createdTime,
       preview,
-        activity.isMine || activity.isNew === false ? 0 : 1,
-      Number.isFinite(activity.createdTime) ? activity.createdTime : Date.now(),
+      activity.isMine || activity.isNew === false ? 0 : 1,
+      createdTime,
+      Date.now(),
+      accountId,
+      chatId,
+    );
+  }
+
+  setTrackedChatActivity(
+    accountId: string,
+    chatId: string,
+    activity: { preview: string; createdTime: number; unread: number },
+  ): void {
+    const createdTime = Number.isFinite(activity.createdTime) ? activity.createdTime : Date.now();
+    const unread = Math.max(0, Number.isFinite(activity.unread) ? activity.unread : 0);
+    this.db.query(`
+      UPDATE chats SET
+        preview = CASE WHEN ? <> '' THEN ? ELSE preview END,
+        unread = ?,
+        last_message_time = MAX(last_message_time, ?),
+        history_state = 'unavailable',
+        updated_at = ?
+      WHERE account_id = ? AND chat_id = ?
+    `).run(
+      activity.preview,
+      activity.preview,
+      unread,
+      createdTime,
       Date.now(),
       accountId,
       chatId,
@@ -609,6 +758,24 @@ export class LineyDatabase {
     return rows.reverse().map((row) => this.messageFromRow(row));
   }
 
+  listMessagesByContentType(accountId: string, contentType: number, limit = 100): DatabaseMessage[] {
+    const rows = this.db.query(`
+      SELECT * FROM messages
+      WHERE account_id = ? AND content_type = ?
+        AND kind IN ('dm', 'group')
+        AND NOT EXISTS (
+          SELECT 1 FROM hidden_messages h
+          WHERE h.account_id = messages.account_id
+            AND h.chat_id = messages.chat_id
+            AND h.kind = messages.kind
+            AND h.message_id = messages.id
+        )
+      ORDER BY created_time DESC, id DESC
+      LIMIT ?
+    `).all(accountId, contentType, Math.max(1, Math.min(limit, 500))) as Record<string, unknown>[];
+    return rows.map((row) => this.messageFromRow(row));
+  }
+
   private messageFromRow(row: Record<string, unknown>): DatabaseMessage {
     return {
       id: String(row.id),
@@ -622,6 +789,7 @@ export class LineyDatabase {
       senderId: row.sender_id ? String(row.sender_id) : undefined,
       senderName: row.sender_name ? String(row.sender_name) : undefined,
       senderAvatarUrl: row.sender_avatar_url ? String(row.sender_avatar_url) : undefined,
+      isOfficialAccount: Boolean(row.is_official_account),
       postNotification: fromJson(row.post_notification_json),
       reactions: fromJson(row.reactions_json),
       replyToId: row.reply_to_id ? String(row.reply_to_id) : undefined,
@@ -848,6 +1016,60 @@ export class LineyDatabase {
     };
   }
 
+  recordProtocolEvent(accountId: string, event: ProtocolEventRecord, maxEntries = 200): void {
+    const capturedAt = event.capturedAt ?? Date.now();
+    this.transaction(() => {
+      this.db.query(`
+        INSERT OR IGNORE INTO protocol_events(
+          account_id, event_key, source, op_type, revision, created_time,
+          param1, param2, param3, raw_json, captured_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        accountId,
+        event.eventKey,
+        event.source,
+        event.opType,
+        event.revision ?? null,
+        event.createdTime,
+        event.param1 ?? null,
+        event.param2 ?? null,
+        event.param3 ?? null,
+        asJson(event.raw),
+        capturedAt,
+      );
+      this.db.query(`
+        DELETE FROM protocol_events
+        WHERE account_id = ? AND event_key IN (
+          SELECT event_key FROM protocol_events
+          WHERE account_id = ?
+          ORDER BY captured_at DESC, event_key DESC
+          LIMIT -1 OFFSET ?
+        )
+      `).run(accountId, accountId, Math.max(1, maxEntries));
+    });
+  }
+
+  listProtocolEvents(accountId: string, limit = 200): ProtocolEventRecord[] {
+    const rows = this.db.query(`
+      SELECT * FROM protocol_events
+      WHERE account_id = ?
+      ORDER BY captured_at DESC, event_key DESC
+      LIMIT ?
+    `).all(accountId, Math.max(1, Math.min(limit, 500))) as Record<string, unknown>[];
+    return rows.map((row) => ({
+      eventKey: String(row.event_key),
+      source: String(row.source),
+      opType: String(row.op_type),
+      revision: row.revision === null ? undefined : String(row.revision),
+      createdTime: Number(row.created_time ?? 0),
+      param1: row.param1 === null ? undefined : String(row.param1),
+      param2: row.param2 === null ? undefined : String(row.param2),
+      param3: row.param3 === null ? undefined : String(row.param3),
+      raw: fromJson(row.raw_json),
+      capturedAt: Number(row.captured_at ?? 0),
+    }));
+  }
+
   saveMedia(accountId: string, mediaKey: string, path: string, mime: string, size: number): void {
     this.db.query(`
       INSERT INTO media_cache(account_id, media_key, path, mime, size, accessed_at)
@@ -883,6 +1105,16 @@ export class LineyDatabase {
       this.db.query("DELETE FROM hidden_messages WHERE account_id = ?").run(accountId);
       this.db.query("DELETE FROM outbox WHERE account_id = ?").run(accountId);
       this.db.query("DELETE FROM media_cache WHERE account_id = ?").run(accountId);
+      this.db.query("DELETE FROM protocol_events WHERE account_id = ?").run(accountId);
+    });
+  }
+
+  clearAccount(accountId: string): void {
+    this.transaction(() => {
+      for (const table of ["chats", "chat_members", "messages", "outbox", "sync_state", "protocol_events", "media_cache", "hidden_messages"] as const) {
+        this.db.query(`DELETE FROM ${table} WHERE account_id = ?`).run(accountId);
+      }
+      this.db.query("DELETE FROM accounts WHERE account_id = ?").run(accountId);
     });
   }
 
@@ -908,14 +1140,22 @@ export class LineyDatabase {
     this.db.close();
   }
 
-  private transaction(fn: () => void): void {
+  private transactionResult<T>(fn: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      fn();
+      const result = fn();
       this.db.exec("COMMIT");
+      return result;
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch { /* preserve original failure */ }
       throw error;
     }
+  }
+
+  private transaction(fn: () => void): void {
+    this.transactionResult(() => {
+      fn();
+      return undefined;
+    });
   }
 }

@@ -1,9 +1,8 @@
 /**
- * Versioned RPC contract between GTK UI and engine (AGENTS.md:5)
+ * Versioned RPC contract between the WebView UI and engine.
  * Single source of truth for method names and event types.
  */
 export const PROTOCOL_VERSION = 1 as const;
-export const LINEJS_VERSION = "3.3.2" as const;
 
 export type RpcRequest = {
   id: string;
@@ -36,8 +35,10 @@ export type EngineEventType =
   | "sync.start"
   | "sync.progress"
   | "sync.ready"
+  | "sync.error"
   | "sync.room_error"
   | "event.message"
+  | "event.message.updated"
   | "event.message.reaction"
   | "event.message.unsent"
   | "event.transport"
@@ -54,7 +55,9 @@ export const RPC_METHODS = [
   "chat.list",
   "friends.list",
   "openchat.list",
+  "call.history",
   "message.list",
+  "message.read_state",
   "message.send",
   "message.sendSticker",
   "message.sendEmoji",
@@ -62,9 +65,11 @@ export const RPC_METHODS = [
   "message.react",
   "message.unsend",
   "message.delete_for_me",
+  "asset.preview",
   "media.preview",
   "media.send",
   "chat.mark_read",
   "sync.start",
+  "sync.cancel",
   "sync.status",
 ] as const;

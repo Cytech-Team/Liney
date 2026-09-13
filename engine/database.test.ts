@@ -31,8 +31,32 @@ describe("LineyDatabase", () => {
       isNew: false,
     });
     expect(database.listChats("default")[0]?.unread).toBe(3);
+    database.recordMessageActivity("default", {
+      chatId: "u-peer",
+      kind: "dm",
+      preview: "edited old message",
+      createdTime: 1_699_999_999_999,
+      isMine: false,
+      isNew: false,
+    });
+    expect(database.listChats("default")[0]).toMatchObject({
+      preview: "live message",
+      unread: 3,
+      lastMessageTime: 1_700_000_000_010,
+    });
     database.markChatRead("default", "u-peer");
     expect(database.listChats("default")[0]?.unread).toBe(0);
+    database.setTrackedChatActivity("default", "u-peer", {
+      preview: "tracked metadata event",
+      createdTime: 1_700_000_000_020,
+      unread: 4,
+    });
+    expect(database.listChats("default")[0]).toMatchObject({
+      preview: "tracked metadata event",
+      unread: 4,
+      lastMessageTime: 1_700_000_000_020,
+      historyState: "unavailable",
+    });
     database.upsertMessage("default", {
       id: "local-1",
       chatId: "u-peer",
@@ -68,6 +92,28 @@ describe("LineyDatabase", () => {
       kind: "dm",
       raw: { id: "raw-1", contentType: "NONE" },
     });
+    database.upsertMessage("default", {
+      id: "official-1",
+      chatId: "u-peer",
+      kind: "dm",
+      text: "ประกาศจากบัญชีทางการ",
+      isMine: false,
+      isOfficialAccount: true,
+      createdTime: 1_700_000_000_005,
+      status: "sent",
+    });
+    expect(database.getMessage("default", "u-peer", "official-1")?.isOfficialAccount).toBe(true);
+    database.upsertMessage("default", {
+      id: "official-1",
+      chatId: "u-peer",
+      kind: "dm",
+      text: "ประกาศจากบัญชีทางการ",
+      isMine: false,
+      isOfficialAccount: false,
+      createdTime: 1_700_000_000_005,
+      status: "sent",
+    });
+    expect(database.getMessage("default", "u-peer", "official-1")?.isOfficialAccount).toBe(true);
 
     database.upsertMessage("default", {
       id: "hidden-1",
@@ -80,7 +126,7 @@ describe("LineyDatabase", () => {
     });
     database.hideMessageForMe("default", "u-peer", "dm", "hidden-1");
     expect(database.isMessageHidden("default", "u-peer", "dm", "hidden-1")).toBe(true);
-    expect(database.listMessages("default", "u-peer")).toHaveLength(1);
+    expect(database.listMessages("default", "u-peer")).toHaveLength(2);
 
     database.markMessageUnsent("default", "u-peer", "server-1");
     expect(database.listMessages("default", "u-peer")[0]).toMatchObject({
@@ -112,12 +158,110 @@ describe("LineyDatabase", () => {
     }]);
     database.setSyncState("default", { key: "dm:u-peer", generation: 3, status: "ready", cursor: "cursor-3" });
     expect(database.getSyncState("default", "dm:u-peer")?.generation).toBe(3);
+    database.recordProtocolEvent("default", {
+      eventKey: "rev:160",
+      source: "talk-system",
+      opType: "UPDATE_SERVICE_CHAT",
+      revision: "160",
+      createdTime: 1_700_000_000_030,
+      param1: "service",
+      raw: { type: 160, param1: "service" },
+    });
+    expect(database.listProtocolEvents("default")).toMatchObject([{
+      eventKey: "rev:160",
+      opType: "UPDATE_SERVICE_CHAT",
+      revision: "160",
+      param1: "service",
+    }]);
     expect(database.listChats("default")[0]?.id).toBe("u-peer");
-    expect(database.stats("default")).toEqual({ chats: 1, messages: 1, pending: 1 });
+    expect(database.stats("default")).toEqual({ chats: 1, messages: 2, pending: 1 });
     expect(statSync(join(root, "data", "liney.sqlite")).mode & 0o777).toBe(0o600);
 
     database.clearHistory("default");
     expect(database.stats("default")).toEqual({ chats: 1, messages: 0, pending: 0 });
+    database.close();
+  });
+
+  test("finds accounts by MID and rekeys legacy data without merging accounts", () => {
+    const root = mkdtempSync(join(tmpdir(), "liney-account-test-"));
+    const database = new LineyDatabase(join(root, "liney.sqlite"));
+    database.upsertAccount("default", { mid: "u-first", displayName: "First" });
+    database.upsertChat("default", { id: "u-peer", kind: "dm", name: "Peer" });
+
+    expect(database.findAccountIdByMid("u-first")).toBe("default");
+    expect(database.rekeyAccount("default", "account:first")).toBe(true);
+    expect(database.findAccountIdByMid("u-first")).toBe("account:first");
+    expect(database.listChats("account:first")).toHaveLength(1);
+    expect(database.listChats("default")).toHaveLength(0);
+
+    database.upsertAccount("account:second", { mid: "u-second", displayName: "Second" });
+    expect(database.rekeyAccount("account:first", "account:second")).toBe(false);
+    expect(database.listChats("account:first")).toHaveLength(1);
+    database.clearAccount("account:first");
+    expect(database.getAccount("account:first")).toBeNull();
+    expect(database.listChats("account:first")).toHaveLength(0);
+    database.close();
+  });
+
+  test("keeps explicit never-chatted rows in the conversation list", () => {
+    const root = mkdtempSync(join(tmpdir(), "liney-stale-chat-test-"));
+    const database = new LineyDatabase(join(root, "liney.sqlite"));
+    database.upsertChat("default", {
+      id: "u-stale",
+      kind: "dm",
+      name: "Stale contact",
+      lastMessageTime: 1_700_000_000_000,
+      historyState: "new",
+    });
+    database.upsertChat("default", {
+      id: "u-preview",
+      kind: "dm",
+      name: "Recent contact",
+      preview: "hello",
+      lastMessageTime: 1_700_000_000_001,
+    });
+
+    expect(database.listConversationChats("default").map((chat) => chat.id)).toEqual(["u-preview", "u-stale"]);
+    expect(database.listConversationChats("default")[1]).toMatchObject({
+      historyState: "new",
+    });
+    database.close();
+  });
+
+  test("lists visible CALL messages without mixing in other content", () => {
+    const root = mkdtempSync(join(tmpdir(), "liney-call-history-test-"));
+    const database = new LineyDatabase(join(root, "liney.sqlite"));
+    database.upsertMessage("default", {
+      id: "call-1",
+      chatId: "u-peer",
+      kind: "dm",
+      text: "Call History : 11000 millisecs, Result: 16",
+      isMine: false,
+      createdTime: 1_700_000_000_000,
+      contentType: 6,
+      raw: {
+        id: "call-1",
+        contentType: "CALL",
+        contentMetadata: { DURATION: "11000", RESULT: "NORMAL", CAUSE: "16" },
+      },
+    });
+    database.upsertMessage("default", {
+      id: "text-1",
+      chatId: "u-peer",
+      kind: "dm",
+      text: "ข้อความปกติ",
+      isMine: false,
+      createdTime: 1_700_000_000_001,
+      contentType: 0,
+    });
+
+    expect(database.listMessagesByContentType("default", 6)).toMatchObject([{
+      id: "call-1",
+      contentType: 6,
+      raw: { contentType: "CALL" },
+    }]);
+    database.hideMessageForMe("default", "u-peer", "dm", "call-1");
+    expect(database.listMessagesByContentType("default", 6)).toEqual([]);
     database.close();
   });
 });

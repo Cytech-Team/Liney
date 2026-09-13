@@ -5,7 +5,7 @@
     "": {
       "name": "liney",
       "dependencies": {
-        "@evex/linejs": "npm:@jsr/evex__linejs@3.3.2",
+        "@evex/linejs": "npm:@jsr/evex__linejs@3.4.2",
         "@tauri-apps/api": "^2.11.1",
         "@tauri-apps/plugin-dialog": "^2",
         "@tauri-apps/plugin-notification": "^2",
@@ -30,9 +30,9 @@
     },
   },
   "packages": {
-    "@evex/linejs": ["@jsr/evex__linejs@3.3.2", "https://npm.jsr.io/~/11/@jsr/evex__linejs/3.3.2.tgz", { "dependencies": { "@jsr/evex__linejs-types": "^3.3.2", "@jsr/evex__loose-types": "^1.0.1", "@noble/ciphers": "^2.2", "@types/node-int64": "^0.4.32", "@types/thrift": "^0.10.17", "crypto-js": "^4.2.0", "curve25519-js": "^0.0.4", "node-bignumber": "^1.2.2", "node-int64": "^0.4.0", "opusscript": "^0.1.1", "thrift": "^0.20.0", "tweetnacl": "^1.0.3", "undici": "^7" } }, "sha512-YaZnUDJMbMzFWyQ4ROTyRCTVs9A4vj5uDoSl1FaEM5ydxipKR+zIqeJDImE6RmJCqoFeFUlI7aZ49MmxrT5Epw=="],
+    "@evex/linejs": ["@jsr/evex__linejs@3.4.2", "https://npm.jsr.io/~/11/@jsr/evex__linejs/3.4.2.tgz", { "dependencies": { "@jsr/evex__linejs-types": "^3.4.2", "@jsr/evex__loose-types": "^1.0.1", "@noble/ciphers": "^2.2", "@types/node-int64": "^0.4.32", "@types/thrift": "^0.10.17", "crypto-js": "^4.2.0", "curve25519-js": "^0.0.4", "node-bignumber": "^1.2.2", "node-int64": "^0.4.0", "opusscript": "^0.1.1", "thrift": "^0.20.0", "tweetnacl": "^1.0.3", "undici": "^7" } }, "sha512-nq7q2DKMdOUn1bK5I2sdTb0waaD0JkK/8Zi18T8iQA+nsHLJSlXuTYpvQcfrY2EFPu5IJ5HEUaiJfOkVIzTWIg=="],
 
-    "@jsr/evex__linejs-types": ["@jsr/evex__linejs-types@3.3.2", "https://npm.jsr.io/~/11/@jsr/evex__linejs-types/3.3.2.tgz", { "dependencies": { "@jsr/evex__loose-types": "^1.0.1" } }, "sha512-ilW/mmoZWgewQdNB1JOLBD7u4VjHfy5XAiu5MkepZr7Ytqaetj3EjzuLJ0uYKoRGhWA8vAhZQOvgDSU04NVj3Q=="],
+    "@jsr/evex__linejs-types": ["@jsr/evex__linejs-types@3.4.2", "https://npm.jsr.io/~/11/@jsr/evex__linejs-types/3.4.2.tgz", { "dependencies": { "@jsr/evex__loose-types": "^1.0.1" } }, "sha512-3eQqLqjf4y2RINj2LD4HM+sApxZF54y8+GxredjzuS1yw5ppvtNhhzMkIEDqFlsMnbE0drSCAySKNo3USiKMzA=="],
 
     "@jsr/evex__loose-types": ["@jsr/evex__loose-types@1.0.1", "https://npm.jsr.io/~/11/@jsr/evex__loose-types/1.0.1.tgz", {}, "sha512-ENNSHt+xHtkMJj+wp4dGWpLVY3J/BPSfXOo2u6ObFCuLN/hL71HUNQ/xB32jiqQj+u8nqWlGuenH1toFLDYM6Q=="],
 

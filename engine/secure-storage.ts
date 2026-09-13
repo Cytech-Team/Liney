@@ -1,4 +1,4 @@
-import { BaseStorage, type Storage } from "@evex/linejs/storage";
+import { BaseStorage, type Storage } from "./linejs/adapter";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -316,7 +316,7 @@ export class SecureLineStorage extends BaseStorage {
         return;
       }
       if (SECRET_FIELD.test(key)) {
-        // Keep future access/auth token keys process-local too. LINEJS 3.3.2
+        // Keep future access/auth token keys process-local too. Current LINEJS
         // does not write the access token through Storage, but this boundary
         // prevents a dependency upgrade from creating a plaintext secret file.
         if (value === null || value === undefined || value === "") this.memorySecrets.delete(key);

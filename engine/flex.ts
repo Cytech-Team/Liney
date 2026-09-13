@@ -8,7 +8,7 @@ export type FlexMessageData = {
 const MAX_FLEX_JSON_LENGTH = 768 * 1024;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parseJson(value: unknown): unknown {
@@ -27,25 +27,45 @@ function parseJson(value: unknown): unknown {
   }
 }
 
+function parseRecord(value: unknown): Record<string, unknown> | undefined {
+  const direct = isRecord(value) ? value : undefined;
+  if (direct) return direct;
+  const parsed = parseJson(value);
+  return isRecord(parsed) ? parsed : undefined;
+}
+
+function messageMetadata(raw: unknown): Record<string, unknown> | undefined {
+  const source = isRecord(raw) && isRecord(raw.raw) ? raw.raw : raw;
+  return isRecord(source) ? parseRecord(source.contentMetadata) : undefined;
+}
+
+function metadataText(metadata: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value !== "string") continue;
+    const text = value.trim();
+    if (text) return text;
+  }
+  return undefined;
+}
+
 /**
  * Extract the JSON Flex document from a raw Talk or Square message.
  * Only the two LINE Flex root types are accepted; the UI renders the known
  * component types itself and never evaluates payload content as markup.
  */
 export function parseFlexMessage(raw: unknown): FlexMessageData | undefined {
-  const source = isRecord(raw) && isRecord(raw.raw) ? raw.raw : raw;
-  if (!isRecord(source)) return undefined;
-  const metadata = isRecord(source.contentMetadata) ? source.contentMetadata : undefined;
+  const metadata = messageMetadata(raw);
   if (!metadata) return undefined;
 
   const contents = parseJson(metadata.FLEX_JSON ?? metadata.flexJson);
   if (!isRecord(contents)) return undefined;
-  const type = String(contents.type ?? "").toLowerCase();
+  const type = String(contents.type ?? "").trim().toLowerCase();
   if (type !== "bubble" && type !== "carousel") return undefined;
 
-  const altText = String(metadata.ALT_TEXT ?? metadata.altText ?? "").trim();
-  const version = String(metadata.FLEX_VER ?? metadata.flexVer ?? "").trim();
-  const effectTag = String(metadata.EFFECT_TAG ?? metadata.effectTag ?? "").trim();
+  const altText = metadataText(metadata, "ALT_TEXT", "altText");
+  const version = metadataText(metadata, "FLEX_VER", "flexVer");
+  const effectTag = metadataText(metadata, "EFFECT_TAG", "effectTag");
   return {
     contents,
     ...(altText ? { altText } : {}),

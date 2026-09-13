@@ -5,8 +5,6 @@
   "identifier": "dev.liney.desktop",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://127.0.0.1:1420",
-    "beforeDevCommand": "bun run web:dev --host 127.0.0.1 --port 1420",
     "beforeBuildCommand": "bun run web:build"
   },
   "app": {
@@ -17,14 +15,19 @@
         "height": 820,
         "resizable": true,
         "fullscreen": false,
-        "minWidth": 960,
-        "minHeight": 640,
+        "minWidth": 360,
+        "minHeight": 520,
         "center": true
       }
     ],
     "security": {
       "csp": "default-src 'self'; connect-src 'self' https://*.line.me https://*.line-scdn.net wss://*.line.me wss://*.line-scdn.net; img-src 'self' data: blob: https: asset: http://asset.localhost; media-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; object-src 'none'",
-      "assetProtocol": { "enable": true, "scope": ["$APPDATA/image-viewer/**"] }
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPDATA/image-viewer/**"
+        ]
+      }
     }
   },
   "plugins": {
@@ -34,7 +37,14 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "deb",
+      "rpm",
+      "appimage"
+    ],
+    "category": "SocialNetworking",
+    "shortDescription": "LINE desktop client for Linux",
+    "longDescription": "An independent, unofficial LINE desktop client for Linux.",
     "copyright": "Copyright © 2026 Cytech Team Development and Liney contributors",
     "license": "LicenseRef-TLL-1.0",
     "licenseFile": "../LICENSE",
@@ -52,6 +62,14 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    },
+    "linux": {
+      "deb": {
+        "desktopTemplate": "../packaging/liney.desktop"
+      },
+      "rpm": {
+        "desktopTemplate": "../packaging/liney.desktop"
+      }
     },
     "externalBin": [
       "binaries/liney-engine"

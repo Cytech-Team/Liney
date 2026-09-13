@@ -4,6 +4,8 @@ import { createInterface, type Interface } from "node:readline";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { LineyDatabase } from "./database";
+import { LINEJS_VERSION } from "./linejs/adapter";
 
 type Message = Record<string, unknown>;
 
@@ -40,6 +42,57 @@ function waitForMessage(rl: Interface, child: ChildProcessWithoutNullStreams, pr
 describe("engine JSONL contract", () => {
   test("returns versioned responses and structured errors", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "liney-rpc-test-"));
+    const cachedDatabase = new LineyDatabase(join(dataDir, "liney.sqlite"));
+    cachedDatabase.upsertChat("default", {
+      id: "u-cached",
+      kind: "dm",
+      name: "Cached friend",
+      preview: "offline history",
+      lastMessageTime: 1_700_000_000_000,
+    });
+    cachedDatabase.upsertMessage("default", {
+      id: "cached-message",
+      chatId: "u-cached",
+      kind: "dm",
+      text: "ยังเปิดดูได้ตอนออฟไลน์",
+      isMine: false,
+      createdTime: 1_700_000_000_000,
+      status: "sent",
+    });
+    cachedDatabase.upsertMessage("default", {
+      id: "631000000000000001",
+      chatId: "u-reply",
+      kind: "dm",
+      text: "ข้อความต้นทางที่อยู่นอกหน้าต่างโหลด",
+      isMine: false,
+      createdTime: 1_700_000_000_100,
+      status: "sent",
+    });
+    cachedDatabase.upsertMessage("default", {
+      id: "631000000000000002",
+      chatId: "u-reply",
+      kind: "dm",
+      text: "ตอบกลับข้อความเก่า",
+      isMine: true,
+      createdTime: 1_700_000_000_200,
+      replyToId: "631000000000000001",
+      status: "sent",
+    });
+    cachedDatabase.upsertMessage("default", {
+      id: "cached-call",
+      chatId: "u-cached",
+      kind: "dm",
+      text: "Call History : 11000 millisecs, Result: 16",
+      isMine: false,
+      createdTime: 1_699_999_999_000,
+      contentType: 6,
+      raw: {
+        id: "cached-call",
+        contentType: "CALL",
+        contentMetadata: { DURATION: "11000", RESULT: "NORMAL", CAUSE: "16" },
+      },
+    });
+    cachedDatabase.close();
     const child = spawn(process.execPath, ["run", join(import.meta.dir, "main.ts")], {
       env: {
         ...process.env,
@@ -53,7 +106,7 @@ describe("engine JSONL contract", () => {
     try {
       const ready = await waitForMessage(rl, child, (message) => message.type === "engine.ready");
       expect(ready.version).toBe(1);
-      expect(ready.payload).toMatchObject({ engine: "liney-engine", linejsVersion: "3.3.2" });
+      expect(ready.payload).toMatchObject({ engine: "liney-engine", linejsVersion: LINEJS_VERSION });
 
       child.stdin.write(`${JSON.stringify({ id: "bad-version", version: 99, method: "ping", params: {} })}\n`);
       const versionError = await waitForMessage(rl, child, (message) => message.id === "bad-version");
@@ -72,10 +125,54 @@ describe("engine JSONL contract", () => {
       expect(caps.result).toMatchObject({ protocolVersion: 1, authenticated: false });
       expect((caps.result as { features: string[] }).features).not.toContain("call-audio-1to1");
 
+      child.stdin.write(`${JSON.stringify({ id: "cached-chats", version: 1, method: "chat.list", params: {} })}\n`);
+      const cachedChats = await waitForMessage(rl, child, (message) => message.id === "cached-chats");
+      expect(cachedChats.ok).toBe(true);
+      expect(cachedChats.result).toMatchObject([{ id: "u-cached", name: "Cached friend" }]);
+
+      child.stdin.write(`${JSON.stringify({ id: "cached-messages", version: 1, method: "message.list", params: { chatId: "u-cached", kind: "talk", limit: 1 } })}\n`);
+      const cachedMessages = await waitForMessage(rl, child, (message) => message.id === "cached-messages");
+      expect(cachedMessages.ok).toBe(true);
+      expect(cachedMessages.result).toMatchObject([{ id: "cached-message", text: "ยังเปิดดูได้ตอนออฟไลน์" }]);
+
+      child.stdin.write(`${JSON.stringify({ id: "cached-reply", version: 1, method: "message.list", params: { chatId: "u-reply", kind: "talk", limit: 1 } })}\n`);
+      const cachedReply = await waitForMessage(rl, child, (message) => message.id === "cached-reply");
+      expect(cachedReply.ok).toBe(true);
+      expect(cachedReply.result).toMatchObject([{
+        id: "631000000000000002",
+        replyTo: {
+          id: "631000000000000001",
+          text: "ข้อความต้นทางที่อยู่นอกหน้าต่างโหลด",
+          author: "them",
+        },
+      }]);
+
+      child.stdin.write(`${JSON.stringify({ id: "cached-call-message", version: 1, method: "message.list", params: { chatId: "u-cached", kind: "talk", limit: 2 } })}\n`);
+      const cachedCallMessage = await waitForMessage(rl, child, (message) => message.id === "cached-call-message");
+      expect((cachedCallMessage.result as Array<Record<string, unknown>>)[0]).toMatchObject({
+        id: "cached-call",
+        text: "โทรสำเร็จ · 11 วินาที",
+        call: { durationMs: 11_000, status: "completed" },
+      });
+
+      child.stdin.write(`${JSON.stringify({ id: "cached-calls", version: 1, method: "call.history", params: {} })}\n`);
+      const cachedCalls = await waitForMessage(rl, child, (message) => message.id === "cached-calls");
+      expect(cachedCalls.ok).toBe(true);
+      expect(cachedCalls.result).toMatchObject([{
+        id: "cached-call",
+        chatId: "u-cached",
+        call: { durationMs: 11_000, status: "completed" },
+      }]);
+
       child.stdin.write(`${JSON.stringify({ id: "asset-unsafe", version: 1, method: "asset.preview", params: { url: "http://127.0.0.1/private.png" } })}\n`);
       const assetError = await waitForMessage(rl, child, (message) => message.id === "asset-unsafe");
       expect(assetError.ok).toBe(false);
       expect(assetError.error).toMatchObject({ code: "ENGINE_ERROR", retryable: false });
+
+      child.stdin.write(`${JSON.stringify({ id: "link-unsafe", version: 1, method: "link.preview", params: { url: "http://127.0.0.1/private.html" } })}\n`);
+      const linkError = await waitForMessage(rl, child, (message) => message.id === "link-unsafe");
+      expect(linkError.ok).toBe(false);
+      expect(linkError.error).toMatchObject({ code: "ENGINE_ERROR", retryable: false });
 
       child.stdin.write(`${JSON.stringify({ id: "password-missing", version: 1, method: "auth.password.start", params: { email: "" } })}\n`);
       const passwordError = await waitForMessage(rl, child, (message) => message.id === "password-missing");

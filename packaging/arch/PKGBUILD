@@ -1,23 +1,64 @@
 pkgname=liney
 pkgver=0.1.0
 pkgrel=1
-pkgdesc='Native GTK4 LINE desktop client'
+pkgdesc='Independent unofficial LINE desktop client for Linux'
 arch=('x86_64')
 url='https://github.com/Cytech-Team/Liney'
-license=('custom')
-depends=('gtk4' 'gstreamer' 'gst-plugins-base' 'pipewire')
-optdepends=('libsecret: Secret Service credential storage')
-source=()
-sha256sums=()
+license=('custom:TLL-1.0')
+depends=(
+  'webkit2gtk-4.1'
+  'gtk3'
+  'libappindicator-gtk3'
+  'gstreamer'
+  'gst-plugins-base'
+  'pipewire'
+)
+makedepends=(
+  'bun'
+  'rust'
+  'cargo'
+  'pkgconf'
+  'librsvg'
+  'patchelf'
+  'git'
+  'curl'
+  'file'
+)
+optdepends=(
+  'libsecret: persistent Secret Service credential storage'
+  'gst-plugins-good: additional media codecs'
+  'gst-plugins-bad: additional media codecs'
+  'gst-libav: FFmpeg-backed media codecs'
+)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+# Replace this with the release tarball checksum before publishing to AUR.
+sha256sums=('SKIP')
+
+build() {
+  cd "$srcdir/Liney-$pkgver"
+  bun install --frozen-lockfile
+  bun run doctor
+  bun test
+  bun run lint
+  bun run web:build
+
+  local target
+  target=$(rustc -vV | sed -n 's/^host: //p')
+  LINEY_TARGET_TRIPLE="$target" scripts/build-sidecar.sh
+  cargo build --release --locked --manifest-path src-tauri/Cargo.toml
+}
 
 package() {
-  install -Dm755 "$startdir/liney-bin" "$pkgdir/usr/lib/liney/liney-bin"
-  install -Dm755 "$startdir/liney-engine" "$pkgdir/usr/lib/liney/liney-engine"
-  install -Dm755 "$startdir/liney-launcher" "$pkgdir/usr/bin/liney"
-  install -Dm644 "$startdir/liney.desktop" "$pkgdir/usr/share/applications/liney.desktop"
-  install -Dm644 "$startdir/liney.png" "$pkgdir/usr/share/icons/hicolor/512x512/apps/liney.png"
-  install -Dm644 "$startdir/README.md" "$pkgdir/usr/share/doc/liney/README.md"
-  install -Dm644 "$startdir/branding-README.md" "$pkgdir/usr/share/doc/liney/branding/README.md"
-  install -Dm644 "$startdir/LICENSE" "$pkgdir/usr/share/licenses/liney/LICENSE"
-  install -Dm644 "$startdir/liney-logo.jpg" "$pkgdir/usr/share/doc/liney/branding/liney-logo.jpg"
+  cd "$srcdir/Liney-$pkgver"
+  local target
+  target=$(rustc -vV | sed -n 's/^host: //p')
+
+  install -Dm755 src-tauri/target/release/liney "$pkgdir/usr/lib/liney/liney"
+  install -Dm755 "src-tauri/binaries/liney-engine-$target" "$pkgdir/usr/lib/liney/liney-engine"
+  install -Dm755 packaging/liney-launcher "$pkgdir/usr/bin/liney"
+  install -Dm644 packaging/liney.desktop "$pkgdir/usr/share/applications/liney.desktop"
+  install -Dm644 packaging/liney.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/liney.png"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/liney/README.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/liney/LICENSE"
+  install -Dm644 branding/liney-logo.jpg "$pkgdir/usr/share/doc/liney/branding/liney-logo.jpg"
 }

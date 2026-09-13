@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { RichMessageData } from "../data/mock";
 import type { FlexAction } from "./FlexMessage";
+import { RemoteImage, type RemoteImageStatus } from "./RemoteImage";
 
 function safeHttpsUrl(value: string): string | undefined {
   try {
@@ -12,7 +13,7 @@ function safeHttpsUrl(value: string): string | undefined {
 }
 
 export function RichMessage({ data, onAction }: { data: RichMessageData; onAction?: (action: FlexAction) => void | Promise<void> }) {
-  const [failed, setFailed] = useState(false);
+  const [imageStatus, setImageStatus] = useState<RemoteImageStatus>("loading");
   const width = data.width && data.width > 0 ? data.width : undefined;
   const height = data.height && data.height > 0 ? data.height : undefined;
   const imageUrl = safeHttpsUrl(data.imageUrl);
@@ -20,21 +21,20 @@ export function RichMessage({ data, onAction }: { data: RichMessageData; onActio
     action.width > 0 && action.height > 0 && safeHttpsUrl(action.link)
   ));
   const style = width && height ? { aspectRatio: `${width} / ${height}` } : undefined;
+  const fallback = <div className="rich-message-fallback">{data.altText || "Rich message โหลดไม่ได้"}</div>;
 
   return (
     <div className={`rich-message ${width && height ? "rich-message-canvas" : ""}`} style={style}>
-      {imageUrl && !failed ? (
-        <img
+      {imageUrl ? (
+        <RemoteImage
           src={imageUrl}
           alt={data.altText || "Rich message"}
           loading="lazy"
-          referrerPolicy="no-referrer"
-          onError={() => setFailed(true)}
+          fallback={fallback}
+          onStatus={setImageStatus}
         />
-      ) : (
-        <div className="rich-message-fallback">{data.altText || "Rich message โหลดไม่ได้"}</div>
-      )}
-      {!failed && imageUrl ? actions.map((action, index) => {
+      ) : fallback}
+      {imageStatus === "loaded" && imageUrl ? actions.map((action, index) => {
         const link = safeHttpsUrl(action.link);
         if (!link) return null;
         const regionStyle = width && height ? {

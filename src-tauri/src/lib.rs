@@ -32,7 +32,9 @@ const MAX_VIEWER_IMAGE_BYTES: usize = 25 * 1024 * 1024;
 
 fn valid_viewer_image_id(value: &str) -> bool {
     (1..=80).contains(&value.len())
-        && value.chars().all(|character| character.is_ascii_alphanumeric() || character == '-')
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
 }
 
 #[tauri::command]
@@ -85,20 +87,38 @@ fn stage_image_viewer(
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
             .map_err(|error| error.to_string())?;
     }
-    images.0.lock().map_err(|_| "คลังรูปภาพถูกล็อก".to_string())?.insert(image_id, path);
+    images
+        .0
+        .lock()
+        .map_err(|_| "คลังรูปภาพถูกล็อก".to_string())?
+        .insert(image_id, path);
     Ok(())
 }
 
 #[tauri::command]
-fn viewer_image_path(images: tauri::State<'_, ViewerImages>, image_id: String) -> Result<ViewerImagePath, String> {
+fn viewer_image_path(
+    images: tauri::State<'_, ViewerImages>,
+    image_id: String,
+) -> Result<ViewerImagePath, String> {
     let images = images.0.lock().map_err(|_| "คลังรูปภาพถูกล็อก".to_string())?;
-    let path = images.get(&image_id).ok_or_else(|| "ไม่พบรูปภาพนี้แล้ว".to_string())?;
-    Ok(ViewerImagePath { path: path.to_string_lossy().to_string() })
+    let path = images
+        .get(&image_id)
+        .ok_or_else(|| "ไม่พบรูปภาพนี้แล้ว".to_string())?;
+    Ok(ViewerImagePath {
+        path: path.to_string_lossy().to_string(),
+    })
 }
 
 #[tauri::command]
-fn release_viewer_image(images: tauri::State<'_, ViewerImages>, image_id: String) -> Result<(), String> {
-    let path = images.0.lock().map_err(|_| "คลังรูปภาพถูกล็อก".to_string())?.remove(&image_id);
+fn release_viewer_image(
+    images: tauri::State<'_, ViewerImages>,
+    image_id: String,
+) -> Result<(), String> {
+    let path = images
+        .0
+        .lock()
+        .map_err(|_| "คลังรูปภาพถูกล็อก".to_string())?
+        .remove(&image_id);
     if let Some(path) = path {
         fs::remove_file(path).map_err(|error| error.to_string())?;
     }
@@ -114,13 +134,21 @@ fn notify_message(
     message_id: String,
     sound: bool,
 ) -> Result<(), String> {
-    if title.is_empty() || title.len() > 512 || body.len() > 4_096 || chat_id.is_empty() || message_id.is_empty() {
+    if title.is_empty()
+        || title.len() > 512
+        || body.len() > 4_096
+        || chat_id.is_empty()
+        || message_id.is_empty()
+    {
         return Err("ข้อมูล notification ไม่ถูกต้อง".into());
     }
 
     #[cfg(target_os = "linux")]
     {
-        let target = NotificationTarget { chat_id, message_id };
+        let target = NotificationTarget {
+            chat_id,
+            message_id,
+        };
         std::thread::Builder::new()
             .name("liney-notification-action".to_string())
             .spawn(move || {
@@ -141,9 +169,13 @@ fn notify_message(
                 // clicked or expires; app_for_thread keeps the D-Bus connection
                 // alive so a click can still reach the window on the KDE daemon.
                 let app_for_thread = app.clone();
-                let Ok(handle) = notification.show() else { return };
+                let Ok(handle) = notification.show() else {
+                    return;
+                };
                 handle.wait_for_action(move |action| {
-                    if action == "__closed" { return; }
+                    if action == "__closed" {
+                        return;
+                    }
                     // Deliver the chat target application-wide first. The main
                     // window can have a different label in future builds, but
                     // a notification action must never be discarded for that.
@@ -282,9 +314,37 @@ fn open_external_url(url: String) -> Result<(), String> {
         .map_err(|error| format!("Could not open URL: {error}"))
 }
 
+#[cfg(target_os = "linux")]
+fn prefer_x11_for_webkit_on_wayland() {
+    // WebKitGTK can create a visible but empty Tauri window with the Wayland
+    // backend on some supported desktop/library combinations. AppImage's
+    // GTK hook uses the same fallback; keep direct binary and .deb launches
+    // consistent when XWayland is available.
+    let backend = std::env::var("GDK_BACKEND").unwrap_or_default();
+    let wayland_requested = backend
+        .split(',')
+        .any(|candidate| candidate.trim().eq_ignore_ascii_case("wayland"))
+        || (backend.is_empty() && std::env::var_os("WAYLAND_DISPLAY").is_some());
+    if wayland_requested && std::env::var_os("DISPLAY").is_some() {
+        std::env::set_var("GDK_BACKEND", "x11");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    prefer_x11_for_webkit_on_wayland();
+
     tauri::Builder::default()
+        // Keep this plugin first: two Liney instances would create two LINEJS
+        // sidecars for the same account and can split push/revision delivery.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .manage(WindowPolicy(Arc::new(AtomicBool::new(true))))
         .manage(ViewerImages::default())
         .invoke_handler(tauri::generate_handler![

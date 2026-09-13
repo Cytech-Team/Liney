@@ -23,4 +23,18 @@ describe("parseFlexMessage", () => {
     expect(parseFlexMessage({ contentMetadata: { FLEX_JSON: JSON.stringify({ type: "box" }) } })).toBeUndefined();
     expect(parseFlexMessage({ contentMetadata: { FLEX_JSON: "not-json" } })).toBeUndefined();
   });
+
+  test("accepts JSON metadata wrappers without inventing undefined labels", () => {
+    const result = parseFlexMessage({
+      raw: {
+        contentMetadata: JSON.stringify({
+          flexJson: JSON.stringify({ type: "bubble", body: { type: "box", layout: "vertical", contents: [] } }),
+        }),
+      },
+    });
+
+    expect(result).toEqual({
+      contents: { type: "bubble", body: { type: "box", layout: "vertical", contents: [] } },
+    });
+  });
 });

@@ -45,3 +45,6 @@ release/
 
 # Bundled engine sidecar (built from engine/, not committed)
 /src-tauri/binaries/
+
+# One-off local protocol probes
+.tmp-*.ts

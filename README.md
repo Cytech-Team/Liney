@@ -145,7 +145,9 @@ Install dependencies and start the desktop app (React + Tauri WebView):
 
 ```sh
 bun install
-bun run dev
+bun run doctor    # verify WebKitGTK 4.1 / Linux desktop dependencies
+bun run dev       # static WebView; ไม่เปิด localhost/web server
+bun run dev:web   # optional Vite HMR development server
 ```
 
 Build a release bundle:
@@ -157,6 +159,23 @@ bun run build
 The internals stay cleanly separated: `src/` (React UI) talks to the
 `liney-engine` sidecar over versioned JSONL, and the engine owns all LINEJS,
 SQLite, sync, and media logic.
+
+## Public web preview
+
+The Vite build also contains a static product-preview site for
+`liney.namnarak.in.th`:
+
+```text
+/        product overview
+/login   login-flow illustration (demo only)
+/chat    interactive mock chat UI (demo data only)
+```
+
+These pages do not log in to LINE, send credentials, or connect to the Liney
+engine. They are intended for public product communication only. Deploy the
+`dist/` directory to Cloudflare Pages with `bun run web:build` (or
+`npm run web:build`), and keep the included `public/_redirects` file so direct
+loads of `/login` and `/chat` fall back to the SPA entry point.
 
 ## Engine RPC
 
@@ -173,7 +192,7 @@ Core methods include:
 
 ```text
 auth.qr.start       auth.password.start  auth.restore       auth.logout
-sync.start          sync.status       chat.list
+sync.start          sync.cancel       sync.status       chat.list
 message.list        message.send      message.retry
 media.preview       media.send        chat.markRead
 call.start          call.accept       call.reject
@@ -189,7 +208,6 @@ Run the automated checks from the project root:
 bun test
 bun run lint
 bun run build
-bun run engine:build
 ```
 
 The repository includes unit tests for storage migration, SQLite behavior,
@@ -198,18 +216,21 @@ and the engine RPC contract.
 
 ## Build and release
 
-The release workflow boots the engine sidecar, builds the React + Tauri (WebView)
-app with `bun run build`, and uploads the resulting `liney` + `liney-engine`
-binaries. It verifies the binary is the WebKit (Tauri) build, then hashes and
-stages the artifacts.
+The release workflow builds the engine sidecar, React + Tauri (WebView) app,
+`.deb`, and AppImage with `bun run build` for x86_64 and aarch64 runners. It
+verifies the WebKit build and AppImage runtime, then uploads the packages,
+binaries, and hashes.
 
 Local helpers:
 
 ```sh
-bun run dev        # live dev (vite + tauri)
-bun run build      # release bundle
-bun run web:build  # build the frontend only
-bun run engine:build  # compile the engine sidecar
+bun run dev        # static Tauri WebView; ไม่แย่ง port
+bun run dev:web    # optional Vite + Tauri HMR
+bun run build          # release .deb + AppImage (also builds the sidecar)
+bun run build:deb      # Debian package only
+bun run build:appimage # AppImage only
+bun run web:build      # frontend only
+bun run engine:build   # compile and stage the engine sidecar
 ```
 
 Release bundles must never contain credentials or a user's session.
@@ -285,3 +306,19 @@ Third-party dependencies and bundled components remain under their own
 licenses. Read the relevant notices before redistributing a build.
 
 See [LICENSE](LICENSE) for the complete terms.
+
+## Distribution
+
+Validated Linux release artifacts are generated with:
+
+```sh
+bun run release:local
+```
+
+This runs the dependency doctor, unit tests, lint, and Tauri packaging, then writes
+versioned AppImage, Debian, RPM, portable tarball, and SHA-256 checksum files to
+`release/`. The portable tarball includes `install-user.sh` for a per-user install.
+
+Tags matching the application version (for example `v0.1.0`) run the same release
+gate in GitHub Actions on x86_64 and aarch64 and attach the verified artifacts to
+the GitHub Release automatically.

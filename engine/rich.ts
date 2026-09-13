@@ -32,6 +32,14 @@ function parseRecord(value: unknown): Record<string, unknown> | undefined {
   return asRecord(parsed);
 }
 
+function messageMetadata(raw: unknown): Record<string, unknown> | undefined {
+  const direct = asRecord(raw);
+  const nested = direct ? asRecord(direct.raw) : undefined;
+  const source = nested ?? direct;
+  const metadata = source?.contentMetadata;
+  return asRecord(metadata) ?? parseRecord(metadata);
+}
+
 function safeHttpsUrl(value: unknown): string | undefined {
   const text = typeof value === "string" ? value.trim() : "";
   if (!text || text.length > 8_000) return undefined;
@@ -64,7 +72,7 @@ function stringValue(value: unknown): string | undefined {
  * Only HTTPS image and web URLs are allowed to cross into the renderer.
  */
 export function parseRichMessage(raw: any): RichMessageData | undefined {
-  const metadata = asRecord(raw?.contentMetadata);
+  const metadata = messageMetadata(raw);
   if (!metadata) return undefined;
   const imageUrl = safeHttpsUrl(
     metadata.DOWNLOAD_URL

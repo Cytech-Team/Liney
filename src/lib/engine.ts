@@ -32,6 +32,8 @@ class LineyEngine {
   private pending = new Map<string, Pending>();
   private listeners = new Set<(event: EngineEvent) => void>();
   private started = false;
+  private startPromise: Promise<boolean> | null = null;
+  private lifecycleGeneration = 0;
   private lineBuffer = "";
 
   get isNative() {
@@ -40,15 +42,30 @@ class LineyEngine {
 
   async start() {
     if (this.started || !this.isNative) return this.started;
+    if (this.startPromise) return this.startPromise;
+    const promise = this.startInternal();
+    this.startPromise = promise;
+    try {
+      return await promise;
+    } finally {
+      if (this.startPromise === promise) this.startPromise = null;
+    }
+  }
+
+  private async startInternal(): Promise<boolean> {
+    const generation = ++this.lifecycleGeneration;
     const command = Command.sidecar("binaries/liney-engine");
-    command.stdout.on("data", (data) => this.consume(String(data)));
+    command.stdout.on("data", (data) => {
+      if (generation === this.lifecycleGeneration) this.consume(String(data));
+    });
     command.stderr.on("data", (data) => {
-      this.emit({ type: "engine.stderr", message: String(data) });
+      if (generation === this.lifecycleGeneration) this.emit({ type: "engine.stderr", message: String(data) });
     });
     command.on("error", (error) => {
-      this.emit({ type: "engine.error", message: String(error) });
+      if (generation === this.lifecycleGeneration) this.emit({ type: "engine.error", message: String(error) });
     });
     command.on("close", ({ code }) => {
+      if (generation !== this.lifecycleGeneration) return;
       this.started = false;
       this.child = null;
       this.lineBuffer = "";
@@ -59,9 +76,19 @@ class LineyEngine {
       this.pending.clear();
       this.emit({ type: "engine.closed", code });
     });
-    this.child = await command.spawn();
+    const child = await command.spawn();
+    if (generation !== this.lifecycleGeneration) {
+      await child.kill().catch(() => undefined);
+      throw new EngineRequestError("LINE engine stopped", "ENGINE_STOPPED", true);
+    }
+    this.child = child;
     this.started = true;
-    await this.request("ping", {}, 8_000);
+    try {
+      await this.request("ping", {}, 8_000);
+    } catch (error) {
+      if (generation === this.lifecycleGeneration) await this.stop();
+      throw error;
+    }
     return true;
   }
 
@@ -99,10 +126,12 @@ class LineyEngine {
   }
 
   async stop() {
-    if (this.child) await this.child.kill();
+    this.lifecycleGeneration += 1;
+    const child = this.child;
     this.child = null;
     this.started = false;
     this.lineBuffer = "";
+    if (child) await child.kill().catch(() => undefined);
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(new EngineRequestError("LINE engine stopped", "ENGINE_STOPPED", true));

@@ -17,6 +17,7 @@ export type Chat = {
   favoriteTimestamp?: number;
   isFavorite?: boolean;
   favoriteTime?: number;
+  historyState?: "available" | "new" | "unavailable";
 };
 
 export type PostNotification = {
@@ -38,6 +39,15 @@ export type MessageReaction = {
   type: number;
   count: number;
   mine?: boolean;
+};
+
+export type CallHistoryStatus = "completed" | "canceled" | "rejected" | "no-response" | "unknown";
+
+export type CallHistoryData = {
+  durationMs: number;
+  result: string;
+  cause: string;
+  status: CallHistoryStatus;
 };
 
 export type ReplyReference = {
@@ -80,13 +90,19 @@ export type Message = {
   rich?: RichMessageData;
   unsent?: boolean;
   readByPeer?: boolean;
+  readCount?: number;
+  edited?: boolean;
+  updatedTime?: number;
   status?: "sending" | "sent" | "error" | "unknown";
   createdTime?: number;
   contentType?: number;
   senderId?: string;
   senderName?: string;
   senderAvatarUrl?: string;
+  officialClientUrl?: string;
+  isOfficialAccount?: boolean;
   postNotification?: PostNotification;
+  call?: CallHistoryData;
 };
 
 export const chats: Chat[] = [

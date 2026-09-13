@@ -30,6 +30,7 @@ export class SyncCoordinator {
       loadOpenChats: () => Promise<any[]>;
       fetchTalk: (chatId: string, limit: number) => Promise<any[]>;
       fetchOpen: (chatId: string, limit: number) => Promise<any[]>;
+      persistLists: (friends: any[], chats: any[], openChats: any[]) => void;
       persist: (chatId: string, isSquare: boolean, messages: any[]) => void;
       isHidden: (chatId: string, isSquare: boolean, messageId: string, kind: string) => boolean;
       isLiveOverlay?: (cacheKey: string) => boolean;
@@ -52,10 +53,18 @@ export class SyncCoordinator {
   cancel() {
     this.generation += 1;
     this.promise = null;
+    this.database.setSyncState(this.accountId, {
+      key: "account",
+      generation: this.generation,
+      status: "idle",
+    });
   }
 
   async startFull(): Promise<void> {
     if (this.promise) return this.promise;
+    const transient = this.deps.getPreSynced();
+    transient.messages.clear();
+    this.deps.setPreSynced({ chats: null, friends: null, openChats: null });
     const generation = ++this.generation;
     const startedAt = Date.now();
     this.database.setSyncState(this.accountId, { key: "account", generation, status: "running" });
@@ -82,6 +91,7 @@ export class SyncCoordinator {
 
         const [talkChats, openChats] = await Promise.all([this.deps.loadChats(), this.deps.loadOpenChats()]);
         if (generation !== this.generation) return;
+        this.deps.persistLists(friends, talkChats, openChats);
         this.deps.setPreSynced({ chats: talkChats, openChats });
         this.emit({ type: "sync.progress", phase: "chats", done: talkChats.length + openChats.length, total: talkChats.length + openChats.length, mode: "full", generation });
 
@@ -142,10 +152,14 @@ export class SyncCoordinator {
           try { await this.deps.warmImage(item.id, item.square); } catch { /* lazy retry */ }
         });
 
+        if (generation !== this.generation) return;
         this.emit({ type: "sync.ready", mode: "full", generation, summary: { friends: friends.length, talkChats: talkChats.length, openChats: openChats.length, histories: this.deps.getPreSynced().messages.size, failedHistories: failed, elapsedMs: Date.now() - startedAt } });
         this.database.setSyncState(this.accountId, { key: "account", generation, status: "ready", error: failed ? `${failed} room(s) failed` : undefined });
       } catch (error) {
-        this.database.setSyncState(this.accountId, { key: "account", generation, status: "error", error: String(error instanceof Error ? error.message : error) });
+        if (generation !== this.generation) return;
+        const message = String(error instanceof Error ? error.message : error);
+        this.database.setSyncState(this.accountId, { key: "account", generation, status: "error", error: message });
+        this.emit({ type: "sync.error", mode: "full", generation, error: message });
         throw error;
       } finally {
         if (this.generation === generation) this.promise = null;

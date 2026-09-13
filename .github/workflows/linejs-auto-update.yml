@@ -1,0 +1,74 @@
+name: LINEJS auto update
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */6 * * *'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: linejs-auto-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+
+      - name: Install current dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Follow latest stable LINEJS release
+        id: linejs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bun scripts/update-linejs-release.ts
+
+      - name: Verify updated LINEJS
+        if: steps.linejs.outputs.updated == 'true'
+        run: |
+          bun test
+          bun run lint
+          bun run web:build
+          bun run engine:build
+          git diff --check
+
+      - name: Create or refresh update pull request
+        if: steps.linejs.outputs.updated == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.linejs.outputs.version }}
+          RELEASE_URL: ${{ steps.linejs.outputs.release_url }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          branch="deps/linejs-v${VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add package.json bun.lock engine/linejs/adapter.ts
+          git commit -m "deps(linejs): update to v${VERSION}"
+          git push --force origin "HEAD:${branch}"
+
+          pr="$(gh pr list --head "$branch" --base "${BASE_BRANCH}" --state open --json number --jq '.[0].number // empty')"
+          if [ -z "$pr" ]; then
+            gh pr create \
+              --base "${BASE_BRANCH}" \
+              --head "$branch" \
+              --title "deps(linejs): update to v${VERSION}" \
+              --body "Automated update following the latest stable [LINEJS release](${RELEASE_URL}).\n\nValidation completed before this PR was opened:\n- bun test\n- bun run lint\n- bun run web:build\n- bun run engine:build\n- git diff --check"
+            pr="$(gh pr list --head "$branch" --base "${BASE_BRANCH}" --state open --json number --jq '.[0].number // empty')"
+          fi
+
+          if [ -n "$pr" ]; then
+            gh pr merge "$pr" --auto --squash || echo "Auto-merge is unavailable; PR #${pr} remains open after validation."
+          fi

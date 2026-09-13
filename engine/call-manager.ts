@@ -1,12 +1,14 @@
 import {
-  CallSession,
+  LineJsAdapter,
+  type CallSession,
+  AndromedaTransport,
   PlanetTransport,
   opusCodecFactory,
   type CallTransport,
   type CodecFactory,
   type CallSessionState,
-} from "@evex/linejs/call";
-import type { Client } from "@evex/linejs";
+  type LineClient,
+} from "./linejs/adapter";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { Readable } from "node:stream";
 
@@ -20,12 +22,7 @@ export type CallEvent = {
   source?: "talk";
 };
 
-type CallClientLike = Client & {
-  call: {
-    startSession(opts: Record<string, unknown>): CallSession;
-    setCodecFactory(factory: unknown): void;
-  };
-};
+type CallClientLike = LineClient;
 
 type AudioDevice = {
   id: string;
@@ -44,6 +41,7 @@ type PipeWireProbe = {
 // wait so a normal unanswered call reaches the transport timeout first.
 const CALL_SETUP_TIMEOUT_MS = 75_000;
 const CALL_ANSWER_TIMEOUT_MS = 60_000;
+const INCOMING_CALL_SETUP_TIMEOUT_MS = 45_000;
 const AUDIO_SAMPLE_RATE = 48_000;
 const AUDIO_CHANNELS = 1;
 const AUDIO_FRAME_MS = 20;
@@ -311,6 +309,51 @@ class PipeWireSink {
   }
 }
 
+type AudioPacketTransport = CallTransport & {
+  sendAudio(packet: Uint8Array): Promise<void>;
+};
+
+class AndromedaIncomingAudioTransport implements CallTransport {
+  readonly andromeda: AndromedaTransport;
+  answerResult: { remoteKey: Uint8Array; mix: { host: string; port: number } } | undefined;
+
+  constructor(localMid: string) {
+    this.andromeda = new AndromedaTransport({
+      localMid,
+      timeoutMs: 15_000,
+      userAgent: process.env.LINEY_CALL_USER_AGENT?.trim() || "Line/26.6.2",
+    });
+  }
+
+  connect(opts: Parameters<CallTransport["connect"]>[0]): Promise<void> {
+    return this.andromeda.connect(opts);
+  }
+
+  async waitForAnswer(): Promise<unknown> {
+    // Incoming calls already have an INVITE waiting on the registered SIP
+    // transport. CallSession deliberately sees no invite() method here, so it
+    // acquires/registers the route and then answers the existing dialog.
+    this.answerResult = await this.andromeda.answer();
+    return this.answerResult;
+  }
+
+  send(packet: Uint8Array): Promise<void> {
+    return this.andromeda.send(packet);
+  }
+
+  sendAudio(packet: Uint8Array): Promise<void> {
+    return this.andromeda.send(packet);
+  }
+
+  receive(): AsyncIterable<Uint8Array> {
+    return this.andromeda.receive();
+  }
+
+  close(): Promise<void> {
+    return this.andromeda.close();
+  }
+}
+
 class PlanetAudioTransport implements CallTransport {
   readonly planet: PlanetTransport;
   answer: { mediaReady?: boolean } | undefined;
@@ -379,7 +422,7 @@ export class CallManager {
   private readonly emitEvent: (event: CallEvent) => void;
   private client: CallClientLike | null = null;
   private session: CallSession | null = null;
-  private activeTransport: PlanetAudioTransport | null = null;
+  private activeTransport: AudioPacketTransport | null = null;
   private input: PipeWireSource | null = null;
   private output: PipeWireSink | null = null;
   private audioAbort: AbortController | null = null;
@@ -403,6 +446,8 @@ export class CallManager {
     audio: boolean;
     transport: "planet" | "unavailable";
     incomingAnswer: boolean;
+    incomingTransport: "andromeda" | "unavailable";
+    incomingExperimental: boolean;
     liveValidated: boolean;
     reason?: string;
   } {
@@ -412,6 +457,8 @@ export class CallManager {
         audio: false,
         transport: "unavailable",
         incomingAnswer: false,
+        incomingTransport: "unavailable",
+        incomingExperimental: false,
         liveValidated: false,
         reason: "calls are disabled by configuration",
       };
@@ -423,6 +470,8 @@ export class CallManager {
         audio: false,
         transport: "unavailable",
         incomingAnswer: false,
+        incomingTransport: "unavailable",
+        incomingExperimental: false,
         liveValidated: false,
         reason: pipewire.reason,
       };
@@ -434,6 +483,8 @@ export class CallManager {
         audio: false,
         transport: "unavailable",
         incomingAnswer: false,
+        incomingTransport: "unavailable",
+        incomingExperimental: false,
         liveValidated: false,
         reason: "PipeWire microphone and speaker are required for calls",
       };
@@ -442,9 +493,11 @@ export class CallManager {
       enabled: true,
       audio: true,
       transport: "planet",
-      // LINEJS exposes incoming notifications, but not a stable modern
-      // 1:1 answer flow. Do not advertise a button that cannot answer.
-      incomingAnswer: false,
+      // LINEJS 3.4.2 exposes AndromedaTransport.answer(), which registers the
+      // callee transport and completes INVITE -> 100/180/200 -> ACK + SRTP.
+      incomingAnswer: true,
+      incomingTransport: "andromeda",
+      incomingExperimental: process.env.LINEY_CALL_INCOMING_VALIDATED !== "1",
       liveValidated: process.env.LINEY_CALL_LIVE_VALIDATED === "1",
     };
   }
@@ -453,7 +506,7 @@ export class CallManager {
     return listPipeWireDevices();
   }
 
-  attach(client: Client): void {
+  attach(client: LineClient): void {
     this.client = client as CallClientLike;
   }
 
@@ -470,7 +523,7 @@ export class CallManager {
     if (!this.client) throw new Error("not authenticated");
     if (this.session) throw new Error("another call is already active");
     this.muted = false;
-    const profile = await this.client.getMyProfile();
+    const profile = await LineJsAdapter.getMyProfile(this.client);
     const localMid = String((profile as { mid?: string }).mid ?? "").trim();
     if (!localMid) throw new Error("LINE profile has no user mid for call setup");
     const codecs = await this.loadCodec();
@@ -478,7 +531,7 @@ export class CallManager {
       void this.stop("remote-ended");
     });
     this.activeTransport = transport;
-    const session = this.client.call.startSession({
+    const session = LineJsAdapter.startCallSession(this.client, {
       to: peer,
       kind: "AUDIO",
       fromEnvInfo: { devname: process.env.LINEY_CALL_DEVNAME?.trim() || "Android" },
@@ -502,9 +555,50 @@ export class CallManager {
     }
   }
 
-  async accept(): Promise<void> {
+  async accept(): Promise<{ callId: string; state: CallSessionState }> {
+    if (!this.enabled) throw new Error(this.status.reason ?? "call audio is unavailable");
+    if (!this.client) throw new Error("not authenticated");
+    if (this.session) throw new Error("another call is already active");
+    const incoming = this.incoming;
+    if (!incoming) throw new Error("there is no incoming call to answer");
+    if (incoming.kind && !incoming.kind.includes("AUDIO") && incoming.kind !== "0") {
+      throw new Error(`incoming ${incoming.kind} calls are not supported yet`);
+    }
+
+    this.muted = false;
+    const profile = await LineJsAdapter.getMyProfile(this.client);
+    const localMid = String((profile as { mid?: string }).mid ?? "").trim();
+    if (!localMid) throw new Error("LINE profile has no user mid for call setup");
+    const codecs = await this.loadCodec();
+    const transport = new AndromedaIncomingAudioTransport(localMid);
+    this.activeTransport = transport;
+    const session = LineJsAdapter.startCallSession(this.client, {
+      to: incoming.from,
+      kind: "AUDIO",
+      fromEnvInfo: { devname: process.env.LINEY_CALL_DEVNAME?.trim() || "Android" },
+      codecs,
+      transport,
+    });
+    this.bindSession(session, incoming.from);
+    this.session = session;
     this.incoming = null;
-    throw new Error("incoming LINE 1:1 answering is not exposed by the current LINEJS PLANET API");
+
+    try {
+      await withTimeout(
+        session.start(),
+        INCOMING_CALL_SETUP_TIMEOUT_MS,
+        "incoming call answer timed out",
+      );
+      if (!transport.answerResult?.remoteKey?.length) {
+        throw new Error("incoming call answered, but SRTP media negotiation was not ready");
+      }
+      await this.startAudioPipelines(transport, codecs);
+      this.emitEvent({ type: "call.ready", callId: incoming.callId, peer: incoming.from, state: "in-call" });
+      return { callId: incoming.callId, state: session.state };
+    } catch (error) {
+      await this.stop("incoming-answer-failed").catch(() => undefined);
+      throw error;
+    }
   }
 
   async reject(): Promise<{ rejected: boolean; remoteNotified: boolean }> {
@@ -565,7 +659,7 @@ export class CallManager {
   private async loadCodec(): Promise<CodecFactory> {
     this.codecReady ??= opusCodecFactory();
     const codec = await this.codecReady;
-    this.client?.call.setCodecFactory(codec);
+    if (this.client) LineJsAdapter.setCallCodecFactory(this.client, codec);
     return codec;
   }
 
@@ -580,7 +674,7 @@ export class CallManager {
     });
   }
 
-  private async startAudioPipelines(transport: PlanetAudioTransport, codecs: CodecFactory): Promise<void> {
+  private async startAudioPipelines(transport: AudioPacketTransport, codecs: CodecFactory): Promise<void> {
     const input = new PipeWireSource(this.inputTarget);
     const output = new PipeWireSink(this.outputTarget);
     const audioAbort = new AbortController();

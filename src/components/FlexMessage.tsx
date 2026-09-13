@@ -1,6 +1,7 @@
 import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
 import { useState } from "react";
 import type { FlexMessageData } from "../data/mock";
+import { RemoteImage } from "./RemoteImage";
 
 type FlexNode = Record<string, unknown>;
 
@@ -514,22 +515,25 @@ function FlexImage({ node, context, icon = false }: { node: FlexNode; context: F
     height: aspectRatio ? "100%" : "auto",
     objectFit: asString(node.aspectMode).toLowerCase() === "cover" ? "cover" : "contain",
   };
-  const content = !url || failed ? (
-    <div className={`flex-image-placeholder ${icon ? "flex-icon-placeholder" : ""}`} style={frameStyle}>
+  const placeholder = (
+    <div className={`flex-image-placeholder ${icon ? "flex-icon-placeholder" : ""}`}>
       {alt}
     </div>
-  ) : (
+  );
+  const content = (
     <div className={`flex-image-frame ${icon ? "flex-icon-frame" : ""}`} style={frameStyle}>
-      <img
-        className={icon ? "flex-icon" : "flex-image"}
-        src={url}
-        alt={alt}
-        loading="lazy"
-        referrerPolicy="no-referrer"
-        data-flex-animated={node.animated === true ? "true" : undefined}
-        style={imageStyle}
-        onError={() => setFailed(true)}
-      />
+      {!url || failed ? placeholder : (
+        <RemoteImage
+          className={icon ? "flex-icon" : "flex-image"}
+          src={url}
+          alt={alt}
+          animated={node.animated === true}
+          loading="lazy"
+          style={imageStyle}
+          fallback={placeholder}
+          onStatus={(status) => setFailed(status === "failed")}
+        />
+      )}
     </div>
   );
   return <FlexAction action={node.action} className="flex-action-image" style={flexItemStyle(frameStyle)} context={context}>{content}</FlexAction>;

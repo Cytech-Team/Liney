@@ -5,8 +5,12 @@
   "license": "LicenseRef-TLL-1.0",
   "type": "module",
   "scripts": {
-    "dev": "tauri dev",
-    "build": "tauri build",
+    "doctor": "sh scripts/check-linux-deps.sh",
+    "dev": "sh scripts/tauri-static-dev.sh",
+    "dev:web": "sh scripts/tauri-dev.sh",
+    "build": "sh scripts/tauri-build.sh",
+    "build:deb": "sh scripts/tauri-build.sh --bundles deb",
+    "build:appimage": "sh scripts/tauri-build.sh --bundles appimage",
     "engine:build": "sh scripts/build-sidecar.sh",
     "web:dev": "vite",
     "web:build": "tsc -b && vite build",
@@ -14,10 +18,12 @@
     "lint": "oxlint",
     "test": "bun test",
     "test:unit": "bun test engine/*.test.ts",
-    "verify:release": "bun run web:build && cargo build --release --manifest-path src-tauri/Cargo.toml && ls -lh src-tauri/target/release/liney*"
+    "verify:release": "bun run doctor && bun test && bun run lint && bun run web:build && bun run engine:build && cargo build --release --manifest-path src-tauri/Cargo.toml && git diff --check",
+    "build:rpm": "sh scripts/tauri-build.sh --bundles rpm",
+    "release:local": "sh scripts/package-release.sh"
   },
   "dependencies": {
-    "@evex/linejs": "npm:@jsr/evex__linejs@3.3.2",
+    "@evex/linejs": "npm:@jsr/evex__linejs@3.4.2",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-notification": "^2",
@@ -38,5 +44,8 @@
     "oxlint": "^1.79.0",
     "typescript": "~6.0.2",
     "vite": "^8.2.2"
-  }
+  },
+  "description": "Independent unofficial LINE desktop client for Linux",
+  "author": "Cytech Team Development",
+  "repository": "https://github.com/Cytech-Team/Liney"
 }

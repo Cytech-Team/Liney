@@ -46,4 +46,20 @@ describe("parseRichMessage", () => {
       },
     })?.actions).toBeUndefined();
   });
+
+  test("accepts a wrapped message with JSON metadata", () => {
+    const result = parseRichMessage({
+      raw: {
+        contentMetadata: JSON.stringify({
+          DOWNLOAD_URL: "https://cdn.example.test/news.jpg",
+          ALT_TEXT: "ข่าววันนี้",
+        }),
+      },
+    });
+
+    expect(result).toEqual({
+      imageUrl: "https://cdn.example.test/news.jpg",
+      altText: "ข่าววันนี้",
+    });
+  });
 });

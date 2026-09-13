@@ -7,52 +7,111 @@ on:
       - 'v*'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  linux-webview:
-    runs-on: ubuntu-24.04
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: '1.4.1'
+          bun-version: '1.4.2'
+
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install WebView (Tauri) build dependencies
+
+      - name: Install Tauri Linux build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev patchelf libssl-dev
-      - run: bun install --frozen-lockfile
-      - run: bun test
-      - run: bun run lint
-      - run: bun run engine:build
-      - name: Build WebView release bundle (tauri)
-        run: bun run build
-      - name: Prove the binary is the WebView (WebKit) build
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libgdk-pixbuf-2.0-0 \
+            libxdo-dev \
+            libssl-dev \
+            patchelf \
+            rpm \
+            file \
+            curl
+
+      - name: Install JavaScript dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify tag matches application version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
         run: |
-          BIN=$(find src-tauri/target/release -maxdepth 1 -type f -name liney -print -quit)
-          ldd "$BIN" | tee /tmp/liney-ldd.txt
+          set -euo pipefail
+          version="$(bun -e 'console.log(require("./package.json").version)')"
+          tag="${GITHUB_REF_NAME#v}"
+          test "$version" = "$tag" || {
+            echo "Tag v${tag} does not match package version ${version}" >&2
+            exit 1
+          }
+
+      - name: Build and verify release artifacts
+        env:
+          NO_STRIP: 'true'
+        run: bun run release:local
+
+      - name: Prove WebKit/Tauri binary linkage
+        shell: bash
+        run: |
+          set -euo pipefail
+          ldd src-tauri/target/release/liney | tee /tmp/liney-ldd.txt
           grep -q 'libwebkit2gtk' /tmp/liney-ldd.txt
-          ! grep -Eiq 'libgtk-4' /tmp/liney-ldd.txt
-      - name: Stage release artifacts
-        run: |
-          mkdir -p dist
-          set -e
-          APP=$(find src-tauri/target/release -maxdepth 1 -type f -name liney -print -quit)
-          ENGINE=$(find src-tauri/target/release -maxdepth 1 -type f -name liney-engine -print -quit)
-          cp "$APP" dist/liney
-          cp "$ENGINE" dist/liney-engine
-          sha256sum dist/liney dist/liney-engine > dist/liney-0.1.0.sha256
-          mkdir -p dist/arch-input
-          cp "$APP" dist/arch-input/liney
-          cp "$ENGINE" dist/arch-input/liney-engine
+          grep -q 'libgtk-3' /tmp/liney-ldd.txt
+          ! grep -q 'not found' /tmp/liney-ldd.txt
+
       - uses: actions/upload-artifact@v4
         with:
-          name: liney-linux-webview
+          name: liney-linux-${{ matrix.arch }}
+          if-no-files-found: error
           path: |
-            dist/liney
-            dist/liney-engine
-            dist/liney-0.1.0.sha256
-            dist/arch-input/**
+            release/Liney-*-linux-${{ matrix.arch }}.AppImage
+            release/Liney-*-linux-${{ matrix.arch }}.deb
+            release/Liney-*-linux-${{ matrix.arch }}.rpm
+            release/Liney-*-linux-${{ matrix.arch }}.tar.gz
+            release/Liney-*-linux-${{ matrix.arch }}.sha256
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: linux
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: liney-linux-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify staged release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          find release-assets -maxdepth 1 -type f -printf '%f\n' | sort
+          test -n "$(find release-assets -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
+          test -n "$(find release-assets -maxdepth 1 -type f -name '*.deb' -print -quit)"
+          test -n "$(find release-assets -maxdepth 1 -type f -name '*.rpm' -print -quit)"
+          test -n "$(find release-assets -maxdepth 1 -type f -name '*.tar.gz' -print -quit)"
+          test -n "$(find release-assets -maxdepth 1 -type f -name '*.sha256' -print -quit)"
+
+      - name: Publish GitHub Release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: release-assets/*
