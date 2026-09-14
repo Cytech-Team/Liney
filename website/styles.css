@@ -1018,3 +1018,117 @@ details p {
     animation-duration: 0.01ms !important;
   }
 }
+
+/* Mobile legal pages: keep navigation and document content inside the viewport. */
+@media (max-width: 720px) {
+  .site-header {
+    position: sticky;
+  }
+
+  .nav-shell {
+    padding: 0.55rem 0 0.6rem;
+  }
+
+  .site-nav {
+    display: flex;
+    width: 100%;
+    flex-wrap: wrap;
+    overflow: visible;
+    gap: 0.3rem;
+  }
+
+  .site-nav a {
+    min-height: 2rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.38rem 0.58rem;
+  }
+
+  .site-nav .nav-cta {
+    margin-left: 0;
+  }
+
+  .page-hero,
+  .page-hero.compact {
+    padding-top: 2.5rem;
+    padding-bottom: 1.65rem;
+  }
+
+  .page-hero h1 {
+    font-size: clamp(2.15rem, 11vw, 3.1rem);
+    overflow-wrap: anywhere;
+  }
+
+  .page-hero .lead {
+    font-size: 0.98rem;
+    line-height: 1.7;
+  }
+
+  .legal-layout {
+    width: min(100% - 1rem, 1160px);
+  }
+
+  .legal-nav,
+  .legal-card {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .legal-nav {
+    padding: 0.85rem;
+  }
+
+  .legal-nav div {
+    gap: 0.35rem;
+  }
+
+  .legal-nav a {
+    padding: 0.38rem 0.55rem;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.025);
+    font-size: 0.78rem;
+  }
+
+  .legal-card {
+    padding: 1rem;
+  }
+
+  .legal-card h2 {
+    font-size: 1.35rem;
+    overflow-wrap: anywhere;
+  }
+
+  .legal-card p,
+  .legal-card li,
+  td,
+  th {
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+
+  .table-scroll {
+    max-width: 100%;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (max-width: 420px) {
+  .container {
+    width: calc(100% - 1rem);
+  }
+
+  .site-nav a {
+    font-size: 0.73rem;
+  }
+
+  .page-hero,
+  .page-hero.compact {
+    padding-top: 2rem;
+  }
+
+  .legal-layout {
+    width: calc(100% - 0.75rem);
+  }
+}
