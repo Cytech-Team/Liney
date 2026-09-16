@@ -175,6 +175,30 @@ async function runnerHealth() {
   }
 }
 
+async function runnerEvents(after) {
+  const config = await runnerConfig();
+  if (!config.enabled || !config.token) return { cursor: Number(after || 0), events: [] };
+  const target = new URL(`${config.url}/events`);
+  target.searchParams.set("after", String(Number(after || 0)));
+  const response = await fetch(target, {
+    method: "GET",
+    headers: {
+      "authorization": `Bearer ${config.token}`,
+      "x-liney-connector": VERSION,
+    },
+    cache: "no-store",
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.ok === false) {
+    const raw = data?.error || {};
+    const error = new Error(String(raw.message || `Liney Home Runner events failed with HTTP ${response.status}`));
+    error.code = String(raw.code || "RUNNER_EVENTS_ERROR");
+    error.retryable = Boolean(raw.retryable || response.status >= 500);
+    throw error;
+  }
+  return data?.result || { cursor: Number(after || 0), events: [] };
+}
+
 async function runtimeStatus() {
   const health = await runnerHealth();
   if (health.configured && health.online) {
@@ -249,6 +273,7 @@ async function handleRequest(message, sender) {
   if (method === "connector.config.get") return { ...(await runnerConfig()), tokenConfigured: Boolean((await runnerConfig()).token) };
   if (method === "connector.config.set") return saveRunnerConfig(params);
   if (method === "connector.health") return runnerHealth();
+  if (method === "connector.events") return runnerEvents(params?.after);
   if (method === "ping") return { pong: true, protocolVersion: PROTOCOL_VERSION, connectorVersion: VERSION, runner: await runnerHealth() };
   if (method === "capabilities" || method === "runtime.status") return runtimeStatus();
   if (method === "connector.relayFetch" || method === "relay.fetch" || method === "line.fetch") return relayFetch(params);

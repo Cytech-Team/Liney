@@ -64,6 +64,8 @@ class LineyEngine {
   private lifecycleGeneration = 0;
   private lineBuffer = "";
   private webStarted = false;
+  private webEventCursor = 0;
+  private webEventTimer: ReturnType<typeof setInterval> | null = null;
 
   get isNative() {
     return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -88,6 +90,7 @@ class LineyEngine {
       const capabilities = await this.webRequest<Record<string, unknown>>("capabilities", {}, 3_500);
       this.webStarted = true;
       this.started = true;
+      this.startWebEventPolling();
       this.emit({
         type: "engine.ready",
         engine: "liney-connector",
@@ -159,6 +162,31 @@ class LineyEngine {
 
     window.postMessage(payload, targetOrigin);
     return promise;
+  }
+
+  private startWebEventPolling() {
+    if (typeof window === "undefined" || this.webEventTimer) return;
+    const poll = async () => {
+      try {
+        const result = await this.webRequest<{ cursor?: number; events?: EngineEvent[] }>("connector.events", { after: this.webEventCursor }, 8_000);
+        const events = Array.isArray(result.events) ? result.events : [];
+        if (typeof result.cursor === "number") this.webEventCursor = Math.max(this.webEventCursor, result.cursor);
+        for (const event of events) {
+          const seq = typeof event.seq === "number" ? event.seq : Number(event.seq ?? 0);
+          if (seq > this.webEventCursor) this.webEventCursor = seq;
+          this.emit(event);
+        }
+      } catch {
+        // Keep polling lightweight; foreground requests surface actionable errors.
+      }
+    };
+    void poll();
+    this.webEventTimer = window.setInterval(() => void poll(), 1_000);
+  }
+
+  private stopWebEventPolling() {
+    if (this.webEventTimer) window.clearInterval(this.webEventTimer);
+    this.webEventTimer = null;
   }
 
   private async startInternal(): Promise<boolean> {
@@ -246,6 +274,10 @@ class LineyEngine {
     this.child = null;
     this.started = false;
     this.lineBuffer = "";
+    if (!this.isNative) {
+      this.stopWebEventPolling();
+      this.webStarted = false;
+    }
     if (child) await child.kill().catch(() => undefined);
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);

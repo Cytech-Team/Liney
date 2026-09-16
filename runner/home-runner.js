@@ -93,6 +93,7 @@ class EngineBridge {
   lineBuffer = "";
   pending = new Map();
   events = [];
+  eventSeq = 0;
   startPromise = null;
   restartCount = 0;
 
@@ -180,8 +181,7 @@ class EngineBridge {
       try {
         message = JSON.parse(trimmed);
       } catch {
-        this.events.push({ type: "engine.raw", message: trimmed, at: Date.now() });
-        this.events = this.events.slice(-200);
+        this.pushEvent({ type: "engine.raw", message: trimmed });
         continue;
       }
       const id = typeof message.id === "string" ? message.id : "";
@@ -201,9 +201,24 @@ class EngineBridge {
         }
         continue;
       }
-      this.events.push({ ...message, at: Date.now() });
-      this.events = this.events.slice(-200);
+      this.pushEvent(message);
     }
+  }
+
+  pushEvent(event) {
+    this.eventSeq += 1;
+    const payload = event && typeof event === "object" ? event.payload : null;
+    const normalized = event?.type && payload && typeof payload === "object" && !Array.isArray(payload)
+      ? { ...event, ...payload }
+      : event;
+    this.events.push({ ...normalized, seq: this.eventSeq, at: Date.now() });
+    this.events = this.events.slice(-500);
+  }
+
+  readEvents(after = 0) {
+    const cursor = Number(after) || 0;
+    const events = this.events.filter((event) => Number(event.seq || 0) > cursor);
+    return { cursor: this.eventSeq, events };
   }
 
   async request(method, params = {}, timeout = ENGINE_REQUEST_TIMEOUT) {
@@ -249,6 +264,15 @@ const server = http.createServer(async (req, res) => {
         prefix: PREFIX || "/",
         status: bridge.status(),
       });
+    }
+    if ((req.method === "GET" || req.method === "POST") && path === "/events") {
+      assertAuth(req);
+      let after = url.searchParams.get("after") || "0";
+      if (req.method === "POST") {
+        const body = await readBody(req);
+        if (body) after = JSON.parse(body).after || after;
+      }
+      return sendJson(res, 200, { ok: true, result: bridge.readEvents(Number(after)) });
     }
     if (req.method === "POST" && path === "/rpc") {
       assertAuth(req);
