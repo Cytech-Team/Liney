@@ -1371,3 +1371,11 @@ details p {
     grid-template-columns: 1fr;
   }
 }
+
+.web-runtime-hero .lead strong { color: var(--text); }
+.web-truth-box { margin-top: 0; }
+@media (max-width: 640px) {
+  .web-runtime-hero h1 { font-size: clamp(34px, 13vw, 54px); }
+  .web-runtime-hero .button-row { align-items: stretch; }
+  .web-runtime-hero .button { width: 100%; justify-content: center; }
+}
