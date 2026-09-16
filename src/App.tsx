@@ -362,7 +362,7 @@ function BrowserSite() {
   }, []);
 
   useEffect(() => {
-    document.title = path === "/login" ? "Liney — Login preview" : path === "/chat" ? "Liney — Chat preview" : "Liney — Chat closer on Linux";
+    document.title = path === "/login" ? "Liney — Login preview" : path === "/app" ? "Liney Web App" : path === "/chat" ? "Liney — Chat preview" : "Liney — Chat closer on Linux";
   }, [path]);
 
   const navigate = (nextPath: string) => {
@@ -372,13 +372,13 @@ function BrowserSite() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  if (path === "/chat") return <MainApp />;
+  if (path === "/app" || path === "/chat") return <MainApp />;
   const view: MarketingView = path === "/login" ? "login" : "home";
   return <MarketingSite view={view} onNavigate={navigate} />;
 }
 
-function normalizeBrowserPath(path: string): "/" | "/login" | "/chat" {
-  if (path === "/login" || path === "/chat") return path;
+function normalizeBrowserPath(path: string): "/" | "/login" | "/chat" | "/app" {
+  if (path === "/login" || path === "/chat" || path === "/app") return path;
   return "/";
 }
 

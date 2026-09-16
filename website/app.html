@@ -1,85 +1,15 @@
 <!doctype html>
 <html lang="th">
   <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Liney Web App — ใช้งาน Liney ผ่านเบราว์เซอร์บน Chromebook และเครื่องที่ติดตั้งแอปไม่ได้">
-    <meta name="theme-color" content="#07100c">
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/liney-logo.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Liney Web App — UI เดียวกับแอป Desktop สำหรับใช้งานผ่านเบราว์เซอร์" />
     <title>Liney Web App</title>
-    <link rel="icon" type="image/svg+xml" href="assets/liney-mark.svg">
-    <link rel="stylesheet" href="styles.css">
-    <link rel="stylesheet" href="webapp.css">
-    <script src="site-config.js"></script>
-    <script src="site.js" defer></script>
-    <script src="webapp.js" defer></script>
+    <script type="module" crossorigin src="/app-assets/index-9wWUzRRS.js"></script>
+    <link rel="stylesheet" crossorigin href="/app-assets/index-B8GpTWx5.css">
   </head>
-  <body class="webapp-body">
-    <a class="skip-link" href="#liney-web-app">ข้ามไปยังแอป</a>
-    <main id="liney-web-app" class="liney-web-shell" data-state="loading">
-      <aside class="web-rail" aria-label="Liney Web navigation">
-        <a class="web-rail-brand" href="index.html" aria-label="Liney หน้าแรก"><img src="assets/liney-mark.svg" alt=""><span>Liney</span></a>
-        <button class="web-rail-button active" type="button" data-view="chats" title="แชต">แชต</button>
-        <button class="web-rail-button" type="button" data-view="accounts" title="บัญชี">บัญชี</button>
-        <button class="web-rail-button" type="button" data-view="security" title="ความปลอดภัย">ล็อก</button>
-        <a class="web-rail-link" href="privacy.html#web-app" title="Privacy">Privacy</a>
-      </aside>
-
-      <section class="web-panel account-panel" aria-labelledby="account-title">
-        <header class="web-panel-header">
-          <div>
-            <p class="web-eyebrow">Liney Web App</p>
-            <h1 id="account-title">Web vault</h1>
-          </div>
-          <button class="web-icon-button" type="button" data-action="lock" title="ล็อก vault">ล็อก</button>
-        </header>
-
-        <div class="runtime-card" id="runtime-card">
-          <span class="status-dot pending" id="runtime-dot"></span>
-          <div><strong id="runtime-title">กำลังตรวจ runtime</strong><p id="runtime-copy">เช็ก browser vault และความพร้อมของ relay</p></div>
-        </div>
-
-        <div class="unlock-card" id="unlock-card">
-          <h2>เปิด vault ใน browser นี้</h2>
-          <p>ข้อมูลบัญชีและแชตของโหมดเว็บอยู่ใน browser เครื่องนี้ แยกจาก server ของ Liney</p>
-          <form id="unlock-form" class="web-form">
-            <label>ชื่อผู้ใช้ในเครื่อง<input id="profile-name" autocomplete="nickname" placeholder="เช่น Namo / ห้องคอม / Chromebook"></label>
-            <label>รหัส vault<input id="vault-pass" type="password" autocomplete="current-password" placeholder="ใส่รหัสเพื่อเปิดหรือสร้าง vault"></label>
-            <button class="web-primary" type="submit">เข้าใช้งาน</button>
-          </form>
-        </div>
-
-        <div class="profile-list" id="profile-list" hidden></div>
-      </section>
-
-      <section class="web-panel chat-list-panel web-chat-list" aria-labelledby="chat-list-title">
-        <header class="web-panel-header compact">
-          <div><p class="web-eyebrow" id="client-label">Liney-Website</p><h2 id="chat-list-title">แชต</h2></div>
-          <button class="web-icon-button" type="button" data-action="new-chat">+</button>
-        </header>
-        <div class="web-search"><input id="chat-search" placeholder="ค้นหาแชต"></div>
-        <div id="chat-list" class="web-chat-items"></div>
-      </section>
-
-      <section class="web-panel conversation-panel" aria-labelledby="conversation-title">
-        <header class="conversation-header">
-          <button class="web-icon-button mobile-back" type="button" data-action="back">←</button>
-          <div class="conversation-avatar" id="conversation-avatar">L</div>
-          <div><h2 id="conversation-title">เลือกแชต</h2><p id="conversation-subtitle">เปิด vault เพื่อเริ่มใช้ Web App</p></div>
-        </header>
-        <div class="message-stage" id="message-stage"></div>
-        <form class="composer" id="composer-form">
-          <button type="button" class="web-icon-button" data-action="attach" title="แนบไฟล์">+</button>
-          <input id="composer-input" placeholder="พิมพ์ข้อความ" autocomplete="off" disabled>
-          <button class="web-primary" type="submit" disabled id="send-button">ส่ง</button>
-        </form>
-      </section>
-
-      <section class="web-drawer" id="web-drawer" hidden>
-        <div class="web-drawer-card">
-          <button class="web-icon-button drawer-close" type="button" data-action="drawer-close">×</button>
-          <div id="drawer-content"></div>
-        </div>
-      </section>
-    </main>
+  <body>
+    <div id="root"></div>
   </body>
 </html>
