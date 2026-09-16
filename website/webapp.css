@@ -73,3 +73,16 @@
   .message { max-width:88%; }
   .composer { grid-template-columns:38px minmax(0, 1fr) 58px; }
 }
+
+.vault-welcome { margin:auto; width:min(520px, calc(100% - 24px)); padding:28px; border:1px solid rgba(32,223,117,.22); border-radius:28px; background:linear-gradient(145deg, rgba(32,223,117,.13), rgba(255,255,255,.04)); box-shadow:0 24px 80px rgba(0,0,0,.26); }
+.vault-welcome h2 { margin:0 0 8px; font-size:30px; letter-spacing:-.04em; }
+.vault-welcome p { margin:0; color:var(--web-muted); }
+.vault-welcome-actions, .line-connect-actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:18px; }
+.line-connect-card { align-self:flex-start; width:min(560px, 100%); margin-top:8px; padding:18px; border:1px solid rgba(32,223,117,.22); border-radius:22px; background:rgba(32,223,117,.08); }
+.line-connect-card h3 { margin:0 0 7px; font-size:20px; }
+.line-connect-card p { margin:0; color:var(--web-muted); }
+.line-connect-status { margin-top:14px; padding:10px 12px; border-radius:14px; border:1px solid var(--web-border); background:rgba(0,0,0,.22); color:var(--web-accent-2); font-size:12px; font-weight:800; overflow-wrap:anywhere; }
+@media (max-width: 680px) {
+  .vault-welcome { padding:20px; }
+  .vault-welcome h2 { font-size:24px; }
+}

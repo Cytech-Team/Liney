@@ -12,7 +12,8 @@
     chats: [],
     messages: {},
     activeChatId: "",
-    view: "chats"
+    view: "chats",
+    relay: { ready: false, label: "ยังไม่ได้ตรวจ", message: "" }
   };
 
   function $(id) { return document.getElementById(id); }
@@ -82,12 +83,17 @@
       version: 1,
       profile: { id: crypto.randomUUID(), name: profileName || "Liney Web", label: "Liney-Website", createdAt: now() },
       chats: [
-        { id: chatId, name: "Liney System", subtitle: "Web App พร้อมใช้งานใน browser นี้", updatedAt: now() }
+        { id: "line-connect", name: "LINE Connect", subtitle: "เชื่อม LINE ผ่าน Liney Web", updatedAt: now(), system: true },
+        { id: chatId, name: "Liney System", subtitle: "Web App พร้อมใช้งานใน browser นี้", updatedAt: now(), system: true }
       ],
       messages: {
+        "line-connect": [
+          { id: crypto.randomUUID(), author: "them", text: "นี่คือจุดเชื่อม LINE สำหรับโหมดเว็บ ข้อมูลบัญชีจะอยู่ใน vault ของ browser นี้", createdAt: now() },
+          { id: crypto.randomUUID(), author: "them", text: "ตอนนี้ Worker relay เปิดแล้ว ขั้นต่อไปคือผูก QR login ของ LINEJS เข้ากับ relay นี้", createdAt: now() }
+        ],
         "liney-system": [
           { id: crypto.randomUUID(), author: "them", text: "Vault ถูกสร้างใน browser นี้แล้ว ข้อมูลหน้านี้ไม่ถูกส่งไปเก็บเป็น inbox กลางของ Liney", createdAt: now() },
-          { id: crypto.randomUUID(), author: "them", text: "ขั้นต่อไปคือเชื่อม LINE session ผ่าน Worker relay โดยยังไม่เก็บ password/message database บน server", createdAt: now() }
+          { id: crypto.randomUUID(), author: "them", text: "เครื่องคนละ user / browser คนละ profile จะอ่าน vault นี้ไม่ได้ถ้าไม่มีรหัส vault", createdAt: now() }
         ]
       }
     };
@@ -155,6 +161,7 @@
   async function checkRuntime() {
     var browserOk = Boolean(window.crypto && crypto.subtle && window.indexedDB);
     if (!browserOk) {
+      state.relay = { ready: false, label: "Browser ไม่รองรับ", message: "ต้องใช้ IndexedDB และ WebCrypto" };
       setRuntime(false, "Browser นี้ไม่รองรับ vault", "ต้องใช้ browser ที่มี IndexedDB และ WebCrypto");
       return;
     }
@@ -162,10 +169,31 @@
       var response = await fetch("/api/runtime", { cache: "no-store" });
       if (response.ok) {
         var data = await response.json();
+        state.relay = { ready: data.lineRelay === "ready", label: data.clientLabel || "Liney-Website", message: data.mode || "Browser vault พร้อมใช้งาน" };
         setRuntime(true, data.name || "Liney Web Runtime", data.mode || "Browser vault พร้อมใช้งาน");
-      } else setRuntime(true, "Browser vault พร้อม", "Relay ยังไม่เปิด แต่ Web App ใช้ local vault ได้");
+      } else {
+        state.relay = { ready: false, label: "Liney-Website", message: "Relay ยังไม่เปิด" };
+        setRuntime(true, "Browser vault พร้อม", "Relay ยังไม่เปิด แต่ Web App ใช้ local vault ได้");
+      }
     } catch {
+      state.relay = { ready: false, label: "Liney-Website", message: "Relay ตรวจไม่ได้" };
       setRuntime(true, "Browser vault พร้อม", "Relay ยังไม่เปิด แต่ Web App ใช้ local vault ได้");
+    }
+  }
+
+  async function checkLineRelay() {
+    try {
+      var response = await fetch("/api/line/ping", { cache: "no-store" });
+      var data = await response.json();
+      state.relay.ready = Boolean(data.ok);
+      state.relay.message = data.message || (data.ok ? "Relay พร้อม" : "Relay ไม่พร้อม");
+      toast(data.ok ? "Relay พร้อมแล้ว" : "Relay ยังไม่พร้อม");
+      render();
+    } catch (error) {
+      state.relay.ready = false;
+      state.relay.message = error.message || String(error);
+      toast("เช็ก relay ไม่สำเร็จ");
+      render();
     }
   }
 
@@ -221,12 +249,14 @@
     $("send-button").disabled = !state.unlocked || !chat;
     if (!chat) {
       $("conversation-title").textContent = state.unlocked ? "สร้างหรือเลือกแชต" : "เปิด vault ก่อน";
-      $("conversation-subtitle").textContent = state.unlocked ? "กด + เพื่อสร้างห้อง local" : "ข้อมูลจะอยู่ใน browser นี้";
+      $("conversation-subtitle").textContent = state.unlocked ? "กด + เพื่อสร้างห้อง local" : "ข้อมูลจะอยู่ใน browser นี้ ไม่ใช่ inbox กลาง";
       $("conversation-avatar").textContent = "L";
-      var empty = document.createElement("div");
-      empty.className = "empty-state";
-      empty.textContent = state.unlocked ? "ยังไม่มีห้อง" : "เข้าใช้งานเพื่อเปิด Web App";
-      stage.appendChild(empty);
+      var welcome = document.createElement("section");
+      welcome.className = "vault-welcome";
+      welcome.innerHTML = "<p class='web-eyebrow'>Liney Web App</p><h2></h2><p></p><div class='vault-welcome-actions'><button class='web-primary' data-action='focus-vault' type='button'>เปิด vault</button><button class='web-icon-button' data-action='runtime-check' type='button'>เช็ก runtime</button></div>";
+      welcome.querySelector("h2").textContent = state.unlocked ? "ยังไม่มีห้อง" : "เปิด vault เพื่อเข้าใช้งาน";
+      welcome.querySelector("p:not(.web-eyebrow)").textContent = state.unlocked ? "สร้างห้อง local หรือเชื่อม LINE จาก LINE Connect" : "ข้อมูลบัญชีอยู่ใน browser นี้ คนอื่นเปิดอ่านไม่ได้ถ้าไม่มีรหัส vault";
+      stage.appendChild(welcome);
       return;
     }
     $("conversation-title").textContent = chat.name;
@@ -242,6 +272,15 @@
       bubble.appendChild(meta);
       stage.appendChild(bubble);
     });
+    if (chat.id === "line-connect") {
+      var connect = document.createElement("section");
+      connect.className = "line-connect-card";
+      connect.innerHTML = "<p class='web-eyebrow'>LINE Web Runtime</p><h3></h3><p></p><div class='line-connect-status'></div><div class='line-connect-actions'><button class='web-primary' data-action='line-relay-check' type='button'>เช็ก LINE Relay</button><button class='web-icon-button' data-action='line-login-start' type='button'>เริ่ม QR Login</button></div>";
+      connect.querySelector("h3").textContent = state.relay.ready ? "Relay พร้อมต่อ LINEJS" : "รอ Relay";
+      connect.querySelector("p:not(.web-eyebrow)").textContent = "Web App จะเก็บ session ใน vault ของ browser นี้ และใช้ relay แบบไม่ทำ inbox database กลาง";
+      connect.querySelector(".line-connect-status").textContent = state.relay.message || "ยังไม่ได้ตรวจ";
+      stage.appendChild(connect);
+    }
     stage.scrollTop = stage.scrollHeight;
   }
 
@@ -352,6 +391,10 @@
       if (action === "new-chat") void addChat();
       if (action === "drawer-close") $("web-drawer").hidden = true;
       if (action === "clear-vault") void clearVault();
+      if (action === "focus-vault") $("profile-name").focus();
+      if (action === "runtime-check") void checkRuntime().then(render);
+      if (action === "line-relay-check") void checkLineRelay();
+      if (action === "line-login-start") toast("ขั้นต่อไปกำลังผูก LINEJS QR login เข้ากับ relay นี้");
     });
   }
 
