@@ -47,6 +47,21 @@ type WebConnectorResponse = {
   error?: WebConnectorError | string;
 };
 
+type HomeRunnerResponse<T = unknown> = {
+  ok?: boolean;
+  result?: T;
+  error?: WebConnectorError | string;
+};
+
+type HomeRunnerConfig = {
+  url: string;
+  token: string;
+};
+
+const DEFAULT_HOME_RUNNER_URL = "https://cdn.cytechteam.site/liney-runner";
+const HOME_RUNNER_URL_KEY = "liney.homeRunner.url";
+const HOME_RUNNER_TOKEN_KEY = "liney.homeRunner.token";
+
 declare global {
   interface Window {
     lineyConnector?: {
@@ -84,10 +99,93 @@ class LineyEngine {
     }
   }
 
+  private homeRunnerConfig(): HomeRunnerConfig | null {
+    if (typeof window === "undefined") return null;
+    const search = new URLSearchParams(window.location.search);
+    const urlFromQuery = search.get("runner") || search.get("lineyRunner") || search.get("liney-runner");
+    const tokenFromQuery = search.get("runnerToken") || search.get("lineyToken") || search.get("liney-token");
+    if (urlFromQuery) window.localStorage.setItem(HOME_RUNNER_URL_KEY, urlFromQuery);
+    if (tokenFromQuery) window.localStorage.setItem(HOME_RUNNER_TOKEN_KEY, tokenFromQuery);
+    if (urlFromQuery || tokenFromQuery) {
+      search.delete("runner");
+      search.delete("lineyRunner");
+      search.delete("liney-runner");
+      search.delete("runnerToken");
+      search.delete("lineyToken");
+      search.delete("liney-token");
+      const nextUrl = `${window.location.pathname}${search.toString() ? `?${search}` : ""}${window.location.hash}`;
+      window.history.replaceState({}, "", nextUrl);
+    }
+    const url = (window.localStorage.getItem(HOME_RUNNER_URL_KEY) || DEFAULT_HOME_RUNNER_URL).replace(/\/$/, "");
+    let token = window.localStorage.getItem(HOME_RUNNER_TOKEN_KEY) || "";
+    if (!token && window.location.pathname === "/app") {
+      token = window.prompt("ใส่ Liney Home Runner token เพื่อเชื่อม Home Server โดยไม่ใช้ extension")?.trim() || "";
+      if (token) window.localStorage.setItem(HOME_RUNNER_TOKEN_KEY, token);
+    }
+    return token ? { url, token } : null;
+  }
+
+  private async homeRunnerFetch<T>(path: string, init: RequestInit = {}, timeout = 15_000): Promise<T> {
+    const config = this.homeRunnerConfig();
+    if (!config) {
+      throw new EngineRequestError(
+        "Liney Home Runner token is missing. Open /app with ?runnerToken=... once, or set localStorage liney.homeRunner.token.",
+        "RUNNER_TOKEN_REQUIRED",
+        false,
+      );
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeout);
+    try {
+      const response = await fetch(`${config.url}${path}`, {
+        ...init,
+        signal: controller.signal,
+        cache: "no-store",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${config.token}`,
+          ...(init.headers || {}),
+        },
+      });
+      const data = await response.json() as HomeRunnerResponse<T>;
+      if (!response.ok || !data.ok) {
+        const rawError = data.error;
+        if (rawError && typeof rawError === "object") {
+          throw new EngineRequestError(
+            String(rawError.message ?? "Liney Home Runner request failed"),
+            String(rawError.code ?? "RUNNER_ERROR"),
+            Boolean(rawError.retryable),
+          );
+        }
+        throw new EngineRequestError(String(rawError ?? `Liney Home Runner HTTP ${response.status}`), "RUNNER_ERROR", response.status >= 500);
+      }
+      return data.result as T;
+    } catch (error) {
+      if (error instanceof EngineRequestError) throw error;
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw new EngineRequestError("Liney Home Runner timed out", "TIMEOUT", true);
+      }
+      throw new EngineRequestError(error instanceof Error ? error.message : String(error), "RUNNER_UNAVAILABLE", true);
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+
+  private async homeRunnerRequest<T = unknown>(method: string, params: Record<string, unknown> = {}, timeout = 15_000): Promise<T> {
+    if (method === "connector.events") {
+      const after = Number(params.after ?? 0);
+      return this.homeRunnerFetch<T>(`/events?after=${encodeURIComponent(String(after))}`, { method: "GET" }, timeout);
+    }
+    return this.homeRunnerFetch<T>("/rpc", {
+      method: "POST",
+      body: JSON.stringify({ method, params, timeout }),
+    }, timeout);
+  }
+
   private async startWebConnector(): Promise<boolean> {
     if (this.webStarted) return true;
     try {
-      const capabilities = await this.webRequest<Record<string, unknown>>("capabilities", {}, 3_500);
+      const capabilities = await this.webRequest<Record<string, unknown>>("capabilities", {}, 8_000);
       this.webStarted = true;
       this.started = true;
       this.startWebEventPolling();
@@ -112,8 +210,9 @@ class LineyEngine {
 
   private async webRequest<T = unknown>(method: string, params: Record<string, unknown> = {}, timeout = 15_000): Promise<T> {
     if (typeof window === "undefined") {
-      throw new EngineRequestError("Liney Connector requires a browser window", "CONNECTOR_UNAVAILABLE", true);
+      throw new EngineRequestError("Liney Web runtime requires a browser window", "CONNECTOR_UNAVAILABLE", true);
     }
+    if (this.homeRunnerConfig()) return this.homeRunnerRequest<T>(method, params, timeout);
     if (window.lineyConnector?.request) return window.lineyConnector.request<T>(method, params, timeout);
 
     const id = crypto.randomUUID();
@@ -129,8 +228,8 @@ class LineyEngine {
       const timer = window.setTimeout(() => {
         window.removeEventListener("message", onMessage);
         reject(new EngineRequestError(
-          "Liney Connector extension is not installed or not responding",
-          "CONNECTOR_UNAVAILABLE",
+          "Liney Home Runner token is missing and no connector fallback responded",
+          "RUNNER_TOKEN_REQUIRED",
           true,
         ));
       }, timeout);
@@ -265,6 +364,7 @@ class LineyEngine {
 
   async stop() {
     if (!this.isNative) {
+      this.stopWebEventPolling();
       this.webStarted = false;
       this.started = false;
       return;
