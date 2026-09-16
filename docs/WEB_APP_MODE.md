@@ -19,99 +19,64 @@ The goal is to keep the same privacy posture as desktop as much as the browser a
 
 ## Architecture decision
 
-A static Cloudflare Pages site alone is not enough for real LINE chat in a browser.
-Browsers cannot safely talk to LINE's desktop endpoints directly because of CORS, headers,
-long-polling, push, and credential handling. For Chromebook support we need a web runtime:
+The production Web App uses the same React UI as desktop, but the browser does not run the full LINEJS Node runtime. Real LINE traffic is handled by a Public Home Runner hosted on the project Home Server.
 
 ```text
-Browser PWA
-  ├─ UI, local vault, IndexedDB cache, WebCrypto keys
-  ├─ holds user passphrase/PIN locally only
-  └─ calls a stateless relay only when LINE network access is needed
+Browser Web App (static UI)
+  ├─ creates an anonymous public runner session
+  ├─ stores only the runner session id/token in Liney origin localStorage
+  └─ sends RPC/events over HTTPS
 
-Cloudflare Worker relay
-  ├─ no message database
-  ├─ no token/session persistence
-  ├─ no request/response body logging
-  ├─ allowlisted LINE hosts only
-  └─ transiently forwards protocol requests
+Public Home Runner
+  ├─ creates one isolated Liney engine process per public session
+  ├─ uses a separate LINEY_DATA_DIR per session
+  ├─ rate-limits session creation and RPC
+  ├─ rejects non-allowlisted engine methods
+  ├─ never accepts Home Server file paths from public media uploads
+  ├─ deletes session data on close/expiry
+  └─ does not use a Cloudflare Worker or Chrome extension in the default path
 
 LINE services
-  └─ official LINE backend used by the user's session
+  └─ reached by LINEJS running inside the isolated Home Runner engine
 ```
 
 ## Privacy wording
 
 Use precise language:
 
-- Correct: `Liney does not store your LINE password on our servers.`
-- Correct: `The Web relay is designed as a transient processor, not a message database.`
-- Correct: `Human operators cannot browse a Liney inbox database because the project does not create one.`
-- Incorrect: `Liney servers can never see any data.`
+- Correct: `Liney Web uses an isolated Public Home Runner session.`
+- Correct: `The browser does not need an admin Home Runner token.`
+- Correct: `Public Web login uses QR Code and does not expose email/password login.`
+- Correct: `Session/E2EE/cache data is temporarily stored on the Home Server inside the user's isolated session directory.`
+- Incorrect: `Liney Web has no central server.`
+- Incorrect: `The server can never access user data.`
 
-The relay may process auth headers and response payloads in memory to forward LINE requests.
-For E2EE messages, decryption should happen in the browser/runtime wherever possible. For
-non-E2EE metadata or plaintext protocol responses, the relay path must be treated as transient
-processing and documented honestly.
+The Home Runner is a real server-side runtime and necessarily processes LINE protocol data. The host administrator has system-level access to the machine, so privacy claims must not imply cryptographic blindness from the server operator.
 
 ## Storage model
 
 ### Browser
 
-- IndexedDB for cache.
-- WebCrypto-protected local vault for refresh/session material when web login supports restore.
-- Password fields are never written to localStorage/sessionStorage.
-- User can clear all local web data from settings.
+- Stores a random public session id/token for the Home Runner.
+- Does not store the user's LINE password in localStorage/sessionStorage.
+- Can clear Liney site data to discard the browser-side runner session reference.
 
-### Server / Worker
+### Public Home Runner
 
-- No KV/D1/R2 user message store by default.
-- No credential persistence by default.
-- Logs must redact authorization-like headers and message bodies.
-- CORS allowlist: production domain, Pages preview domain, local dev.
-- Host allowlist: LINE endpoints only.
+- Separate engine process and `LINEY_DATA_DIR` for each public session.
+- Temporary SQLite/E2EE/cache/session files may exist while the session is active.
+- Session directories are deleted when the public session is explicitly closed or expires.
+- Gateway logs method names/status, not request bodies or credentials.
+- Public RPC has an allowlist, rate limiting, and blocks server-local file path uploads.
 
-## Implementation phases
+## Production flow
 
-### Phase 1 — Web entry and policy
-
-- `/app` explains Web App mode for Chromebook users.
-- Privacy notice includes web runtime wording.
-- Desktop/native continues to be the stable path.
-
-### Phase 2 — Browser vault
-
-- Add a browser engine adapter separate from Tauri `lineyEngine`.
-- Add IndexedDB cache and WebCrypto vault.
-- Add clear-data controls.
-
-### Phase 3 — Stateless relay
-
-- Add Cloudflare Worker relay with CORS + LINE host allowlist.
-- Strip logs and reject unknown hosts/methods.
-- Add rate limiting / abuse guard before production exposure.
-
-### Phase 4 — Web login
-
-- QR login first.
-- Client label: `Liney-Website` or `Liney-Chromebook`.
-- Email/password only if it can follow the same no-password-storage rule.
-
-### Phase 5 — Web chat MVP
-
-- Chat list.
-- Message history.
-- Send text.
-- Read receipts.
-- Local cache.
-- Clear data.
-
-### Phase 6 — Media / push / offline
-
-- Media preview and upload.
-- E2EE media where browser crypto is reliable.
-- Push/poll fallback.
-- PWA installability for Chromebook.
+1. `/app` loads the same React UI as the desktop app.
+2. The browser creates a public Home Runner session automatically; no admin token is requested.
+3. The runner starts an isolated Liney engine with a unique `LINEY_DATA_DIR`.
+4. QR login and chat RPC calls are routed to that session's engine.
+5. Engine events are polled back to the browser.
+6. Closing/expiring the public session stops the engine and removes its session directory.
 
 ## Non-goals
 

@@ -21,7 +21,7 @@
         <aside class="legal-nav"><strong>ในหน้านี้</strong><div><a href="#summary">สรุปสั้น ๆ</a><a href="#data">ข้อมูลที่เกี่ยวข้อง</a><a href="#web-app">Web App</a><a href="#retention">การเก็บรักษา</a><a href="#control">การควบคุมของผู้ใช้</a><a href="#contact">ติดต่อ</a></div></aside>
         <article class="legal-card">
           <p class="meta-line">วันที่มีผล: <span data-effective-date>2026-09-05</span></p>
-          <div class="callout info"><p><strong>สรุปในประโยคเดียว</strong></p><p>Liney Desktop ไม่มี central relay server ของโครงการ ส่วน Liney Web จะใช้ relay แบบไม่เก็บถาวรเมื่อจำเป็นต่อการใช้งานบน Chromebook โดยไม่มีฐานข้อมูลแชตกลางของ Liney</p></div>
+          <div class="callout info"><p><strong>สรุปในประโยคเดียว</strong></p><p>Liney Desktop ทำงาน local-first ส่วน Liney Web ใช้ Public Home Runner บน Home Server เพื่อรัน LineJS แยก session ต่อ browser โดยไม่ต้องใช้ Chrome Extension หรือ Cloudflare Worker; ข้อมูล session ถูกเก็บชั่วคราวในพื้นที่แยกและลบเมื่อ session หมดอายุหรือถูกปิด</p></div>
 
           <h2 id="summary">1. ขอบเขตของประกาศนี้</h2>
           <p>ประกาศนี้ครอบคลุมแอป Liney, engine และเว็บไซต์เอกสารแบบ static นี้ โดยอธิบายการจัดการข้อมูลที่ Liney ควบคุมได้ ไม่ใช่ประกาศความเป็นส่วนตัวของ LINE, LY Corporation, GitHub, Secret Service, KWallet หรือบริการภายนอกอื่น</p>
@@ -43,27 +43,27 @@
           </div>
 
           <h2>3. การส่งข้อมูลไปยังบริการอื่น</h2>
-          <p>Liney ไม่ทำหน้าที่เป็น proxy หรือ message relay กลาง ข้อมูลที่จำเป็นต่อการ login, sync, ส่งข้อความ หรือ media จะเดินทางระหว่างเครื่องของคุณกับบริการ LINE ตามการทำงานของ LINEJS และบริการปลายทาง</p>
+          <p>สำหรับ Liney Desktop ข้อมูลที่จำเป็นต่อการ login, sync, ส่งข้อความ หรือ media จะเดินทางระหว่างเครื่องของคุณกับบริการ LINE ตามการทำงานของ LINEJS. สำหรับ Liney Web ข้อมูลดังกล่าวจะผ่าน Public Home Runner ของ Liney ซึ่งรัน LINEJS บน Home Server ใน session ที่แยกต่อผู้ใช้</p>
           <p>ถ้าคุณเลือกเปิดไฟล์, notification, audio route หรือการเชื่อมต่อภายนอก ระบบปฏิบัติการและบริการที่คุณเลือกอาจประมวลผลข้อมูลเพิ่มตามสิทธิ์และการตั้งค่าของระบบนั้น</p>
 
 
           <h2 id="web-app">4. โหมด Liney Web App</h2>
-          <p>Liney Web App มีไว้สำหรับเครื่องที่ติดตั้งแอปไม่ได้ เช่น Chromebook ของโรงเรียน โหมดนี้ต่างจาก Desktop เพราะ browser ไม่สามารถคุยกับ LINE endpoint ได้ครบด้วย static page อย่างเดียว จึงอาจต้องมี Cloudflare Worker relay เพื่อส่งต่อ request ที่จำเป็น</p>
+          <p>Liney Web App มีไว้สำหรับเครื่องที่ติดตั้งแอปไม่ได้ เช่น Chromebook ของโรงเรียน โหมดนี้ต่างจาก Desktop เพราะ browser ไม่สามารถคุยกับ LINE endpoint ได้ครบด้วย static page อย่างเดียว จึงใช้ Public Home Runner บน Home Server เพื่อรัน LINEJS และเชื่อมต่อ LINE แทน browser โดยตรง</p>
           <div class="table-scroll">
             <table>
               <thead><tr><th>ส่วนประกอบ</th><th>ข้อมูลที่ถือ</th><th>กติกา privacy</th></tr></thead>
               <tbody>
-                <tr><td>Browser vault</td><td>session/cache ของผู้ใช้ใน browser เช่น IndexedDB/WebCrypto</td><td>รหัสผ่านไม่ลง localStorage และผู้ใช้ต้องล้างข้อมูลเว็บได้</td></tr>
-                <tr><td>Web relay</td><td>request/response ที่ต้องส่งต่อไป LINE แบบชั่วคราว</td><td>ไม่ใช้ KV/D1/R2 เป็น inbox, ไม่เก็บ token ถาวร, ไม่ log body หรือ authorization header</td></tr>
-                <tr><td>ผู้ดูแลระบบ</td><td>ไม่มีหน้า inbox กลางสำหรับเปิดอ่านข้อความผู้ใช้</td><td>ควรเห็นได้เฉพาะสถานะระบบ/ข้อผิดพลาดที่ถูก redact แล้ว</td></tr>
+                <tr><td>Browser session</td><td>public session id/token สำหรับเชื่อม Home Runner</td><td>เก็บใน localStorage ของ origin Liney และไม่ใช่ LINE credential โดยตรง</td></tr>
+                <tr><td>Public Home Runner</td><td>LINEJS runtime, session/E2EE state, SQLite/cache ของผู้ใช้ใน data directory ที่แยกต่อ session</td><td>ข้อมูลถูกเก็บชั่วคราวบน Home Server และลบเมื่อ session ถูกปิดหรือหมดอายุ; gateway ไม่ log request body หรือ credential</td></tr>
+                <tr><td>QR login</td><td>QR flow ถูกประมวลผลผ่าน Home Runner เพื่อเข้าสู่ระบบ LINE</td><td>Liney Web Public ปิด email/password login และไม่ขอรหัสผ่าน LINE จากผู้ใช้</td></tr>
               </tbody>
             </table>
           </div>
-          <p>ข้อความที่ถูกต้องคือ Liney Web ไม่ตั้งใจเก็บ password หรือฐานข้อมูลแชตกลาง และ relay ถูกออกแบบให้ประมวลผลแบบชั่วคราวเท่านั้น ไม่ควรกล่าวว่า server ไม่มีทางเห็นข้อมูลใด ๆ เพราะถ้า request วิ่งผ่าน relay ระบบฝั่ง server ต้องประมวลผล packet นั้นเพื่อส่งต่อให้ใช้งานได้</p>
+          <p>Liney Web ไม่ควรถูกอธิบายว่า “ไม่มี server กลาง” เพราะ Public Home Runner เป็น server runtime จริง แม้แต่ละ browser จะได้ session แยกกันก็ตาม. ผู้ดูแล Home Server มีสิทธิ์ระดับระบบต่อเครื่อง จึงไม่ควรถือว่า server ไม่สามารถเข้าถึงข้อมูลได้โดยหลักการ; การออกแบบปัจจุบันลดการคงข้อมูลด้วย session TTL, data directory แยก และการลบข้อมูลเมื่อ session สิ้นสุด</p>
 
           <h2 id="retention">5. การเก็บรักษาและการลบ</h2>
           <ul>
-            <li><strong>Logout:</strong> ล้าง session ในเครื่องและ credential ใน wallet แต่ไม่ล้างประวัติข้อความโดยอัตโนมัติ</li>
+            <li><strong>Logout:</strong> Desktop ล้าง credential ตาม storage mode; Web จะออกจากบัญชี LINE ใน public session แต่ data directory ของ session จะถูกลบเมื่อ session ถูกปิดหรือหมดอายุ</li>
             <li><strong>Clear history:</strong> ลบข้อความ, outbox และ media cache ในเครื่องตามคำสั่งของผู้ใช้ แต่ไม่ลบข้อความบน LINE</li>
             <li><strong>Wallet unavailable:</strong> ใช้ session-only และไม่เขียน refresh credential ลงไฟล์ plaintext</li>
             <li><strong>ถอนการติดตั้ง:</strong> อาจไม่ลบ data directory โดยอัตโนมัติ ผู้ใช้ควรตรวจและลบข้อมูลในเครื่องตามความต้องการ</li>

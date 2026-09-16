@@ -2,7 +2,7 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,12 +22,65 @@ const PUBLIC_CREATE_WINDOW_MS = Number(process.env.LINEY_PUBLIC_CREATE_WINDOW_MS
 const PUBLIC_CREATE_LIMIT = Number(process.env.LINEY_PUBLIC_CREATE_LIMIT || 8);
 const PUBLIC_DELETE_ON_CLOSE = process.env.LINEY_PUBLIC_DELETE_ON_CLOSE !== "0";
 const PUBLIC_DATA_ROOT = resolve(process.env.LINEY_PUBLIC_DATA_ROOT || `${process.env.HOME || ROOT}/.local/share/liney/public-sessions`);
+const PUBLIC_RPC_WINDOW_MS = Number(process.env.LINEY_PUBLIC_RPC_WINDOW_MS || 60 * 1000);
+const PUBLIC_RPC_LIMIT = Number(process.env.LINEY_PUBLIC_RPC_LIMIT || 240);
+const PUBLIC_SYNC_COOLDOWN_MS = Number(process.env.LINEY_PUBLIC_SYNC_COOLDOWN_MS || 5 * 60 * 1000);
+const PUBLIC_RPC_METHODS = new Set([
+  "ping",
+  "capabilities",
+  "auth.qr.start",
+  "auth.logout",
+  "profile.get",
+  "chat.list",
+  "chats.list",
+  "friends.list",
+  "openchat.list",
+  "friend.add_by_id",
+  "chat.create_group",
+  "openchat.create",
+  "call.history",
+  "sync.status",
+  "sync.start",
+  "sync.cancel",
+  "message.list",
+  "messages.list",
+  "message.read_state",
+  "message.react",
+  "message.delete_for_me",
+  "message.deleteForMe",
+  "message.unsend",
+  "message.cancel",
+  "media.preview",
+  "media.preview.get",
+  "chat.markRead",
+  "chat.mark_read",
+  "message.send",
+  "message.sendSticker",
+  "sticker.recent",
+  "sticker.cache.clear",
+  "emoji.recent",
+  "message.sendEmoji",
+  "message.retry",
+  "media.send",
+  "media.image.send",
+  "media.cancel",
+  "history.clear",
+]);
 
 if (!TOKEN || TOKEN.length < 24) {
   console.error("LINEY_RUNNER_TOKEN is required and must be at least 24 characters");
   process.exit(1);
 }
-if (PUBLIC_ENABLED) mkdirSync(PUBLIC_DATA_ROOT, { recursive: true, mode: 0o700 });
+if (PUBLIC_ENABLED) {
+  mkdirSync(PUBLIC_DATA_ROOT, { recursive: true, mode: 0o700 });
+  if (PUBLIC_DELETE_ON_CLOSE) {
+    for (const entry of readdirSync(PUBLIC_DATA_ROOT, { withFileTypes: true })) {
+      if (entry.isDirectory() && /^s_[A-Za-z0-9_-]{10,80}$/.test(entry.name)) {
+        rmSync(resolve(PUBLIC_DATA_ROOT, entry.name), { recursive: true, force: true });
+      }
+    }
+  }
+}
 
 function normalizePrefix(value) {
   const trimmed = String(value || "").trim();
@@ -352,6 +405,9 @@ function cleanupPublicSessions() {
   }
 }
 
+const publicCleanupTimer = setInterval(cleanupPublicSessions, 60_000);
+publicCleanupTimer.unref?.();
+
 function createPublicSession(req) {
   assertPublicEnabled();
   cleanupPublicSessions();
@@ -412,6 +468,57 @@ function assertPublicSession(req, url, body = {}) {
   return session;
 }
 
+function assertPublicRpcRate(session) {
+  const now = Date.now();
+  const recent = (session.rpcCalls || []).filter((ts) => now - ts < PUBLIC_RPC_WINDOW_MS);
+  if (recent.length >= PUBLIC_RPC_LIMIT) {
+    const error = new Error("too many Liney requests in this session");
+    error.code = "RATE_LIMITED";
+    error.retryable = true;
+    throw error;
+  }
+  recent.push(now);
+  session.rpcCalls = recent;
+}
+
+function sanitizePublicRpc(session, method, rawParams) {
+  if (!PUBLIC_RPC_METHODS.has(method)) {
+    const error = new Error(`Liney public gateway does not allow ${method}`);
+    error.code = "PUBLIC_METHOD_BLOCKED";
+    error.retryable = false;
+    throw error;
+  }
+
+  const params = rawParams && typeof rawParams === "object" && !Array.isArray(rawParams)
+    ? { ...rawParams }
+    : {};
+
+  // Public users must never be able to make the engine read a path from the
+  // Home Server filesystem. Browser uploads are accepted as bounded base64.
+  if (method === "media.send" || method === "media.image.send") {
+    delete params.filePath;
+    if (typeof params.base64 !== "string" || !params.base64) {
+      const error = new Error("public media upload requires browser-provided base64 data");
+      error.code = "PUBLIC_MEDIA_BASE64_REQUIRED";
+      error.retryable = false;
+      throw error;
+    }
+  }
+
+  if (method === "sync.start") {
+    const now = Date.now();
+    if (session.lastSyncAt && now - session.lastSyncAt < PUBLIC_SYNC_COOLDOWN_MS) {
+      const error = new Error("full sync is temporarily rate limited for this public session");
+      error.code = "SYNC_COOLDOWN";
+      error.retryable = true;
+      throw error;
+    }
+    session.lastSyncAt = now;
+  }
+
+  return params;
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") return sendJson(res, 204, {});
   const url = new URL(req.url || "/", `http://${req.headers.host || "liney-runner"}`);
@@ -456,7 +563,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && path === "/public/rpc") {
       const body = parseJsonBody(await readBody(req));
       const session = assertPublicSession(req, url, body);
-      const result = await session.bridge.request(String(body.method || ""), body.params || {}, body.timeout || undefined);
+      assertPublicRpcRate(session);
+      const method = String(body.method || "");
+      const params = sanitizePublicRpc(session, method, body.params);
+      const result = await session.bridge.request(method, params, body.timeout || undefined);
       return sendJson(res, 200, { ok: true, result });
     }
 
@@ -513,7 +623,8 @@ server.listen(PORT, HOST, () => {
 
 process.on("SIGTERM", async () => {
   server.close();
+  clearInterval(publicCleanupTimer);
   await privateBridge.stop();
-  await Promise.all([...publicSessions.values()].map((session) => closePublicSession(session, false)));
+  await Promise.all([...publicSessions.values()].map((session) => closePublicSession(session)));
   process.exit(0);
 });
