@@ -1,9 +1,10 @@
 {
   "name": "Liney Web Runtime",
-  "mode": "Static UI active · Chrome Extension Connector preferred · server relay disabled",
+  "mode": "Static UI active · Chrome Extension Connector preferred · Home Runner available · server relay disabled",
   "clientLabel": "Liney-Website",
   "storage": "browser-or-extension-local",
   "serverInbox": false,
   "workerRelay": false,
-  "extensionConnector": "ready"
+  "extensionConnector": "ready",
+  "homeRunner": "https://cdn.cytechteam.site/liney-runner"
 }

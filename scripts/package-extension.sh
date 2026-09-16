@@ -3,10 +3,11 @@ set -eu
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 EXT="$ROOT/extensions/liney-connector"
 OUT_DIR="$ROOT/release"
-OUT="$OUT_DIR/Liney-Connector-0.1.0.zip"
+VERSION=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$EXT/manifest.json")
+OUT="$OUT_DIR/Liney-Connector-$VERSION.zip"
 mkdir -p "$OUT_DIR"
 rm -f "$OUT"
-python - "$EXT" "$OUT" <<'PY'
+python3 - "$EXT" "$OUT" <<'PY'
 import sys
 from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED

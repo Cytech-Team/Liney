@@ -1,5 +1,6 @@
-const VERSION = "0.1.0";
+const VERSION = chrome.runtime.getManifest().version;
 const PROTOCOL_VERSION = 1;
+const DEFAULT_RUNNER_URL = "https://cdn.cytechteam.site/liney-runner";
 
 const ALLOWED_APP_ORIGINS = new Set([
   "https://liney.namnarak.in.th",
@@ -55,9 +56,14 @@ function senderOrigin(sender) {
   }
 }
 
+function isExtensionSender(sender) {
+  return senderOrigin(sender) === `chrome-extension://${chrome.runtime.id}`;
+}
+
 function assertAllowedSender(sender) {
   const origin = senderOrigin(sender);
-  if (!ALLOWED_APP_ORIGINS.has(origin)) throw new Error("Liney Connector blocked an unknown page origin");
+  if (ALLOWED_APP_ORIGINS.has(origin) || isExtensionSender(sender)) return;
+  throw new Error("Liney Connector blocked an unknown page origin");
 }
 
 function safeRelayUrl(value) {
@@ -85,7 +91,99 @@ function relayHeaders(input) {
   return output;
 }
 
-function runtimeStatus() {
+async function storageGet(keys) {
+  return chrome.storage.local.get(keys);
+}
+
+async function storageSet(value) {
+  return chrome.storage.local.set(value);
+}
+
+async function runnerConfig() {
+  const saved = await storageGet(["runnerUrl", "runnerToken", "runnerEnabled"]);
+  return {
+    enabled: saved.runnerEnabled !== false,
+    url: String(saved.runnerUrl || DEFAULT_RUNNER_URL).replace(/\/$/, ""),
+    token: String(saved.runnerToken || "").trim(),
+  };
+}
+
+async function saveRunnerConfig(params) {
+  const url = String(params?.url || DEFAULT_RUNNER_URL).trim().replace(/\/$/, "");
+  const token = String(params?.token || "").trim();
+  const enabled = params?.enabled !== false;
+  if (!url.startsWith("https://") && !url.startsWith("http://127.0.0.1") && !url.startsWith("http://localhost")) {
+    const error = new Error("Runner URL must be HTTPS or localhost");
+    error.code = "BAD_RUNNER_URL";
+    throw error;
+  }
+  await storageSet({ runnerUrl: url, runnerToken: token, runnerEnabled: enabled });
+  return { enabled, url, tokenConfigured: Boolean(token) };
+}
+
+async function runnerRpc(method, params, timeout) {
+  const config = await runnerConfig();
+  if (!config.enabled) {
+    const error = new Error("Liney Home Runner is disabled in the connector");
+    error.code = "RUNNER_DISABLED";
+    throw error;
+  }
+  if (!config.token) {
+    const error = new Error("ตั้งค่า Liney Home Runner token ใน extension ก่อน");
+    error.code = "RUNNER_NOT_CONFIGURED";
+    error.retryable = false;
+    throw error;
+  }
+  const response = await fetch(`${config.url}/rpc`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "authorization": `Bearer ${config.token}`,
+      "x-liney-connector": VERSION,
+    },
+    body: JSON.stringify({ method, params: params || {}, timeout }),
+    cache: "no-store",
+  });
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    const error = new Error(`Liney Home Runner returned HTTP ${response.status}`);
+    error.code = "RUNNER_HTTP_ERROR";
+    error.retryable = true;
+    throw error;
+  }
+  if (!response.ok || data?.ok === false) {
+    const raw = data?.error || {};
+    const error = new Error(String(raw.message || `Liney Home Runner failed with HTTP ${response.status}`));
+    error.code = String(raw.code || "RUNNER_ERROR");
+    error.retryable = Boolean(raw.retryable || response.status >= 500);
+    throw error;
+  }
+  return data?.result;
+}
+
+async function runnerHealth() {
+  const config = await runnerConfig();
+  if (!config.enabled || !config.token) return { configured: Boolean(config.token), enabled: config.enabled, url: config.url, online: false };
+  try {
+    const response = await fetch(`${config.url}/health`, { cache: "no-store" });
+    const data = await response.json().catch(() => ({}));
+    return { configured: true, enabled: true, url: config.url, online: response.ok && Boolean(data?.ok), status: data?.status || null };
+  } catch (error) {
+    return { configured: true, enabled: true, url: config.url, online: false, error: error?.message || String(error) };
+  }
+}
+
+async function runtimeStatus() {
+  const health = await runnerHealth();
+  if (health.configured && health.online) {
+    try {
+      return await runnerRpc("capabilities", {}, 120_000);
+    } catch {
+      // Fall through to connector-local status so the UI can show the error later.
+    }
+  }
   return {
     protocolVersion: PROTOCOL_VERSION,
     linejsVersion: `connector-${VERSION}`,
@@ -100,7 +198,7 @@ function runtimeStatus() {
     },
     features: [
       "web-extension-bridge",
-      "extension-relay-fetch",
+      "home-runner-connector",
       "no-central-worker-relay",
       "browser-static-ui"
     ],
@@ -109,6 +207,7 @@ function runtimeStatus() {
       mode: "browser-extension",
       walletAvailable: false
     },
+    runner: health,
     call: {
       enabled: false,
       incomingAnswer: false,
@@ -147,27 +246,14 @@ async function handleRequest(message, sender) {
   const method = String(message?.method || "");
   const params = message?.params || {};
 
-  if (method === "ping") return { pong: true, protocolVersion: PROTOCOL_VERSION, connectorVersion: VERSION };
+  if (method === "connector.config.get") return { ...(await runnerConfig()), tokenConfigured: Boolean((await runnerConfig()).token) };
+  if (method === "connector.config.set") return saveRunnerConfig(params);
+  if (method === "connector.health") return runnerHealth();
+  if (method === "ping") return { pong: true, protocolVersion: PROTOCOL_VERSION, connectorVersion: VERSION, runner: await runnerHealth() };
   if (method === "capabilities" || method === "runtime.status") return runtimeStatus();
   if (method === "connector.relayFetch" || method === "relay.fetch" || method === "line.fetch") return relayFetch(params);
 
-  // Keep the desktop UI alive while the real LINEJS web runtime is being split
-  // into browser-safe protocol code. These are intentionally empty, not mocked
-  // conversations from a server.
-  if (["chats.list", "chat.list", "friends.list", "openchat.list", "call.history", "message.list", "messages.list"].includes(method)) return [];
-  if (method === "sync.status") return { state: null, stats: { chats: 0, messages: 0, pending: 0 } };
-
-  if (method.startsWith("auth.")) {
-    const error = new Error("Liney Connector is installed. QR login still needs the browser-safe LINEJS login runtime; no Worker/server relay is being used.");
-    error.code = "LINEJS_WEB_RUNTIME_PENDING";
-    error.retryable = false;
-    throw error;
-  }
-
-  const error = new Error(`Liney Connector does not implement ${method} yet`);
-  error.code = "NOT_IMPLEMENTED";
-  error.retryable = false;
-  throw error;
+  return runnerRpc(method, params, message?.timeout);
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
