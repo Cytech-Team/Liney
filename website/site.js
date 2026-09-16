@@ -3,6 +3,20 @@
 
   var config = window.LINEY_SITE_CONFIG || {};
 
+
+  function ensureWebAppNav() {
+    document.querySelectorAll(".site-nav").forEach(function (nav) {
+      if (nav.querySelector("[data-web-app-link]")) return;
+      var link = document.createElement("a");
+      link.href = "app.html";
+      link.textContent = "Web App";
+      link.setAttribute("data-web-app-link", "");
+      if (/\/(app|web)(\.html)?$/i.test(window.location.pathname)) link.setAttribute("aria-current", "page");
+      var cta = nav.querySelector(".nav-cta");
+      nav.insertBefore(link, cta || null);
+    });
+  }
+
   function safeUrl(value) {
     if (!value) return "";
 
@@ -33,6 +47,8 @@
       event.preventDefault();
     });
   }
+
+  ensureWebAppNav();
 
   var repositoryUrl = safeUrl(config.repositoryUrl) || inferRepositoryUrl();
   var releaseUrl = safeUrl(config.releaseUrl) || (repositoryUrl ? repositoryUrl + "/releases" : "");

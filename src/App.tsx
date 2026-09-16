@@ -119,6 +119,7 @@ type NativeClipboardImageResult = { base64: string; mime: string; filename: stri
 type MediaProgress = { phase: string; done: number; total: number };
 type AudioDeviceResult = { id: string; name: string; description: string; kind: "input" | "output" };
 type ProfileResult = { displayName?: string; mid?: string; pictureStatus?: string; statusMessage?: string };
+type ClientIdentityResult = { displayName?: string; modelName?: string; systemName?: string; platform?: string; channel?: string; device?: string };
 type RecentSticker = { packageId: string; stickerId: string; version: string; option?: string; owned: boolean };
 type RecentEmoji = { productId: string; sticonId: string; version: string; resourceType: string; owned: boolean };
 type SyncProgressState = { visible: boolean; phase: "metadata" | "friends" | "chats" | "history" | "complete" | "error"; done: number; total: number; failed: number; summary?: { friends?: number; talkChats?: number; openChats?: number; histories?: number; failedHistories?: number; elapsedMs?: number } };
@@ -195,6 +196,33 @@ const defaultSettings: AppSettings = {
   density: "Comfortable",
   radius: "Round",
 };
+
+
+const MAX_RENDERED_CHAT_ITEMS = 260;
+const MAX_MESSAGE_ROOMS_IN_MEMORY = 18;
+const MAX_ACTIVE_MESSAGES_IN_MEMORY = 180;
+const MAX_BACKGROUND_MESSAGES_IN_MEMORY = 48;
+const MAX_IMAGE_PREVIEWS_PER_REFRESH = 12;
+
+function compactMessageMapState(map: Record<string, Message[]>, activeChatId: string): Record<string, Message[]> {
+  const keys = Object.keys(map);
+  let changed = false;
+  const next: Record<string, Message[]> = {};
+  const keep: string[] = [];
+  if (activeChatId && map[activeChatId]) keep.push(activeChatId);
+  for (let index = keys.length - 1; index >= 0 && keep.length < MAX_MESSAGE_ROOMS_IN_MEMORY; index -= 1) {
+    const key = keys[index];
+    if (!keep.includes(key)) keep.push(key);
+  }
+  if (keep.length !== keys.length) changed = true;
+  for (const key of keep.reverse()) {
+    const messages = map[key] ?? [];
+    const max = key === activeChatId ? MAX_ACTIVE_MESSAGES_IN_MEMORY : MAX_BACKGROUND_MESSAGES_IN_MEMORY;
+    next[key] = messages.length > max ? messages.slice(-max) : messages;
+    if (next[key] !== messages) changed = true;
+  }
+  return changed ? next : map;
+}
 
 function readSettings(): AppSettings {
   try {
@@ -398,6 +426,7 @@ function MainApp() {
     }
   });
   const [profile, setProfile] = useState<ProfileResult | null>(null);
+  const [clientIdentity, setClientIdentity] = useState<ClientIdentityResult | null>(null);
   const [composer, setComposer] = useState("");
   const [replyTarget, setReplyTarget] = useState<ReplyTarget | null>(null);
   const [messageMap, setMessageMap] = useState<Record<string, Message[]>>(lineyEngine.isNative ? {} : seedMessages);
@@ -492,8 +521,12 @@ function MainApp() {
   }, [liveFriends]);
 
   useEffect(() => {
-    messageMapRef.current = messageMap;
-  }, [messageMap]);
+    const compacted = lineyEngine.isNative ? compactMessageMapState(messageMap, activeChatId) : messageMap;
+    messageMapRef.current = compacted;
+    if (compacted === messageMap) return;
+    const timer = window.setTimeout(() => setMessageMap(compacted), 0);
+    return () => window.clearTimeout(timer);
+  }, [messageMap, activeChatId]);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -580,8 +613,9 @@ function MainApp() {
       }, 1_500);
     };
     const refreshCapabilities = async () => {
-      const caps = await lineyEngine.request<{ linejsVersion?: string; authenticated?: boolean; features?: string[]; storage?: { mode?: "wallet" | "session-only" }; call?: { enabled?: boolean; incomingAnswer?: boolean; reason?: string } }>("capabilities", {}, 120_000);
+      const caps = await lineyEngine.request<{ linejsVersion?: string; authenticated?: boolean; features?: string[]; clientIdentity?: ClientIdentityResult; storage?: { mode?: "wallet" | "session-only" }; call?: { enabled?: boolean; incomingAnswer?: boolean; reason?: string } }>("capabilities", {}, 120_000);
       if (caps?.linejsVersion) setEngineVersion(caps.linejsVersion);
+      if (caps?.clientIdentity) setClientIdentity(caps.clientIdentity);
       setCallAvailable(Boolean(caps?.call?.enabled || caps?.features?.includes("call-audio-1to1")));
       setCallIncomingAvailable(Boolean(caps?.call?.incomingAnswer));
       setCallReason(String(caps?.call?.reason ?? ""));
@@ -620,7 +654,10 @@ function MainApp() {
       }
     };
     const off = lineyEngine.on((event) => {
-      if (event.type === "engine.ready" && typeof event.linejsVersion === "string") setEngineVersion(event.linejsVersion);
+      if (event.type === "engine.ready") {
+        if (typeof event.linejsVersion === "string") setEngineVersion(event.linejsVersion);
+        if (event.clientIdentity && typeof event.clientIdentity === "object") setClientIdentity(event.clientIdentity as ClientIdentityResult);
+      }
       if (event.type === "engine.error") setEngineState("error");
       if (event.type === "engine.closed") {
         setEngineState("error");
@@ -731,6 +768,7 @@ function MainApp() {
         setAuthError("");
         setAuthOpen(false);
         if (event.storage === "wallet" || event.storage === "session-only") setStorageMode(event.storage);
+        if (event.clientIdentity && typeof event.clientIdentity === "object") setClientIdentity(event.clientIdentity as ClientIdentityResult);
         if (event.profile && typeof event.profile === "object") setProfile(event.profile as ProfileResult);
         if (event.accountChanged === true) {
           liveChatsLoadGenerationRef.current += 1;
@@ -1308,6 +1346,7 @@ function MainApp() {
     ? []
     : messageMap[activeChat.id] ?? (activeChat.kind === "dm" && liveChats && !liveChats.some((item) => item.id === activeChat.id) ? [] : undefined);
   const activeMessagesLoaded = activeMessages !== undefined;
+  const renderedActiveMessages = activeMessages?.slice(-MAX_ACTIVE_MESSAGES_IN_MEMORY);
   const activeMessageLatestTime = activeMessages?.reduce(
     (latest, message) => Math.max(latest, Number(message.createdTime ?? 0)),
     0,
@@ -1369,7 +1408,8 @@ function MainApp() {
   async function refreshTalkReadState(chatId: string, messages: Message[], requestGeneration: number) {
     const messageIds = [...new Set(messages
       .filter((message) => message.author === "me" && /^\d+$/.test(message.id))
-      .map((message) => message.id))];
+      .map((message) => message.id)
+      .slice(-80))];
     if (!messageIds.length) return;
     try {
       const states = await lineyEngine.request<LiveMessageReadState[]>("message.read_state", {
@@ -1617,9 +1657,10 @@ function MainApp() {
       });
       return;
     }
-    const images = list.filter((item) => Number(item.contentType ?? 0) === 1);
-    const workers = Array.from({ length: Math.min(4, images.length) }, async (_, workerIndex) => {
-      for (let index = workerIndex; index < images.length; index += 4) {
+    const images = list.filter((item) => Number(item.contentType ?? 0) === 1).slice(-MAX_IMAGE_PREVIEWS_PER_REFRESH);
+    const concurrency = Math.min(2, images.length);
+    const workers = Array.from({ length: concurrency }, async (_, workerIndex) => {
+      for (let index = workerIndex; index < images.length; index += concurrency) {
         await hydrateImagePreview(chatId, images[index].id, kind, requestGeneration);
       }
     });
@@ -2510,6 +2551,7 @@ function MainApp() {
       authBusy={authBusy}
       error={authError}
       profileName={profile?.displayName ?? ""}
+      clientIdentity={clientIdentity}
       storageMode={storageMode}
       required={required}
       onModeChange={(mode) => {
@@ -2555,7 +2597,7 @@ function MainApp() {
       <Conversation
         key={activeChat.id}
         chat={activeChat}
-        messages={activeMessages}
+        messages={renderedActiveMessages}
         composer={composer}
         onComposer={setComposer}
         onSend={sendMessage}
@@ -2932,6 +2974,8 @@ function ChatList({
     };
   }, [contextMenu]);
   const title = section === "openchat" ? "OpenChat" : section === "friends" ? "เพื่อน" : section === "calls" ? "ประวัติการโทร" : "แชต";
+  const renderedChats = chats.slice(0, MAX_RENDERED_CHAT_ITEMS);
+  const hiddenCount = Math.max(0, chats.length - renderedChats.length);
   return (
     <section className="chat-list-panel">
       <header className="list-header">
@@ -2961,7 +3005,7 @@ function ChatList({
         )}
       </div>
       <div className="chat-items">
-        {chats.map((chat) => (
+        {renderedChats.map((chat) => (
           <button
             key={chat.id}
             className={`chat-item ${activeId === chat.id ? "selected" : ""}`}
@@ -2989,6 +3033,7 @@ function ChatList({
             </span>
           </button>
         ))}
+        {hiddenCount > 0 ? <div className="empty-list">แสดง {renderedChats.length.toLocaleString("th-TH")} รายการล่าสุด · พิมพ์ค้นหาเพื่อเจอรายการเก่า</div> : null}
         {chats.length === 0 && <div className="empty-list">ไม่พบรายการ</div>}
       </div>
       {contextMenu ? (
@@ -4107,6 +4152,7 @@ function AuthModal({
   authBusy,
   error,
   profileName,
+  clientIdentity,
   storageMode,
   required,
   onModeChange,
@@ -4127,6 +4173,7 @@ function AuthModal({
   authBusy: boolean;
   error: string;
   profileName: string;
+  clientIdentity: ClientIdentityResult | null;
   storageMode: "wallet" | "session-only";
   required: boolean;
   onModeChange: (mode: AuthMode) => void;
@@ -4145,7 +4192,7 @@ function AuthModal({
       <motion.section className={`auth-modal ${required ? "auth-modal-required" : ""}`} initial={{ opacity: 0, scale: .96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: .97, y: 8 }} aria-modal="true" role="dialog">
         {!required ? <button className="auth-close icon-button" onClick={onClose} aria-label="ปิด"><X size={18}/></button> : null}
         <div className="auth-brand"><img src="/liney-logo.png" alt="" /></div>
-        <p className="eyebrow">LINEJS · DESKTOPWIN</p>
+        <p className="eyebrow">LINEJS · {clientIdentity?.displayName || clientIdentity?.device || "DESKTOPWIN"}</p>
         <h2>{authenticated ? (profileName || "เชื่อม LINE แล้ว") : "เชื่อมบัญชี LINE"}</h2>
         <p className="auth-copy">{authenticated ? "บัญชีนี้เชื่อมต่อกับ Liney แล้ว" : "ต้องเข้าสู่ระบบก่อนจึงจะใช้แชตและฟีเจอร์ของ Liney ได้"}</p>
 
@@ -4153,7 +4200,7 @@ function AuthModal({
           <div className="auth-success">
             <ShieldCheck size={34}/>
             <strong>พร้อมใช้งานจริง</strong>
-            <span>แชตปกติ, OpenChat และการส่งข้อความเชื่อม LINEJS แล้ว</span>
+            <span>แชตปกติ, OpenChat และการส่งข้อความเชื่อมผ่าน {clientIdentity?.displayName || "Liney"}</span>
           </div>
         ) : (
           <>
@@ -4219,7 +4266,7 @@ function AuthModal({
         {authenticated ? (
           <button className="auth-secondary-danger" onClick={() => void onLogout()}>ออกจากระบบบนเครื่องนี้</button>
         ) : null}
-        <div className="auth-footnote">Credential: {storageMode === "wallet" ? "Wallet / Secret Service" : "session-only (ไม่เขียน token ลงไฟล์)"} · E2EE storage อยู่ที่ ~/.local/share/liney · ไม่มี Liney server กลาง</div>
+        <div className="auth-footnote">Client: {clientIdentity?.displayName || "Liney-Linux"} · Credential: {storageMode === "wallet" ? "Wallet / Secret Service" : "session-only (ไม่เขียน token ลงไฟล์)"} · E2EE storage อยู่ที่ ~/.local/share/liney · ไม่มี Liney server กลาง</div>
       </motion.section>
     </motion.div>
   );

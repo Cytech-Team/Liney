@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Liney Web — แผนเว็บแอปและ Local Bridge สำหรับใช้ Liney ผ่านเบราว์เซอร์โดยไม่ส่ง credential ไป server กลาง">
+    <meta name="theme-color" content="#080c0d">
+    <title>Liney Web — Local Bridge</title>
+    <link rel="icon" type="image/svg+xml" href="assets/liney-mark.svg">
+    <link rel="stylesheet" href="styles.css">
+    <script src="site-config.js"></script>
+    <script src="site.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">ข้ามไปยังเนื้อหา</a>
+    <header class="site-header"><div class="container nav-shell"><a class="brand" href="index.html" aria-label="Liney หน้าแรก"><img src="assets/liney-mark.svg" alt=""><span class="brand-name">Liney</span><span class="brand-note">LINE for Linux</span></a><nav class="site-nav" aria-label="เมนูหลัก"><a href="index.html">หน้าแรก</a><a href="download.html">ดาวน์โหลด</a><a href="notice.html">ข้อควรรู้</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="license.html">License</a><a class="nav-cta" data-release-link data-unconfigured-label="GitHub Releases" href="download.html">ดาวน์โหลด</a></nav></div></header>
+
+    <main id="main-content">
+      <section class="page-hero compact">
+        <div class="container">
+          <p class="eyebrow">Liney Web / Local Bridge</p>
+          <h1>เว็บแอป Liney ที่ไม่ย้าย credential ออกจากเครื่อง</h1>
+          <p class="lead">หน้านี้เป็น entrypoint สำหรับโหมดเว็บของ Liney: หน้าเว็บทำหน้าที่เป็น UI ส่วน engine, credential, E2EE key และ media cache ยังอยู่ในเครื่องผู้ใช้ผ่าน Local Bridge</p>
+          <div class="button-row">
+            <a class="button" href="download.html">ติดตั้ง Desktop ก่อน</a>
+            <a class="button secondary" href="notice.html">อ่านข้อควรรู้</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="container web-app-grid">
+          <article class="feature-card web-app-card">
+            <p class="card-kicker">ตอนนี้</p>
+            <h2>Desktop native</h2>
+            <p>โหมดหลักยังเป็นแอป Linux/Tauri ที่คุยกับ LINE โดยตรงจากเครื่องคุณ เหมาะกับการใช้งานจริงที่สุด</p>
+            <ul class="web-app-list">
+              <li>credential เก็บใน Secret Service/KWallet หรือ session-only</li>
+              <li>SQLite, media cache และ E2EE storage อยู่ในเครื่อง</li>
+              <li>ไม่มี Liney relay server กลางสำหรับข้อความ</li>
+            </ul>
+          </article>
+          <article class="feature-card web-app-card accent">
+            <p class="card-kicker">กำลังเตรียม</p>
+            <h2>Liney-Website</h2>
+            <p>เว็บ UI จะเชื่อมกับ Local Bridge บนเครื่องเดียวกัน เพื่อให้เปิดใช้งานผ่านเบราว์เซอร์ได้โดยไม่ส่ง token ไป Cloudflare หรือ server ของ Liney</p>
+            <div class="web-app-status">
+              <span>Client label</span>
+              <strong>Liney-Website</strong>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section section-muted">
+        <div class="container">
+          <div class="section-heading">
+            <div><p class="eyebrow">Security model</p><h2>โหมดเว็บต้องผ่าน Local Bridge เท่านั้น</h2></div>
+            <p>การให้เว็บไซต์ Cloudflare ถือ credential โดยตรงไม่ปลอดภัยและไม่ตรงกับแนว local-first ของ Liney ดังนั้นเว็บแอปจริงจะเป็น browser UI ที่คุยกับ engine ในเครื่อง</p>
+          </div>
+          <div class="feature-grid three">
+            <article class="feature-card"><span>01</span><h3>Website</h3><p>เสิร์ฟเฉพาะ UI/static asset และตั้ง label เป็น <strong>Liney-Website</strong></p></article>
+            <article class="feature-card"><span>02</span><h3>Local Bridge</h3><p>รับคำสั่งจาก localhost เท่านั้น พร้อม allowlist origin และ session pairing</p></article>
+            <article class="feature-card"><span>03</span><h3>LINE engine</h3><p>ทำงานในเครื่องเดิม ใช้ SQLite, keyring และ media cache ชุดเดียวกับแอป Desktop</p></article>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer"><div class="container footer-grid"><div><a class="footer-brand" href="index.html"><img src="assets/liney-mark.svg" alt="">Liney</a><p>© <span data-current-year></span> Cytech Team Development. Web mode uses a local-first bridge.</p><p class="footer-contact">ติดต่อ: <a class="text-link" data-contact-email href="mailto:namnarak@namnarak.in.th">namnarak@namnarak.in.th</a></p></div><nav class="footer-nav" aria-label="ลิงก์เอกสาร"><a href="download.html">Download / FAQ</a><a href="notice.html">Safety Notice</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="license.html">License</a><a data-repo-link href="download.html">GitHub</a></nav></div></footer>
+  </body>
+</html>

@@ -4,7 +4,8 @@
  * Future LINEJS API changes or replacements require changes only here.
  */
 import { Buffer } from "node:buffer";
-import { loginWithAuthToken, loginWithPassword, loginWithQR, SquareMessage, TalkMessage, type Client } from "@evex/linejs";
+import { loginWithAuthToken, loginWithPassword, loginWithQR, Client as LineJsRuntimeClient, SquareMessage, TalkMessage, type Client } from "@evex/linejs";
+import { BaseClient } from "@evex/linejs/base";
 import { parseCancelCall, parseIncomingCall } from "@evex/linejs/call";
 
 // All LINEJS runtime values and types used by the engine are re-exported from
@@ -31,6 +32,7 @@ export type LineClient = Client;
 
 export const LineJsAdapter = {
   loginWithQR,
+  loginWithBrandedQR,
   loginWithPassword,
   loginWithAuthToken,
   createTalkMessage,
@@ -101,6 +103,41 @@ export const LineJsAdapter = {
   // Re-export version for RPC capabilities
   version: LINEJS_VERSION,
 };
+
+
+export type LineyLoginBrand = {
+  modelName: string;
+  systemName: string;
+};
+
+export async function loginWithBrandedQR(
+  opts: Parameters<typeof loginWithQR>[0],
+  init: Parameters<typeof loginWithQR>[1],
+  brand: LineyLoginBrand,
+): Promise<Client> {
+  const base = new BaseClient(init as any);
+  const loginProcess = (base as any).loginProcess;
+  const modelName = String(brand.modelName || "Liney-Linux").slice(0, 48);
+  const systemName = String(brand.systemName || "Liney-Linux").slice(0, 48);
+
+  if (typeof loginProcess?.qrCodeLoginV2 === "function") {
+    const original = loginProcess.qrCodeLoginV2.bind(loginProcess);
+    loginProcess.qrCodeLoginV2 = (authSessionId: string, rawModelName?: string, rawSystemName?: string, autoLoginIsRequired = true) =>
+      original(authSessionId, rawModelName || modelName, rawSystemName || systemName, autoLoginIsRequired);
+  }
+
+  if (typeof loginProcess?.qrCodeLoginV2ForSecure === "function") {
+    const original = loginProcess.qrCodeLoginV2ForSecure.bind(loginProcess);
+    loginProcess.qrCodeLoginV2ForSecure = (authSessionId: string, nonce: string, rawModelName?: string, rawSystemName?: string, autoLoginIsRequired = true) =>
+      original(authSessionId, nonce, rawModelName || modelName, rawSystemName || systemName, autoLoginIsRequired);
+  }
+
+  base.on("qrcall", opts.onReceiveQRUrl);
+  base.on("pincall", opts.onPincodeRequest);
+  await loginProcess.withQrCode({});
+  await loginProcess.ready();
+  return new LineJsRuntimeClient(base as any) as Client;
+}
 
 // Thin helpers to avoid spreading LINEJS types throughout engine
 export async function getMyProfile(client: Client) {

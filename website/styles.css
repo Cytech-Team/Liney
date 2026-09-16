@@ -1320,3 +1320,54 @@ details p {
     display: none;
   }
 }
+
+
+.web-app-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.web-app-card {
+  min-height: 320px;
+}
+
+.web-app-card.accent {
+  border-color: rgba(84, 240, 161, 0.26);
+  background: linear-gradient(145deg, rgba(39, 216, 121, 0.12), rgba(13, 19, 20, 0.86));
+}
+
+.web-app-list {
+  margin: 1rem 0 0;
+  padding-left: 1.1rem;
+  color: var(--muted-strong);
+  line-height: 1.7;
+}
+
+.web-app-status {
+  margin-top: 1.2rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.9rem;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.web-app-status span {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.web-app-status strong {
+  color: var(--green-bright);
+  font-size: 1.35rem;
+}
+
+@media (max-width: 720px) {
+  .web-app-grid {
+    grid-template-columns: 1fr;
+  }
+}

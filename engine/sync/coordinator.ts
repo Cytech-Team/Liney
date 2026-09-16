@@ -9,6 +9,8 @@ import type { LineyDatabase } from "./database";
 export type SyncPriority = "active" | "unread" | "recent" | "other" | "media";
 export type SyncMode = "full" | "delta";
 
+const PRE_SYNCED_ROOM_MEMORY_LIMIT = 48;
+
 type SyncJob = {
   kind: "talk" | "openchat";
   id: string;
@@ -123,7 +125,13 @@ export class SyncCoordinator {
             if (this.deps.isLiveOverlay?.(cacheKey)) {
               // live event already provided fresher data; keep SQLite persist but don't overwrite in-memory overlay
             } else {
+              cached.delete(cacheKey);
               cached.set(cacheKey, visible);
+              while (cached.size > PRE_SYNCED_ROOM_MEMORY_LIMIT) {
+                const first = cached.keys().next().value;
+                if (!first) break;
+                cached.delete(first);
+              }
             }
             this.deps.persist(job.id, job.kind === "openchat", visible);
             this.database.setSyncState(this.accountId, { key: `${job.kind}:${job.id}`, generation, status: "ready" });

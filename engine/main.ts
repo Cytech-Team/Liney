@@ -4,7 +4,7 @@ import { getTargetProfiles, LineJsAdapter, type LineClient } from "./linejs/adap
 // import migration.
 const {
   loginWithPassword,
-  loginWithQR,
+  loginWithBrandedQR,
   loginWithAuthToken,
   createSquareMessage,
   createTalkMessage,
@@ -16,6 +16,7 @@ const {
 import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { readFileSync } from "node:fs";
 import { rename as renameAsync, rm as rmAsync, unlink as unlinkAsync, writeFile as writeFileAsync } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -75,6 +76,64 @@ let lastSquarePushEventAt = 0;
 const mediaPreviewCache = new Map<string, string>();
 const messageMediaSourceCache = new Map<string, { raw: any; isSquare: boolean }>();
 const preSyncedMessages = new Map<string, any[]>();
+const MEDIA_PREVIEW_MEMORY_LIMIT = 48;
+const MESSAGE_MEDIA_SOURCE_LIMIT = 420;
+const TALK_MESSAGE_BOX_CACHE_LIMIT = 500;
+const MESSAGE_LIST_RESULT_LIMIT = 100;
+
+function trimMapOldest<K, V>(map: Map<K, V>, limit: number): void {
+  while (map.size > limit) {
+    const first = map.keys().next().value as K | undefined;
+    if (first === undefined) break;
+    map.delete(first);
+  }
+}
+
+function rememberMediaPreview(key: string, dataUrl: string): void {
+  mediaPreviewCache.delete(key);
+  mediaPreviewCache.set(key, dataUrl);
+  trimMapOldest(mediaPreviewCache, MEDIA_PREVIEW_MEMORY_LIMIT);
+}
+
+function clientOsLabel(): string {
+  const explicit = String(process.env.LINEY_CLIENT_LABEL ?? process.env.LINEY_CLIENT_OS ?? "").trim();
+  if (explicit) return explicit;
+  try {
+    const osRelease = readFileSync("/etc/os-release", "utf8");
+    const pretty = osRelease.match(/^PRETTY_NAME=(.*)$/m)?.[1] ?? osRelease.match(/^NAME=(.*)$/m)?.[1] ?? "";
+    const value = pretty.replace(/^['"]|['"]$/g, "").replace(/\s+Linux$/i, "").trim();
+    if (value) return value.split(/\s+/).slice(0, 2).join(" ");
+  } catch {
+    // Best effort only; fall through to generic Linux.
+  }
+  return process.platform === "linux" ? "Linux" : process.platform;
+}
+
+function safeClientLabel(value: string): string {
+  const normalized = value
+    .normalize("NFKD")
+    .replace(/[^A-Za-z0-9._ -]+/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[._-]+|[._-]+$/g, "")
+    .slice(0, 32);
+  return normalized || "Linux";
+}
+
+function clientIdentity() {
+  const platform = safeClientLabel(clientOsLabel());
+  const channel = safeClientLabel(String(process.env.LINEY_CLIENT_CHANNEL ?? "Linux"));
+  const suffix = safeClientLabel(String(process.env.LINEY_CLIENT_SUFFIX ?? platform));
+  const displayName = `Liney-${suffix}`;
+  return {
+    displayName,
+    modelName: displayName,
+    systemName: `Liney-${channel}`,
+    platform,
+    channel,
+    device: "DESKTOPWIN" as const,
+  };
+}
 const liveMessageOverlayKeys = new Set<string>();
 let preSyncedChats: any[] | null = null;
 let preSyncedFriends: any[] | null = null;
@@ -753,7 +812,11 @@ async function getImagePreviewDataUrl(messageId: string, isSquare: boolean, chat
     database.deleteMedia(ACCOUNT_ID, key);
   }
   const cached = mediaPreviewCache.get(key);
-  if (cached) return cached;
+  if (cached) {
+    mediaPreviewCache.delete(key);
+    mediaPreviewCache.set(key, cached);
+    return cached;
+  }
 
   const diskMetadata = database.getMedia(ACCOUNT_ID, key);
   const diskCached = await mediaDiskCache.get(key, diskMetadata?.mime || "image/jpeg");
@@ -762,7 +825,7 @@ async function getImagePreviewDataUrl(messageId: string, isSquare: boolean, chat
       const image = await normalizeImageBlob(new Blob([diskCached.bytes], { type: diskCached.mime }));
       const dataUrl = await blobToDataUrl(image);
       database.touchMedia(ACCOUNT_ID, key);
-      mediaPreviewCache.set(key, dataUrl);
+      rememberMediaPreview(key, dataUrl);
       return dataUrl;
     } catch {
       // A partial/corrupt cache entry must not permanently mask a good LINE
@@ -778,11 +841,7 @@ async function getImagePreviewDataUrl(messageId: string, isSquare: boolean, chat
     const saved = await mediaDiskCache.put(key, fetched.blob);
     if (saved) database.saveMedia(ACCOUNT_ID, key, saved.path, saved.mime, saved.size);
   }
-  mediaPreviewCache.set(key, dataUrl);
-  if (mediaPreviewCache.size > 64) {
-    const first = mediaPreviewCache.keys().next().value;
-    if (first) mediaPreviewCache.delete(first);
-  }
+  rememberMediaPreview(key, dataUrl);
   return dataUrl;
 }
 
@@ -1106,11 +1165,9 @@ function mediaSourceKey(messageId: string, isSquare: boolean) {
 function rememberMessageMedia(raw: any, isSquare: boolean) {
   const id = String(raw?.id ?? "");
   if (!id || ![1, 17].includes(contentTypeCode(raw?.contentType))) return;
+  messageMediaSourceCache.delete(mediaSourceKey(id, isSquare));
   messageMediaSourceCache.set(mediaSourceKey(id, isSquare), { raw, isSquare });
-  if (messageMediaSourceCache.size > 1200) {
-    const first = messageMediaSourceCache.keys().next().value;
-    if (first) messageMediaSourceCache.delete(first);
-  }
+  trimMapOldest(messageMediaSourceCache, MESSAGE_MEDIA_SOURCE_LIMIT);
 }
 
 async function loadTalkMessageBoxes(): Promise<any[]> {
@@ -1131,7 +1188,11 @@ async function loadTalkMessageBoxes(): Promise<any[]> {
     talkMessageBoxCache.clear();
     for (const box of boxes) {
       const id = talkMessageBoxId(box);
-      if (id) talkMessageBoxCache.set(id, box);
+      if (id) {
+        talkMessageBoxCache.delete(id);
+        talkMessageBoxCache.set(id, box);
+        trimMapOldest(talkMessageBoxCache, TALK_MESSAGE_BOX_CACHE_LIMIT);
+      }
     }
     return boxes;
   } catch {
@@ -1178,7 +1239,9 @@ async function trackLineSystemAccount(next: LineClient, reason: string, force = 
       const boxes = Array.isArray(result?.messageBoxes) ? result.messageBoxes : [];
       const box = boxes.find((candidate: any) => talkMessageBoxId(candidate) === LINE_SYSTEM_ACCOUNT_MID);
       if (!box) return;
+      talkMessageBoxCache.delete(LINE_SYSTEM_ACCOUNT_MID);
       talkMessageBoxCache.set(LINE_SYSTEM_ACCOUNT_MID, box);
+      trimMapOldest(talkMessageBoxCache, TALK_MESSAGE_BOX_CACHE_LIMIT);
       const cursor = systemAccountCursor(box);
       if (!cursor) return;
 
@@ -2593,6 +2656,7 @@ async function finishAuthentication(next: LineClient, restored: boolean) {
   emit({
     type: "auth.ready",
     restored,
+    clientIdentity: clientIdentity(),
     profile: normalize(profile),
     authTokenPresent: Boolean(LineJsAdapter.authToken(next)),
     storage: credentialPersisted ? "wallet" : "session-only",
@@ -2616,7 +2680,8 @@ async function startQrLogin(id: string) {
   try {
     listenerAbort?.abort();
     client = null;
-    const next = await loginWithQR(
+    const identity = clientIdentity();
+    const next = await loginWithBrandedQR(
       {
         onReceiveQRUrl(url) {
           emit({ type: "auth.qr", url });
@@ -2626,9 +2691,10 @@ async function startQrLogin(id: string) {
         },
       },
       {
-        device: "DESKTOPWIN",
+        device: identity.device,
         storage: store,
       },
+      identity,
     );
     if (generation !== authGeneration) return;
     await finishAuthentication(next, false);
@@ -2671,7 +2737,7 @@ async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: un
         },
       },
       {
-        device: "DESKTOPWIN",
+        device: clientIdentity().device,
         storage: store,
       },
     );
@@ -2696,7 +2762,7 @@ async function restoreToken(id: string, token: unknown) {
   const generation = ++authGeneration;
   try {
     const next = await loginWithAuthToken(token as any, {
-      device: "DESKTOPWIN",
+      device: clientIdentity().device,
       storage: store,
     });
     if (generation !== authGeneration) return;
@@ -2714,7 +2780,7 @@ async function autoRestore() {
   emit({ type: "auth.restoring" });
   try {
     const next = await loginWithAuthToken(credential as any, {
-      device: "DESKTOPWIN",
+      device: clientIdentity().device,
       storage: store,
     });
     if (generation !== authGeneration) return;
@@ -3406,7 +3472,7 @@ async function serveCachedRequest(id: string, method: string, request: any): Pro
   const chatId = String(request?.params?.chatId ?? "").trim();
   if (!chatId) return false;
   const kind = String(request?.params?.kind ?? "talk");
-  const limit = Math.max(1, Math.min(Number(request?.params?.limit ?? 50), 100));
+  const limit = Math.max(1, Math.min(Number(request?.params?.limit ?? 50), MESSAGE_LIST_RESULT_LIMIT));
   const openchat = kind === "openchat";
   const cacheKey = `${openchat ? "openchat" : "talk"}:${chatId}`;
   const transient = preSyncedMessages.get(cacheKey);
@@ -3492,7 +3558,8 @@ async function handle(request: any) {
       result: {
         protocolVersion: PROTOCOL_VERSION,
         linejsVersion: LINEJS_VERSION,
-        device: "DESKTOPWIN",
+        device: clientIdentity().device,
+        clientIdentity: clientIdentity(),
         features,
         authenticated: Boolean(client),
         storage: {
@@ -3808,7 +3875,7 @@ async function handle(request: any) {
     if (method === "message.list" || method === "messages.list") {
       const chatId = String(request?.params?.chatId ?? "");
       const kind = String(request?.params?.kind ?? "talk");
-      const limit = Math.max(1, Math.min(Number(request?.params?.limit ?? 50), 100));
+      const limit = Math.max(1, Math.min(Number(request?.params?.limit ?? 50), MESSAGE_LIST_RESULT_LIMIT));
       const refresh = request?.params?.refresh === true;
       if (!chatId) throw new Error("chatId is required");
 
@@ -3894,7 +3961,7 @@ async function handle(request: any) {
           });
         }
       }
-      emit({ id, ok: true, result: visibleResult });
+      emit({ id, ok: true, result: visibleResult.slice(-limit) });
       return;
     }
 
@@ -4291,7 +4358,8 @@ emit({
   type: "engine.ready",
   engine: "liney-engine",
   linejsVersion: LINEJS_VERSION,
-  device: "DESKTOPWIN",
+  device: clientIdentity().device,
+  clientIdentity: clientIdentity(),
 });
 
 restorePromise = process.env.LINEY_DISABLE_AUTO_RESTORE === "1"
