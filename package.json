@@ -20,7 +20,8 @@
     "test:unit": "bun test engine/*.test.ts",
     "verify:release": "bun run doctor && bun test && bun run lint && bun run web:build && bun run engine:build && cargo build --release --manifest-path src-tauri/Cargo.toml && git diff --check",
     "build:rpm": "sh scripts/tauri-build.sh --bundles rpm",
-    "release:local": "sh scripts/package-release.sh"
+    "release:local": "sh scripts/package-release.sh",
+    "extension:zip": "sh scripts/package-extension.sh"
   },
   "dependencies": {
     "@evex/linejs": "npm:@jsr/evex__linejs@3.4.2",

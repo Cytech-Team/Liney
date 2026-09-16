@@ -1,8 +1,9 @@
 {
   "name": "Liney Web Runtime",
-  "mode": "Browser vault active · server inbox disabled",
+  "mode": "Static UI active · Chrome Extension Connector preferred · server relay disabled",
   "clientLabel": "Liney-Website",
-  "storage": "browser-indexeddb-encrypted",
+  "storage": "browser-or-extension-local",
   "serverInbox": false,
-  "lineRelay": "pending"
+  "workerRelay": false,
+  "extensionConnector": "ready"
 }

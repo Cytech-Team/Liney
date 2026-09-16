@@ -27,6 +27,34 @@ type Pending = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+const WEB_CONNECTOR_PAGE_SOURCE = "liney-web-app";
+const WEB_CONNECTOR_SOURCE = "liney-connector";
+const WEB_CONNECTOR_REQUEST = "liney.connector.request";
+const WEB_CONNECTOR_RESPONSE = "liney.connector.response";
+
+type WebConnectorError = {
+  message?: string;
+  code?: string;
+  retryable?: boolean;
+};
+
+type WebConnectorResponse = {
+  source?: string;
+  type?: string;
+  id?: string;
+  ok?: boolean;
+  result?: unknown;
+  error?: WebConnectorError | string;
+};
+
+declare global {
+  interface Window {
+    lineyConnector?: {
+      request<T = unknown>(method: string, params?: Record<string, unknown>, timeout?: number): Promise<T>;
+    };
+  }
+}
+
 class LineyEngine {
   private child: Child | null = null;
   private pending = new Map<string, Pending>();
@@ -35,13 +63,15 @@ class LineyEngine {
   private startPromise: Promise<boolean> | null = null;
   private lifecycleGeneration = 0;
   private lineBuffer = "";
+  private webStarted = false;
 
   get isNative() {
     return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
   }
 
   async start() {
-    if (this.started || !this.isNative) return this.started;
+    if (!this.isNative) return this.startWebConnector();
+    if (this.started) return this.started;
     if (this.startPromise) return this.startPromise;
     const promise = this.startInternal();
     this.startPromise = promise;
@@ -50,6 +80,85 @@ class LineyEngine {
     } finally {
       if (this.startPromise === promise) this.startPromise = null;
     }
+  }
+
+  private async startWebConnector(): Promise<boolean> {
+    if (this.webStarted) return true;
+    try {
+      const capabilities = await this.webRequest<Record<string, unknown>>("capabilities", {}, 3_500);
+      this.webStarted = true;
+      this.started = true;
+      this.emit({
+        type: "engine.ready",
+        engine: "liney-connector",
+        linejsVersion: String(capabilities.linejsVersion ?? "connector"),
+        device: String(capabilities.device ?? "WEBEXT"),
+        clientIdentity: capabilities.clientIdentity,
+      });
+      return true;
+    } catch (error) {
+      this.webStarted = false;
+      this.started = false;
+      this.emit({
+        type: "engine.error",
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  private async webRequest<T = unknown>(method: string, params: Record<string, unknown> = {}, timeout = 15_000): Promise<T> {
+    if (typeof window === "undefined") {
+      throw new EngineRequestError("Liney Connector requires a browser window", "CONNECTOR_UNAVAILABLE", true);
+    }
+    if (window.lineyConnector?.request) return window.lineyConnector.request<T>(method, params, timeout);
+
+    const id = crypto.randomUUID();
+    const targetOrigin = window.location.origin;
+    const payload = {
+      source: WEB_CONNECTOR_PAGE_SOURCE,
+      type: WEB_CONNECTOR_REQUEST,
+      id,
+      method,
+      params,
+    };
+    const promise = new Promise<T>((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        window.removeEventListener("message", onMessage);
+        reject(new EngineRequestError(
+          "Liney Connector extension is not installed or not responding",
+          "CONNECTOR_UNAVAILABLE",
+          true,
+        ));
+      }, timeout);
+
+      const onMessage = (event: MessageEvent<WebConnectorResponse>) => {
+        if (event.source !== window || event.origin !== targetOrigin) return;
+        const data = event.data;
+        if (data?.source !== WEB_CONNECTOR_SOURCE || data.type !== WEB_CONNECTOR_RESPONSE || data.id !== id) return;
+        window.clearTimeout(timer);
+        window.removeEventListener("message", onMessage);
+        if (data.ok) {
+          resolve(data.result as T);
+          return;
+        }
+        const rawError = data.error;
+        if (rawError && typeof rawError === "object") {
+          reject(new EngineRequestError(
+            String(rawError.message ?? "Liney Connector request failed"),
+            String(rawError.code ?? "CONNECTOR_ERROR"),
+            Boolean(rawError.retryable),
+          ));
+        } else {
+          reject(new EngineRequestError(String(rawError ?? "Liney Connector request failed"), "CONNECTOR_ERROR"));
+        }
+      };
+
+      window.addEventListener("message", onMessage);
+    });
+
+    window.postMessage(payload, targetOrigin);
+    return promise;
   }
 
   private async startInternal(): Promise<boolean> {
@@ -98,6 +207,7 @@ class LineyEngine {
   }
 
   async request<T = unknown>(method: string, params: Record<string, unknown> = {}, timeout = 15_000): Promise<T> {
+    if (!this.isNative) return this.webRequest<T>(method, params, timeout);
     if (!this.child) throw new Error("LINE engine is not running");
     const id = crypto.randomUUID();
     const payload = `${JSON.stringify({ id, version: PROTOCOL_VERSION, method, params })}\n`;
@@ -126,6 +236,11 @@ class LineyEngine {
   }
 
   async stop() {
+    if (!this.isNative) {
+      this.webStarted = false;
+      this.started = false;
+      return;
+    }
     this.lifecycleGeneration += 1;
     const child = this.child;
     this.child = null;

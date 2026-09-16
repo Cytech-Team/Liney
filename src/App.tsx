@@ -382,9 +382,14 @@ function normalizeBrowserPath(path: string): "/" | "/login" | "/chat" | "/app" {
   return "/";
 }
 
+function isLineyWebAppRoute() {
+  return typeof window !== "undefined" && window.location.pathname === "/app";
+}
+
 function MainApp() {
+  const usesEngineRuntime = lineyEngine.isNative || isLineyWebAppRoute();
   const [section, setSection] = useState<Section>("messages");
-  const [activeChatId, setActiveChatId] = useState(lineyEngine.isNative ? "" : "nagi");
+  const [activeChatId, setActiveChatId] = useState(usesEngineRuntime ? "" : "nagi");
   const [mobileConversationOpen, setMobileConversationOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -415,7 +420,7 @@ function MainApp() {
   const [notificationJump, setNotificationJump] = useState<{ chatId: string; messageId: string; nonce: number } | null>(null);
   const [liveChats, setLiveChats] = useState<Chat[] | null>(null);
   const [liveFriends, setLiveFriends] = useState<Chat[] | null>(null);
-  const [callHistory, setCallHistory] = useState<LiveCallHistoryResult[] | null>(lineyEngine.isNative ? null : []);
+  const [callHistory, setCallHistory] = useState<LiveCallHistoryResult[] | null>(usesEngineRuntime ? null : []);
   const [listFilter, setListFilter] = useState<"all" | "unread" | "pinned" | "favorites">("all");
   const [localPins, setLocalPins] = useState<Record<string, number>>(() => {
     try {
@@ -429,7 +434,7 @@ function MainApp() {
   const [clientIdentity, setClientIdentity] = useState<ClientIdentityResult | null>(null);
   const [composer, setComposer] = useState("");
   const [replyTarget, setReplyTarget] = useState<ReplyTarget | null>(null);
-  const [messageMap, setMessageMap] = useState<Record<string, Message[]>>(lineyEngine.isNative ? {} : seedMessages);
+  const [messageMap, setMessageMap] = useState<Record<string, Message[]>>(usesEngineRuntime ? {} : seedMessages);
   const [mediaProgress, setMediaProgress] = useState<Record<string, MediaProgress>>({});
   const recentSentRef = useRef(new Map<string, Array<{ at: number; localId: string }>>());
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
@@ -445,7 +450,7 @@ function MainApp() {
       : false
   );
   const dark = themeMode === "system" ? systemDark : themeMode === "dark";
-  const [engineState, setEngineState] = useState<EngineState>(lineyEngine.isNative ? "starting" : "browser-mock");
+  const [engineState, setEngineState] = useState<EngineState>(usesEngineRuntime ? "starting" : "browser-mock");
   const [engineVersion, setEngineVersion] = useState("3.3.2");
   const [syncStatus, setSyncStatus] = useState("");
   const [syncProgress, setSyncProgress] = useState<SyncProgressState>({ visible: false, phase: "metadata", done: 0, total: 0, failed: 0 });
@@ -521,12 +526,12 @@ function MainApp() {
   }, [liveFriends]);
 
   useEffect(() => {
-    const compacted = lineyEngine.isNative ? compactMessageMapState(messageMap, activeChatId) : messageMap;
+    const compacted = usesEngineRuntime ? compactMessageMapState(messageMap, activeChatId) : messageMap;
     messageMapRef.current = compacted;
     if (compacted === messageMap) return;
     const timer = window.setTimeout(() => setMessageMap(compacted), 0);
     return () => window.clearTimeout(timer);
-  }, [messageMap, activeChatId]);
+  }, [messageMap, activeChatId, usesEngineRuntime]);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -581,7 +586,7 @@ function MainApp() {
   }, []);
 
   useEffect(() => {
-    if (!lineyEngine.isNative) return;
+    if (!usesEngineRuntime) return;
     let reconnectTimer: number | undefined;
     let liveChatRefreshTimer: number | undefined;
     let liveFriendsRefreshTimer: number | undefined;
@@ -646,8 +651,9 @@ function MainApp() {
       try {
         await lineyEngine.start();
         await refreshCapabilities();
-      } catch {
+      } catch (error) {
         setEngineState("error");
+        if (isLineyWebAppRoute()) setAuthError(error instanceof Error ? error.message : String(error));
         scheduleReconnect();
       } finally {
         connectInFlight = false;
@@ -1198,7 +1204,7 @@ function MainApp() {
       if (liveChatRefreshTimer !== undefined) window.clearTimeout(liveChatRefreshTimer);
       if (liveFriendsRefreshTimer !== undefined) window.clearTimeout(liveFriendsRefreshTimer);
     };
-  }, []);
+  }, [usesEngineRuntime]);
 
   useEffect(() => {
     if (!lineyEngine.isNative || !callOpen || !authenticated) return;
@@ -1238,15 +1244,15 @@ function MainApp() {
   }, [localPins]);
 
   const allFriends = useMemo(
-    () => lineyEngine.isNative ? (liveFriends ?? []) : seedChats.filter((chat) => chat.kind === "dm"),
-    [liveFriends],
+    () => usesEngineRuntime ? (liveFriends ?? []) : seedChats.filter((chat) => chat.kind === "dm"),
+    [liveFriends, usesEngineRuntime],
   );
   const favoriteFriendMap = useMemo(
     () => new Map(allFriends.filter((friend) => friend.isFavorite).map((friend) => [friend.id, friend])),
     [allFriends],
   );
   const allChats = useMemo(() => {
-    const base = lineyEngine.isNative
+    const base = usesEngineRuntime
       ? (settings.openchat ? (liveChats ?? []) : (liveChats ?? []).filter((chat) => chat.kind !== "openchat"))
       : seedChats;
     return base
@@ -1266,7 +1272,7 @@ function MainApp() {
         if ((a.lastMessageTime ?? 0) !== (b.lastMessageTime ?? 0)) return (b.lastMessageTime ?? 0) - (a.lastMessageTime ?? 0);
         return (b.favoriteTimestamp ?? 0) - (a.favoriteTimestamp ?? 0);
       });
-  }, [liveChats, favoriteFriendMap, localPins, settings.openchat]);
+  }, [liveChats, favoriteFriendMap, localPins, settings.openchat, usesEngineRuntime]);
   const totalUnread = useMemo(
     () => allChats.reduce((sum, chat) => sum + Math.max(0, chat.unread ?? 0), 0),
     [allChats],
@@ -1327,9 +1333,9 @@ function MainApp() {
   }, [query, section, listFilter, allChats, allFriends, callChats, settings.openchat]);
 
   useEffect(() => {
-    if (!lineyEngine.isNative || section !== "calls") return;
+    if (!usesEngineRuntime || section !== "calls") return;
     void loadCallHistory();
-  }, [section, authenticated]);
+  }, [section, authenticated, usesEngineRuntime]);
 
   const placeholderChat: Chat = {
     id: "__liney__",
@@ -1357,7 +1363,7 @@ function MainApp() {
   // conversation, actively catch the room up instead of leaving two panes out
   // of sync. Bounded retries avoid hammering LINE when history is delayed.
   useEffect(() => {
-    if (!lineyEngine.isNative || !authenticated || activeChat.id === "__liney__" || !activeMessagesLoaded) return;
+    if (!usesEngineRuntime || !authenticated || activeChat.id === "__liney__" || !activeMessagesLoaded) return;
     const target = Number(activeChat.lastMessageTime ?? 0);
     if (!target || activeMessageLatestTime >= target) {
       sidebarCatchupRef.current.delete(activeChat.id);
@@ -1371,7 +1377,7 @@ function MainApp() {
       setMessageRefreshNonce((value) => value + 1);
     }, attempts === 0 ? 250 : Math.min(2_000, 500 + attempts * 300));
     return () => window.clearTimeout(timer);
-  }, [authenticated, activeChat.id, activeChat.lastMessageTime, activeMessagesLoaded, activeMessageLatestTime, messageRefreshNonce]);
+  }, [authenticated, activeChat.id, activeChat.lastMessageTime, activeMessagesLoaded, activeMessageLatestTime, messageRefreshNonce, usesEngineRuntime]);
 
   async function markChatReadAtBottom(chat: Chat, lastMessageId?: string) {
     const unread = chat.unread ?? 0;
@@ -1452,19 +1458,19 @@ function MainApp() {
   }
 
   useEffect(() => {
-    if (!lineyEngine.isNative || !authenticated || !settings.openchat || !settings.openchatRealtimeRefresh) return;
+    if (!usesEngineRuntime || !authenticated || !settings.openchat || !settings.openchatRealtimeRefresh) return;
     const listTimer = window.setInterval(() => { void loadLiveChats(); }, 12_000);
     return () => window.clearInterval(listTimer);
-  }, [authenticated, settings.openchat, settings.openchatRealtimeRefresh]);
+  }, [authenticated, settings.openchat, settings.openchatRealtimeRefresh, usesEngineRuntime]);
 
   useEffect(() => {
-    if (!lineyEngine.isNative || !authenticated || activeChat.kind !== "openchat" || !settings.openchatRealtimeRefresh) return;
+    if (!usesEngineRuntime || !authenticated || activeChat.kind !== "openchat" || !settings.openchatRealtimeRefresh) return;
     const messageTimer = window.setInterval(() => setMessageRefreshNonce((value) => value + 1), 4_000);
     return () => window.clearInterval(messageTimer);
-  }, [authenticated, activeChat.id, activeChat.kind, settings.openchatRealtimeRefresh]);
+  }, [authenticated, activeChat.id, activeChat.kind, settings.openchatRealtimeRefresh, usesEngineRuntime]);
 
   useEffect(() => {
-    if (!lineyEngine.isNative || !liveChats || !activeChatId) return;
+    if (!usesEngineRuntime || !liveChats || !activeChatId) return;
     const chat = [...liveChats, ...(liveFriends ?? [])].find((item) => item.id === activeChatId);
     if (!chat) return;
     const requestGeneration = (messageLoadGenerationRef.current.get(chat.id) ?? 0) + 1;
@@ -1590,7 +1596,7 @@ function MainApp() {
         setMessageMap((current) => current[chat.id] ? current : ({ ...current, [chat.id]: [] }));
         setAuthError(error instanceof Error ? error.message : String(error));
       });
-  }, [activeChatId, authenticated, liveChats, liveFriends, settings.autoMedia, messageRefreshNonce]);
+  }, [activeChatId, authenticated, liveChats, liveFriends, settings.autoMedia, messageRefreshNonce, usesEngineRuntime]);
 
   async function hydrateImagePreview(
     chatId: string,
@@ -2571,11 +2577,11 @@ function MainApp() {
     />
   );
 
-  if (lineyEngine.isNative && !authenticated) {
+  if (usesEngineRuntime && !authenticated) {
     return <div className="auth-gate-shell">{renderAuthDialog(true)}</div>;
   }
 
-  if (lineyEngine.isNative && authenticated && syncProgress.visible && syncProgress.phase !== "error") {
+  if (usesEngineRuntime && authenticated && syncProgress.visible && syncProgress.phase !== "error") {
     return <FullSyncGate progress={syncProgress} onCancel={() => void cancelFullSync()} />;
   }
 
