@@ -1,0 +1,8 @@
+{
+  "name": "Liney Web Runtime",
+  "mode": "Browser vault active · server inbox disabled",
+  "clientLabel": "Liney-Website",
+  "storage": "browser-indexeddb-encrypted",
+  "serverInbox": false,
+  "lineRelay": "pending"
+}
