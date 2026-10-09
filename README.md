@@ -29,6 +29,13 @@
 
 </div>
 
+<!-- CYTECH_README_REFRESH:START -->
+<p align="center"><sub>Independent LINE client for Linux</sub></p>
+
+<p align="center"><a href="#why-liney-exists">Why Liney exists</a> &nbsp;·&nbsp; <a href="#what-liney-is">What Liney is</a> &nbsp;·&nbsp; <a href="#current-implementation">Current implementation</a> &nbsp;·&nbsp; <a href="#security-and-local-data">Security and local data</a> &nbsp;·&nbsp; <a href="https://github.com/Cytech-Team/Liney/issues">Issues</a> &nbsp;·&nbsp; <a href="https://github.com/Cytech-Team/Liney/releases">Releases</a></p>
+
+<!-- CYTECH_README_REFRESH:END -->
+
 ---
 
 Liney is an independent Linux desktop client for LINE. The UI is built with
