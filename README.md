@@ -322,3 +322,15 @@ versioned AppImage, Debian, RPM, portable tarball, and SHA-256 checksum files to
 Tags matching the application version (for example `v0.1.0`) run the same release
 gate in GitHub Actions on x86_64 and aarch64 and attach the verified artifacts to
 the GitHub Release automatically.
+
+## Star History
+
+Follow Liney's public GitHub star growth on [Star History](https://star-history.dera.page/Cytech-Team/Liney).
+
+<!-- Public-release note:
+     The repository is currently private. After making it public, verify the
+     Star History data before replacing this link with a chart embed.
+     GitHub's 2026 stargazer-history API restrictions can leave third-party
+     embedded charts empty. Prefer a maintainer-generated static SVG if needed.
+     Never publish a GitHub access token in README markup.
+-->
