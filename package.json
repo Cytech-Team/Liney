@@ -24,7 +24,7 @@
     "extension:zip": "sh scripts/package-extension.sh"
   },
   "dependencies": {
-    "@evex/linejs": "npm:@jsr/evex__linejs@3.4.2",
+    "@evex/linejs": "npm:@jsr/evex__linejs@3.5.0",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-notification": "^2",

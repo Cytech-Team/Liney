@@ -27,7 +27,7 @@ export {
   type CallSessionState,
 } from "@evex/linejs/call";
 
-export const LINEJS_VERSION = "3.4.2";
+export const LINEJS_VERSION = "3.5.0";
 export type LineClient = Client;
 
 export const LineJsAdapter = {

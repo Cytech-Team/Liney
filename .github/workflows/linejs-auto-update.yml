@@ -1,21 +1,63 @@
 name: LINEJS auto update
 
 on:
+  pull_request:
+    paths:
+      - 'package.json'
+      - 'bun.lock'
+      - 'engine/linejs/**'
+      - 'scripts/*linejs*'
+      - '.github/workflows/linejs-auto-update.yml'
   workflow_dispatch:
   schedule:
     - cron: '17 */6 * * *'
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
-  group: linejs-auto-update
+  group: linejs-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  update:
+  verify:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri -> target'
+      - name: Install Linux native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config patchelf libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev libasound2-dev \
+            libpipewire-0.3-dev libwayland-dev libx11-dev \
+            libxext-dev libxfixes-dev libxdamage-dev libxcomposite-dev \
+            libxrandr-dev libxdo-dev libssl-dev
+      - name: Verify proposed LINEJS update
+        run: |
+          bun install --frozen-lockfile
+          bun test
+          bun run lint
+          bun run web:build
+          bun run engine:build
+          git diff --check
+
+  update:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,11 +65,25 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.4.2'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri -> target'
+
+      - name: Install Linux native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config patchelf libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev libasound2-dev \
+            libpipewire-0.3-dev libwayland-dev libx11-dev \
+            libxext-dev libxfixes-dev libxdamage-dev libxcomposite-dev \
+            libxrandr-dev libxdo-dev libssl-dev
 
       - name: Install current dependencies
         run: bun install --frozen-lockfile
 
-      - name: Follow latest stable LINEJS release
+      - name: Follow latest non-yanked stable LINEJS on JSR
         id: linejs
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -57,18 +113,41 @@ jobs:
           git checkout -B "$branch"
           git add package.json bun.lock engine/linejs/adapter.ts
           git commit -m "deps(linejs): update to v${VERSION}"
-          git push --force origin "HEAD:${branch}"
+          git push --force-with-lease origin "HEAD:${branch}"
+
+          # A green build never proves live LINE interoperability. Attach the upstream
+          # release notes and a human feature-review checklist to the update PR.
+          {
+            echo "Automated update to [LINEJS v${VERSION}](${RELEASE_URL}) from the published JSR stable package."
+            echo
+            echo "## Upstream release notes"
+            gh api "repos/evex-dev/linejs/releases/tags/v${VERSION}" --jq '.body' || true
+            echo
+            echo "## LINEY feature adoption checklist"
+            echo "- [ ] Review protocol/schema and upstream behavior changes"
+            echo "- [ ] Review any old version-specific Bun patches and confirm no required fixes were lost"
+            echo "- [ ] Update docs/LINEJS_FEATURE_COVERAGE.md (new features and status)"
+            echo "- [ ] Add typed adapter, RPC and UI for adopted end-user features"
+            echo "- [ ] Confirm desktop device mode; do not depend on Chrome"
+            echo "- [ ] Validate Login / E2EE / Push / Media / Calls on a test account as applicable"
+            echo "- [ ] Confirm no secrets or raw message payloads in logs"
+            echo
+            echo "Automated CI: tests, lint, UI build, sidecar build and diff check passed."
+            echo "Do not auto-merge on CI alone: live protocol validation is separate."
+          } > /tmp/linejs-upstream-review.md
 
           pr="$(gh pr list --head "$branch" --base "${BASE_BRANCH}" --state open --json number --jq '.[0].number // empty')"
           if [ -z "$pr" ]; then
-            gh pr create \
+            if ! gh pr create \
               --base "${BASE_BRANCH}" \
               --head "$branch" \
               --title "deps(linejs): update to v${VERSION}" \
-              --body "Automated update following the latest stable [LINEJS release](${RELEASE_URL}).\n\nValidation completed before this PR was opened:\n- bun test\n- bun run lint\n- bun run web:build\n- bun run engine:build\n- git diff --check"
-            pr="$(gh pr list --head "$branch" --base "${BASE_BRANCH}" --state open --json number --jq '.[0].number // empty')"
+              --body-file /tmp/linejs-upstream-review.md; then
+              echo "::error::GitHub Actions cannot create PRs. Enable Actions PR creation in repository settings. The update branch was pushed."
+              echo "Open update PR manually: https://github.com/${GITHUB_REPOSITORY}/compare/${BASE_BRANCH}...deps/linejs-v${VERSION}?expand=1" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          else
+            gh pr edit "$pr" --body-file /tmp/linejs-upstream-review.md || echo "::warning::Could not refresh existing update PR."
           fi
-
-          if [ -n "$pr" ]; then
-            echo "LINEJS update PR #${pr} is ready for manual validation; auto-merge is disabled."
-          fi
+          echo "LINEJS branch deps/linejs-v${VERSION} is ready for review; never auto-merge."

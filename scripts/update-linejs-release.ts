@@ -1,27 +1,14 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { compareStableVersions, latestStableLinejs, type JsrPackageMetadata } from "./linejs-upstream-version";
 
 const root = resolve(import.meta.dir, "..");
 const packagePath = resolve(root, "package.json");
 const lockPath = resolve(root, "bun.lock");
 const adapterPath = resolve(root, "engine/linejs/adapter.ts");
 const packageName = "@evex/linejs";
-const upstream = "evex-dev/linejs";
-
-function coreVersion(value: string): [number, number, number] {
-  const match = value.trim().replace(/^v/, "").match(/^(\d+)\.(\d+)\.(\d+)/);
-  if (!match) throw new Error(`Unsupported LINEJS version: ${value}`);
-  return [Number(match[1]), Number(match[2]), Number(match[3])];
-}
-
-function compare(a: string, b: string): number {
-  const left = coreVersion(a);
-  const right = coreVersion(b);
-  for (let index = 0; index < 3; index += 1) {
-    if (left[index] !== right[index]) return left[index] - right[index];
-  }
-  return 0;
-}
+const registryUrl = "https://jsr.io/@evex/linejs/meta.json";
+const checkOnly = process.argv.includes("--check");
 
 function dependencyVersion(spec: string): string {
   const match = spec.match(/@jsr\/evex__linejs@(?:\^|~)?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/);
@@ -34,20 +21,11 @@ function output(name: string, value: string | boolean) {
   if (path) writeFileSync(path, `${name}=${String(value)}\n`, { flag: "a" });
 }
 
-const headers: Record<string, string> = {
-  Accept: "application/vnd.github+json",
-  "User-Agent": "liney-linejs-updater",
-  "X-GitHub-Api-Version": "2022-11-28",
-};
-if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
-
-const response = await fetch(`https://api.github.com/repos/${upstream}/releases/latest`, { headers });
-if (!response.ok) throw new Error(`GitHub releases API failed: ${response.status} ${response.statusText}`);
-const release = await response.json() as { tag_name?: string; html_url?: string; draft?: boolean; prerelease?: boolean };
-if (!release.tag_name || release.draft || release.prerelease) throw new Error("GitHub did not return a stable LINEJS release");
-
-const latest = release.tag_name.replace(/^v/, "");
-coreVersion(latest);
+const response = await fetch(registryUrl, {
+  headers: { Accept: "application/json", "User-Agent": "liney-upstream-checker/1.0" },
+});
+if (!response.ok) throw new Error(`JSR registry API failed: ${response.status} ${response.statusText}`);
+const latest = latestStableLinejs(await response.json() as JsrPackageMetadata);
 
 const packageBefore = readFileSync(packagePath, "utf8");
 const lockBefore = readFileSync(lockPath, "utf8");
@@ -59,22 +37,28 @@ const current = dependencyVersion(currentSpec);
 
 output("current", current);
 output("latest", latest);
-output("release_url", release.html_url ?? `https://github.com/${upstream}/releases/tag/${release.tag_name}`);
+output("release_url", `https://jsr.io/@evex/linejs@${latest}`);
+output("update_available", compareStableVersions(latest, current) > 0);
 
-if (compare(latest, current) <= 0) {
+if (compareStableVersions(latest, current) <= 0) {
   output("updated", false);
-  console.log(`LINEJS is current: ${current} (latest stable: ${latest})`);
+  console.log(`LINEJS is current: ${current} (latest JSR stable: ${latest})`);
+  process.exit(0);
+}
+
+if (checkOnly) {
+  output("updated", false);
+  console.log(`LINEJS update available: ${current} -> ${latest} (check-only; no files changed)`);
   process.exit(0);
 }
 
 packageJson.dependencies![packageName] = `npm:@jsr/evex__linejs@${latest}`;
-writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
-
 const adapterAfter = adapterBefore.replace(
   /export const LINEJS_VERSION = "[^"]+";/,
   `export const LINEJS_VERSION = "${latest}";`,
 );
 if (adapterAfter === adapterBefore) throw new Error("Could not update LINEJS_VERSION in adapter.ts");
+writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
 writeFileSync(adapterPath, adapterAfter);
 
 const install = Bun.spawnSync([process.execPath, "install"], {
@@ -90,7 +74,7 @@ if (install.exitCode !== 0) {
   writeFileSync(adapterPath, adapterBefore);
   output("updated", false);
   output("published", false);
-  console.log(`LINEJS ${latest} exists on GitHub but is not installable from JSR yet; leaving ${current} pinned.`);
+  console.log(`LINEJS ${latest} is published in JSR metadata but its npm-compatible package was not installable; leaving ${current} pinned.`);
   process.exit(0);
 }
 
