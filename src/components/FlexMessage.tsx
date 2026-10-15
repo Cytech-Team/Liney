@@ -323,8 +323,14 @@ function nodeStyle(node: FlexNode, context: FlexContext): CSSProperties {
   if (maxHeight !== undefined) style.maxHeight = maxHeight;
 
   const flex = safeFlex(node.flex);
-  if (flex !== undefined) style.flex = flex === 0 ? "0 0 auto" : `${flex} 0 0`;
-  else if (context.parentLayout === "horizontal") style.flex = "1 1 0";
+  const horizontalParent = context.parentLayout === "horizontal" || context.parentLayout === "baseline";
+  if (flex !== undefined) style.flex = flex === 0 ? "0 0 auto" : `${flex} 1 0%`;
+  else if (horizontalParent) style.flex = "1 1 0%";
+  // Flex items default to min-width:auto/min-height:auto, which can make LINE
+  // cards overflow instead of compressing. Allow constrained rows/columns to
+  // shrink without adding per-node layout observers.
+  if (horizontalParent) style.minWidth = 0;
+  if (context.parentLayout === "vertical") style.minHeight = 0;
 
   const position = asString(node.position).toLowerCase();
   const offsets: Array<[keyof CSSProperties, unknown]> = [

@@ -51,6 +51,7 @@
     "resources": {
       "../README.md": "README.md",
       "../LICENSE": "LICENSE",
+      "../native/vendor/libwayshot-liney/LICENSE-BSD": "licenses/libwayshot-LICENSE-BSD",
       "../branding/liney-logo.jpg": "branding/liney-logo.jpg"
     },
     "icon": [
@@ -72,7 +73,12 @@
       }
     },
     "externalBin": [
-      "binaries/liney-engine"
+      "binaries/liney-engine",
+      "binaries/liney-media",
+      "binaries/liney-audio",
+      "binaries/liney-screen",
+      "binaries/liney-screen-wayland",
+      "binaries/liney-screen-x11"
     ]
   }
 }

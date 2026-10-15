@@ -1,8 +1,8 @@
 export type TalkHistoryState = "available" | "new" | "unavailable";
 
-// Canonical LINE-managed system account. Unlike normal Official Accounts,
-// its security/account notifications advance the Talk cursor without exposing
-// message payloads through getRecent/getPrevious history.
+// Canonical LINE-managed system account. Its cursor can advance even when
+// history endpoints omit the payload, so the engine also checks live operation
+// messages and the message box's lastMessages before showing a placeholder.
 export const LINE_SYSTEM_ACCOUNT_MID = "u085311ecd9e3e3d74ae4c9f5437cbcb5";
 
 export type TalkMessageBoxLike = {

@@ -21,15 +21,19 @@ type SyncJob = {
 export class SyncCoordinator {
   private generation = 0;
   private promise: Promise<void> | null = null;
-  private readonly accountId = "default";
+  private get accountId(): string { return this.deps.currentAccountId(); }
 
   constructor(
     private readonly database: LineyDatabase,
     private readonly emit: (payload: unknown) => void,
     private readonly deps: {
+      currentAccountId: () => string;
       loadFriends: () => Promise<any[]>;
       loadChats: () => Promise<any[]>;
       loadOpenChats: () => Promise<any[]>;
+      loadCachedFriends?: () => any[];
+      loadCachedChats?: () => any[];
+      loadCachedOpenChats?: () => any[];
       fetchTalk: (chatId: string, limit: number) => Promise<any[]>;
       fetchOpen: (chatId: string, limit: number) => Promise<any[]>;
       persistLists: (friends: any[], chats: any[], openChats: any[]) => void;
@@ -86,12 +90,39 @@ export class SyncCoordinator {
 
     this.promise = (async () => {
       try {
-        const friends = await this.deps.loadFriends();
+        const metadataFailures: string[] = [];
+        const loadMetadata = async (
+          kind: string,
+          load: () => Promise<any[]>,
+          loadCached?: () => any[],
+        ): Promise<any[]> => {
+          try {
+            return await load();
+          } catch (error) {
+            const message = String(error instanceof Error ? error.message : error);
+            metadataFailures.push(kind);
+            let cached: any[] = [];
+            try { cached = loadCached?.() ?? []; } catch { /* use an empty fallback */ }
+            this.emit({
+              type: "sync.metadata_error",
+              kind,
+              error: message,
+              usingCache: cached.length > 0,
+              generation,
+            });
+            return cached;
+          }
+        };
+
+        const friends = await loadMetadata("friends", this.deps.loadFriends, this.deps.loadCachedFriends);
         if (generation !== this.generation) return;
         this.deps.setPreSynced({ friends });
         this.emit({ type: "sync.progress", phase: "friends", done: friends.length, total: friends.length, mode: "full", generation });
 
-        const [talkChats, openChats] = await Promise.all([this.deps.loadChats(), this.deps.loadOpenChats()]);
+        const [talkChats, openChats] = await Promise.all([
+          loadMetadata("chats", this.deps.loadChats, this.deps.loadCachedChats),
+          loadMetadata("openchats", this.deps.loadOpenChats, this.deps.loadCachedOpenChats),
+        ]);
         if (generation !== this.generation) return;
         this.deps.persistLists(friends, talkChats, openChats);
         this.deps.setPreSynced({ chats: talkChats, openChats });
@@ -161,8 +192,13 @@ export class SyncCoordinator {
         });
 
         if (generation !== this.generation) return;
-        this.emit({ type: "sync.ready", mode: "full", generation, summary: { friends: friends.length, talkChats: talkChats.length, openChats: openChats.length, histories: this.deps.getPreSynced().messages.size, failedHistories: failed, elapsedMs: Date.now() - startedAt } });
-        this.database.setSyncState(this.accountId, { key: "account", generation, status: "ready", error: failed ? `${failed} room(s) failed` : undefined });
+        this.emit({ type: "sync.ready", mode: "full", generation, summary: { friends: friends.length, talkChats: talkChats.length, openChats: openChats.length, histories: this.deps.getPreSynced().messages.size, failedHistories: failed, failedMetadata: metadataFailures, elapsedMs: Date.now() - startedAt } });
+        const syncError = failed
+          ? `${failed} room(s) failed`
+          : metadataFailures.length
+            ? `Using cached data for: ${metadataFailures.join(", ")}`
+            : undefined;
+        this.database.setSyncState(this.accountId, { key: "account", generation, status: "ready", error: syncError });
       } catch (error) {
         if (generation !== this.generation) return;
         const message = String(error instanceof Error ? error.message : error);

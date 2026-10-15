@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { fetchMessageAsset, getTalkMessageReadRanges, getTargetProfiles, LINEJS_VERSION, markTalkMessageRead, normalizeTalkMessageReadRanges, replyTargetMessageId, sendTalkMediaE2EE, talkMessageEditState } from "./adapter";
+import { createPollingSession, fetchMessageAsset, getTalkMessageReadRanges, getTargetProfiles, LINEJS_VERSION, markTalkMessageRead, normalizeTalkMessageReadRanges, replyTargetMessageId, sendTalkMessage, sendTalkMediaE2EE, talkMessageEditState } from "./adapter";
 
 describe("LineJsAdapter sender metadata", () => {
   test("deduplicates sender MIDs and requests target profiles through LINEJS", async () => {
@@ -64,6 +64,31 @@ describe("LineJsAdapter sender metadata", () => {
 });
 
 
+describe("LineJsAdapter fallback polling", () => {
+  test("creates one stateful LINEJS Polling instance for talk and square fallback cycles", () => {
+    let created = 0;
+    const calls: string[] = [];
+    const polling = {
+      _listenTalkEvents: (options: unknown) => { calls.push(`talk:${String(Boolean(options))}`); return {} as AsyncIterable<unknown>; },
+      _listenSquareEvents: (options: unknown) => { calls.push(`square:${String(Boolean(options))}`); return {} as AsyncIterable<unknown>; },
+    };
+    const client = {
+      base: {
+        createPolling: () => { created += 1; return polling; },
+      },
+    } as any;
+
+    const session = createPollingSession(client);
+    session.talk({ pollingInterval: 1000 });
+    session.square({ pollingInterval: 1000 });
+    session.talk({ pollingInterval: 250 });
+
+    expect(created).toBe(1);
+    expect(calls).toEqual(["talk:true", "square:true", "talk:true"]);
+  });
+});
+
+
 describe("LineJsAdapter E2EE Talk media", () => {
   test("keeps media replies encrypted and attaches the relation to the final Talk message", async () => {
     const uploads: Array<Record<string, unknown>> = [];
@@ -113,6 +138,87 @@ describe("LineJsAdapter E2EE Talk media", () => {
     });
   });
 });
+
+describe("LineJsAdapter E2EE text sender-key recovery", () => {
+  test("persists, selects, and verifies the refreshed key before retrying encrypted text", async () => {
+    let activeKey: Record<string, unknown> = { keyId: 4, privKey: "old-private", pubKey: "old-public" };
+    let registerCalls = 0;
+    let verifyCalls = 0;
+    const calls: Array<Record<string, unknown>> = [];
+    const registered = {
+      keyId: 5,
+      privKey: Buffer.alloc(32, 5),
+      pubKey: Buffer.alloc(32, 6),
+      e2eeVersion: 1,
+    };
+    const client = {
+      base: {
+        profile: { mid: "u-self" },
+        e2ee: {
+          registerE2EEKeyPair: async () => { registerCalls += 1; return registered; },
+          saveE2EESelfKeyData: async (value: Record<string, unknown>) => { activeKey = value; },
+          getE2EESelfKeyData: async () => activeKey,
+          verifyStoredKeyAgainstServer: async () => { verifyCalls += 1; return true; },
+        },
+        talk: {
+          sendMessage: async (value: Record<string, unknown>) => {
+            calls.push(value);
+            if (calls.length === 1) {
+              throw Object.assign(new Error("send rejected"), { data: { code: "E2EE_UPDATE_SENDER_KEY" } });
+            }
+            return { id: "server-message-1" };
+          },
+        },
+      },
+    } as any;
+
+    await expect(sendTalkMessage(client, { to: "u-peer", text: "hello" })).resolves.toEqual({ id: "server-message-1" });
+
+    expect(registerCalls).toBe(1);
+    expect(verifyCalls).toBe(1);
+    expect(activeKey).toMatchObject({
+      keyId: 5,
+      privKey: registered.privKey.toString("base64"),
+      pubKey: registered.pubKey.toString("base64"),
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toMatchObject({ to: "u-peer", text: "hello", e2ee: true });
+  });
+
+  test("does not retry when LINE reports the registered sender key does not match", async () => {
+    let sendCalls = 0;
+    const registered = {
+      keyId: 5,
+      privKey: Buffer.alloc(32, 5),
+      pubKey: Buffer.alloc(32, 6),
+      e2eeVersion: 1,
+    };
+    let activeKey: Record<string, unknown> = {};
+    const client = {
+      base: {
+        profile: { mid: "u-self" },
+        e2ee: {
+          registerE2EEKeyPair: async () => registered,
+          saveE2EESelfKeyData: async (value: Record<string, unknown>) => { activeKey = value; },
+          getE2EESelfKeyData: async () => activeKey,
+          verifyStoredKeyAgainstServer: async () => false,
+        },
+        talk: {
+          sendMessage: async () => {
+            sendCalls += 1;
+            throw Object.assign(new Error("send rejected"), { data: { code: "E2EE_UPDATE_SENDER_KEY" } });
+          },
+        },
+      },
+    } as any;
+
+    await expect(sendTalkMessage(client, { to: "u-peer", text: "hello" }))
+      .rejects.toThrow("does not match the server's public key");
+
+    expect(sendCalls).toBe(1);
+  });
+});
+
 
 describe("LineJsAdapter reply relations", () => {
   test("only treats REPLY relations as quoted replies", () => {
@@ -223,5 +329,26 @@ describe("LINEJS compatibility floor", () => {
 
     const [major, minor, patch] = LINEJS_VERSION.split(".").map(Number);
     expect(major > 3 || (major === 3 && (minor > 1 || (minor === 1 && patch >= 7)))).toBe(true);
+  });
+
+  test("keeps PLANET reply transaction correlation for T103 compatibility", () => {
+    // LINEJS 3.5.0 ships the PLANET transaction-correlation fix upstream.
+    // Verify the actual installed code rather than requiring a retired 3.4.2 patch.
+    const transport = readFileSync(
+      new URL("../../node_modules/@evex/linejs/client/features/call/planet/transport.js", import.meta.url),
+      "utf8",
+    );
+    expect(transport).toContain("replyTo: request.message.hdr");
+    expect(transport).toContain("#planetReplyHdr(msgId, request)");
+    expect(transport).toContain("tranSeq: request.tranSeq");
+    expect(transport).toContain("sessId: request.sessId?.length ? request.sessId : this.#sessId");
+
+    const callModule = readFileSync(
+      new URL("../../node_modules/@evex/linejs/client/features/call/mod.js", import.meta.url),
+      "utf8",
+    );
+    expect(callModule).toContain("async answerIncoming(event, opts)");
+    expect(callModule).toContain("verifyIncomingDetailed");
+    expect(callModule).toContain("acceptIncomingDetailed");
   });
 });

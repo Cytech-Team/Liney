@@ -21,5 +21,19 @@ describe("media disk cache", () => {
     await cache.clear();
     expect(await cache.get("talk:message-1", "image/png")).toBeNull();
   });
+
+  test("evicts least-recently-used previews when the entry cap is exceeded", async () => {
+    const root = mkdtempSync(join(tmpdir(), "liney-media-cache-cap-test-"));
+    const cache = new LineyMediaCache(join(root, "media"), 25 * 1024 * 1024, 2);
+    await cache.put("talk:one", new Blob([Uint8Array.of(1)], { type: "image/png" }));
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    await cache.put("talk:two", new Blob([Uint8Array.of(2)], { type: "image/png" }));
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    await cache.put("talk:three", new Blob([Uint8Array.of(3)], { type: "image/png" }));
+
+    expect(await cache.get("talk:one", "image/png")).toBeNull();
+    expect(await cache.get("talk:two", "image/png")).not.toBeNull();
+    expect(await cache.get("talk:three", "image/png")).not.toBeNull();
+  });
 });
 

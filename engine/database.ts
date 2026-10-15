@@ -6,6 +6,7 @@ import { normalizeJsonValue, parseJsonValue } from "./serialization";
 
 export type ChatKind = "dm" | "group" | "openchat";
 export type ChatHistoryState = "available" | "new" | "unavailable";
+export type TalkIdentityAlias = { aliasMid: string; canonicalMid: string };
 
 export type DatabaseChat = {
   id: string;
@@ -43,6 +44,7 @@ export type DatabaseMessage = {
   replyToId?: string;
   unsent?: boolean;
   status?: "sending" | "sent" | "error" | "unknown";
+  sendError?: string;
   raw?: unknown;
 };
 
@@ -185,6 +187,8 @@ export class LineyDatabase {
         WHERE server_id IS NOT NULL;
       CREATE INDEX IF NOT EXISTS messages_chat_created
         ON messages(account_id, chat_id, created_time, id);
+      CREATE INDEX IF NOT EXISTS messages_cursor_lookup
+        ON messages(account_id, id, created_time);
       CREATE INDEX IF NOT EXISTS messages_content_created
         ON messages(account_id, content_type, created_time DESC, id DESC);
       CREATE TABLE IF NOT EXISTS outbox (
@@ -247,6 +251,16 @@ export class LineyDatabase {
         accessed_at INTEGER NOT NULL,
         PRIMARY KEY (account_id, media_key)
       );
+      CREATE TABLE IF NOT EXISTS link_previews (
+        account_id TEXT NOT NULL,
+        url TEXT NOT NULL,
+        preview_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        accessed_at INTEGER NOT NULL,
+        PRIMARY KEY (account_id, url)
+      );
+      CREATE INDEX IF NOT EXISTS link_previews_accessed
+        ON link_previews(account_id, accessed_at DESC);
       CREATE TABLE IF NOT EXISTS hidden_messages (
         account_id TEXT NOT NULL,
         chat_id TEXT NOT NULL,
@@ -257,6 +271,16 @@ export class LineyDatabase {
       );
       CREATE INDEX IF NOT EXISTS hidden_messages_chat
         ON hidden_messages(account_id, chat_id, kind);
+      CREATE TABLE IF NOT EXISTS talk_identity_aliases (
+        account_id TEXT NOT NULL,
+        alias_mid TEXT NOT NULL,
+        canonical_mid TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (account_id, alias_mid),
+        CHECK(alias_mid <> canonical_mid)
+      );
+      CREATE INDEX IF NOT EXISTS talk_identity_aliases_canonical
+        ON talk_identity_aliases(account_id, canonical_mid);
     `);
     const chatColumns = this.db.query("PRAGMA table_info(chats)").all() as Array<{ name?: string }>;
     if (!chatColumns.some((column) => column.name === "history_state")) {
@@ -329,6 +353,134 @@ export class LineyDatabase {
     };
   }
 
+  listTalkIdentityAliases(accountId: string): TalkIdentityAlias[] {
+    const rows = this.db.query(
+      "SELECT alias_mid, canonical_mid FROM talk_identity_aliases WHERE account_id = ? ORDER BY created_at",
+    ).all(accountId) as Array<{ alias_mid?: unknown; canonical_mid?: unknown }>;
+    return rows.map((row) => ({
+      aliasMid: String(row.alias_mid ?? ""),
+      canonicalMid: String(row.canonical_mid ?? ""),
+    })).filter((row) => row.aliasMid && row.canonicalMid && row.aliasMid !== row.canonicalMid);
+  }
+
+  resolveTalkIdentityMid(accountId: string, mid: string): string {
+    let current = String(mid ?? "").trim();
+    if (!/^u[0-9a-f]{32}$/i.test(current)) return current;
+    const aliases = new Map(
+      this.listTalkIdentityAliases(accountId).map(({ aliasMid, canonicalMid }) => [aliasMid, canonicalMid]),
+    );
+    const seen = new Set([current]);
+    for (let depth = 0; depth < aliases.size; depth += 1) {
+      const next = aliases.get(current);
+      if (!next || seen.has(next)) break;
+      current = next;
+      seen.add(current);
+    }
+    return current;
+  }
+
+  /**
+   * Merge two DM MIDs after the engine has established a shared identity key
+   * or the user has confirmed the relationship. Stored messages and per-chat
+   * state move in one SQLite transaction, while the alias mapping keeps future
+   * LINE snapshots for the old MID grouped under the selected canonical MID.
+   */
+  mergeTalkIdentity(accountId: string, aliasMid: string, canonicalMid: string): boolean {
+    const aliasInput = String(aliasMid ?? "").trim();
+    const canonicalInput = String(canonicalMid ?? "").trim();
+    if (!/^u[0-9a-f]{32}$/i.test(aliasInput) || !/^u[0-9a-f]{32}$/i.test(canonicalInput)) return false;
+
+    return this.transactionResult(() => {
+      const aliasRows = this.db.query(
+        "SELECT alias_mid, canonical_mid FROM talk_identity_aliases WHERE account_id = ?",
+      ).all(accountId) as Array<{ alias_mid?: unknown; canonical_mid?: unknown }>;
+      const aliases = new Map(aliasRows.map((row) => [String(row.alias_mid ?? ""), String(row.canonical_mid ?? "")]));
+      const resolve = (input: string): string => {
+        let current = input;
+        const seen = new Set([current]);
+        for (let depth = 0; depth < aliases.size; depth += 1) {
+          const next = aliases.get(current);
+          if (!next || seen.has(next)) break;
+          current = next;
+          seen.add(current);
+        }
+        return current;
+      };
+      const target = resolve(canonicalInput);
+      let source = aliasInput;
+      if (source === target) return false;
+
+      let sourceChat = this.db.query(
+        "SELECT * FROM chats WHERE account_id = ? AND chat_id = ? AND kind = 'dm' LIMIT 1",
+      ).get(accountId, source) as Record<string, unknown> | null;
+      if (!sourceChat) {
+        source = resolve(aliasInput);
+        if (source === target) return false;
+        sourceChat = this.db.query(
+          "SELECT * FROM chats WHERE account_id = ? AND chat_id = ? AND kind = 'dm' LIMIT 1",
+        ).get(accountId, source) as Record<string, unknown> | null;
+      }
+      const targetChat = this.db.query(
+        "SELECT * FROM chats WHERE account_id = ? AND chat_id = ? AND kind = 'dm' LIMIT 1",
+      ).get(accountId, target) as Record<string, unknown> | null;
+      if (!sourceChat || !targetChat) return false;
+
+      const now = Date.now();
+      this.db.query("INSERT OR IGNORE INTO messages(account_id, chat_id, kind, id, server_id, text, filename, content_type, is_mine, created_time, sender_id, sender_name, sender_avatar_url, is_official_account, post_notification_json, reactions_json, reply_to_id, unsent, status, raw_json, updated_at) SELECT account_id, ?, kind, id, server_id, text, filename, content_type, is_mine, created_time, sender_id, sender_name, sender_avatar_url, is_official_account, post_notification_json, reactions_json, reply_to_id, unsent, status, raw_json, updated_at FROM messages WHERE account_id = ? AND chat_id = ?").run(target, accountId, source);
+
+      this.db.query("DELETE FROM hidden_messages WHERE account_id = ? AND chat_id = ? AND EXISTS (SELECT 1 FROM hidden_messages target WHERE target.account_id = hidden_messages.account_id AND target.chat_id = ? AND target.kind = hidden_messages.kind AND target.message_id = hidden_messages.message_id)").run(accountId, source, target);
+      this.db.query("UPDATE hidden_messages SET chat_id = ? WHERE account_id = ? AND chat_id = ?").run(target, accountId, source);
+
+      this.db.query("DELETE FROM chat_members WHERE account_id = ? AND chat_id = ? AND EXISTS (SELECT 1 FROM chat_members target WHERE target.account_id = chat_members.account_id AND target.chat_id = ? AND target.member_id = chat_members.member_id)").run(accountId, source, target);
+      this.db.query("UPDATE chat_members SET chat_id = ? WHERE account_id = ? AND chat_id = ?").run(target, accountId, source);
+      this.db.query("UPDATE outbox SET chat_id = ?, updated_at = ? WHERE account_id = ? AND chat_id = ?").run(target, now, accountId, source);
+
+      this.db.query("UPDATE chats SET preview = CASE WHEN ? >= last_message_time AND ? <> '' THEN ? ELSE preview END, last_message_time = MAX(last_message_time, ?), unread = MIN(2147483647, unread + ?), pinned = MAX(pinned, ?), favorite_timestamp = MAX(favorite_timestamp, ?), status_message = CASE WHEN status_message = '' THEN ? ELSE status_message END, is_favorite = MAX(is_favorite, ?), favorite_time = MAX(favorite_time, ?), history_state = CASE WHEN EXISTS (SELECT 1 FROM messages WHERE account_id = ? AND chat_id = ?) THEN 'available' WHEN history_state = 'available' OR ? = 'available' THEN 'available' WHEN history_state = 'new' OR ? = 'new' THEN 'new' ELSE 'unavailable' END, updated_at = ? WHERE account_id = ? AND chat_id = ?").run(
+        Number(sourceChat.last_message_time ?? 0),
+        String(sourceChat.preview ?? ""),
+        String(sourceChat.preview ?? ""),
+        Number(sourceChat.last_message_time ?? 0),
+        Number(sourceChat.unread ?? 0),
+        Number(sourceChat.pinned ?? 0),
+        Number(sourceChat.favorite_timestamp ?? 0),
+        String(sourceChat.status_message ?? ""),
+        Number(sourceChat.is_favorite ?? 0),
+        Number(sourceChat.favorite_time ?? 0),
+        accountId,
+        target,
+        String(targetChat.history_state ?? ""),
+        String(sourceChat.history_state ?? ""),
+        now,
+        accountId,
+        target,
+      );
+
+      this.db.query("DELETE FROM messages WHERE account_id = ? AND chat_id = ?").run(accountId, source);
+      this.db.query("DELETE FROM chats WHERE account_id = ? AND chat_id = ?").run(accountId, source);
+      this.db.query("UPDATE talk_identity_aliases SET canonical_mid = ? WHERE account_id = ? AND canonical_mid = ?").run(target, accountId, source);
+      this.db.query("INSERT INTO talk_identity_aliases(account_id, alias_mid, canonical_mid, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(account_id, alias_mid) DO UPDATE SET canonical_mid = excluded.canonical_mid, created_at = excluded.created_at").run(accountId, source, target, now);
+      this.db.query("DELETE FROM talk_identity_aliases WHERE account_id = ? AND alias_mid = canonical_mid").run(accountId);
+      return true;
+    });
+  }
+
+  consolidateTalkIdentityAliases(accountId: string): number {
+    const aliases = this.listTalkIdentityAliases(accountId);
+    let migrated = 0;
+    for (const row of aliases) {
+      const canonicalMid = this.resolveTalkIdentityMid(accountId, row.canonicalMid);
+      if (row.aliasMid === canonicalMid) continue;
+      const sourceExists = this.db.query(
+        "SELECT 1 FROM chats WHERE account_id = ? AND chat_id = ? AND kind = 'dm' LIMIT 1",
+      ).get(accountId, row.aliasMid);
+      const targetExists = this.db.query(
+        "SELECT 1 FROM chats WHERE account_id = ? AND chat_id = ? AND kind = 'dm' LIMIT 1",
+      ).get(accountId, canonicalMid);
+      if (sourceExists && targetExists && this.mergeTalkIdentity(accountId, row.aliasMid, canonicalMid)) migrated += 1;
+    }
+    return migrated;
+  }
+
   findAccountIdByMid(mid: string): string | null {
     const normalized = mid.trim();
     if (!normalized) return null;
@@ -348,7 +500,7 @@ export class LineyDatabase {
   /** Move a legacy/default account only when the destination has no data. */
   rekeyAccount(fromAccountId: string, toAccountId: string): boolean {
     if (!fromAccountId || !toAccountId || fromAccountId === toAccountId) return fromAccountId === toAccountId;
-    const tables = ["accounts", "chats", "chat_members", "messages", "outbox", "sync_state", "protocol_events", "media_cache", "hidden_messages"] as const;
+    const tables = ["accounts", "chats", "chat_members", "messages", "outbox", "sync_state", "protocol_events", "media_cache", "link_previews", "hidden_messages", "talk_identity_aliases"] as const;
     return this.transactionResult(() => {
       for (const table of tables) {
         const existing = this.db.query(`SELECT 1 FROM ${table} WHERE account_id = ? LIMIT 1`).get(toAccountId);
@@ -438,6 +590,47 @@ export class LineyDatabase {
       historyState: (["available", "new", "unavailable"].includes(String(row.history_state)) ? String(row.history_state) : "available") as ChatHistoryState,
       raw: fromJson(row.raw_json),
     }));
+  }
+
+  getLatestPeerName(accountId: string, chatId: string): string | undefined {
+    const row = this.db.query([
+      "SELECT sender_name",
+      "FROM messages",
+      "WHERE account_id = ? AND chat_id = ? AND sender_id = ?",
+      "  AND kind = 'dm' AND is_mine = 0",
+      "  AND trim(coalesce(sender_name, '')) <> ''",
+      "  AND lower(trim(sender_name)) NOT IN ('line user', 'line chat')",
+      "  AND NOT EXISTS (",
+      "    SELECT 1 FROM hidden_messages h",
+      "    WHERE h.account_id = messages.account_id",
+      "      AND h.chat_id = messages.chat_id",
+      "      AND h.kind = messages.kind",
+      "      AND h.message_id = messages.id",
+      "  )",
+      "ORDER BY created_time DESC, id DESC",
+      "LIMIT 1",
+    ].join("\n")).get(accountId, chatId, chatId) as { sender_name?: unknown } | null;
+    const name = String(row?.sender_name ?? "").trim();
+    return name || undefined;
+  }
+
+  restorePlaceholderDmNamesFromHistory(accountId: string): number {
+    const placeholders = this.listChats(accountId, "dm").filter((chat) =>
+      ["line user", "line chat"].includes(chat.name.trim().toLowerCase()),
+    );
+    let restored = 0;
+    for (const chat of placeholders) {
+      const name = this.getLatestPeerName(accountId, chat.id);
+      if (!name) continue;
+      this.db.query([
+        "UPDATE chats",
+        "SET name = ?, updated_at = ?",
+        "WHERE account_id = ? AND chat_id = ? AND kind = 'dm'",
+        "  AND lower(trim(name)) IN ('line user', 'line chat')",
+      ].join("\n")).run(name, Date.now(), accountId, chat.id);
+      restored += 1;
+    }
+    return restored;
   }
 
   listConversationChats(accountId: string, kind?: Exclude<ChatKind, "openchat">): DatabaseChat[] {
@@ -741,10 +934,77 @@ export class LineyDatabase {
     return row ? this.messageFromRow(row) : null;
   }
 
+  findTalkChatForCursorMessage(
+    accountId: string,
+    currentChatId: string,
+    messageId: string,
+    deliveredTime: number,
+  ): string | null {
+    const normalizedId = String(messageId ?? "").trim();
+    const cursorTime = Number(deliveredTime);
+    if (!normalizedId || !Number.isFinite(cursorTime) || cursorTime <= 0) return null;
+
+    const rows = this.db.query(`
+      SELECT m.chat_id AS chat_id, m.created_time AS created_time
+      FROM messages m
+      INNER JOIN chats c
+        ON c.account_id = m.account_id AND c.chat_id = m.chat_id
+      WHERE m.account_id = ? AND m.chat_id <> ?
+        AND c.kind = 'dm' AND m.kind = 'dm'
+        AND (m.id = ? OR m.server_id = ?)
+      ORDER BY ABS(m.created_time - ?) ASC
+      LIMIT 32
+    `).all(accountId, currentChatId, normalizedId, normalizedId, cursorTime) as Array<{
+      chat_id?: unknown;
+      created_time?: unknown;
+    }>;
+    const matched = new Set(rows
+      .filter((row) => Math.abs(Number(row.created_time ?? 0) - cursorTime) <= 5 * 60_000)
+      .map((row) => String(row.chat_id ?? "").trim())
+      .filter(Boolean));
+    return matched.size === 1 ? [...matched][0] : null;
+  }
+
+  listTalkHistoryCandidates(
+    accountId: string,
+    currentChatId: string,
+    limit = 200,
+  ): Array<{ id: string; name: string; messageCount: number; latestMessageTime: number }> {
+    const rows = this.db.query(`
+      SELECT c.chat_id AS chat_id, c.name AS name,
+        COUNT(m.id) AS message_count, MAX(m.created_time) AS latest_message_time
+      FROM chats c
+      INNER JOIN messages m
+        ON m.account_id = c.account_id AND m.chat_id = c.chat_id AND m.kind = 'dm'
+      WHERE c.account_id = ? AND c.kind = 'dm' AND c.chat_id <> ?
+        AND NOT EXISTS (
+          SELECT 1 FROM hidden_messages h
+          WHERE h.account_id = m.account_id
+            AND h.chat_id = m.chat_id
+            AND h.kind = m.kind
+            AND h.message_id = m.id
+        )
+      GROUP BY c.account_id, c.chat_id
+      ORDER BY MAX(m.created_time) DESC, COUNT(m.id) DESC
+      LIMIT ?
+    `).all(accountId, currentChatId, Math.max(1, Math.min(limit, 1000))) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      id: String(row.chat_id ?? ""),
+      name: String(row.name ?? "LINE User"),
+      messageCount: Number(row.message_count ?? 0),
+      latestMessageTime: Number(row.latest_message_time ?? 0),
+    })).filter((row) => row.id && row.messageCount > 0);
+  }
+
   listMessages(accountId: string, chatId: string, limit = 100): DatabaseMessage[] {
     const rows = this.db.query(`
-      SELECT * FROM messages
-      WHERE account_id = ? AND chat_id = ?
+      SELECT messages.*, outbox.last_error AS send_error, outbox.filename AS outbox_filename
+      FROM messages
+      LEFT JOIN outbox
+        ON outbox.account_id = messages.account_id
+        AND outbox.chat_id = messages.chat_id
+        AND outbox.local_id = messages.id
+      WHERE messages.account_id = ? AND messages.chat_id = ?
         AND NOT EXISTS (
           SELECT 1 FROM hidden_messages h
           WHERE h.account_id = messages.account_id
@@ -756,6 +1016,40 @@ export class LineyDatabase {
       LIMIT ?
     `).all(accountId, chatId, Math.max(1, Math.min(limit, 500))) as Record<string, unknown>[];
     return rows.reverse().map((row) => this.messageFromRow(row));
+  }
+
+  listMessagesBefore(
+    accountId: string,
+    chatId: string,
+    beforeCreatedTime: number,
+    beforeId: string,
+    limit = 50,
+  ): { messages: DatabaseMessage[]; hasMore: boolean } {
+    const safeLimit = Math.max(1, Math.min(limit, 100));
+    const rows = this.db.query(`
+      SELECT messages.*, outbox.last_error AS send_error, outbox.filename AS outbox_filename
+      FROM messages
+      LEFT JOIN outbox
+        ON outbox.account_id = messages.account_id
+        AND outbox.chat_id = messages.chat_id
+        AND outbox.local_id = messages.id
+      WHERE messages.account_id = ? AND messages.chat_id = ?
+        AND (messages.created_time < ? OR (messages.created_time = ? AND messages.id < ?))
+        AND NOT EXISTS (
+          SELECT 1 FROM hidden_messages h
+          WHERE h.account_id = messages.account_id
+            AND h.chat_id = messages.chat_id
+            AND h.kind = messages.kind
+            AND h.message_id = messages.id
+        )
+      ORDER BY messages.created_time DESC, messages.id DESC
+      LIMIT ?
+    `).all(accountId, chatId, beforeCreatedTime, beforeCreatedTime, beforeId, safeLimit + 1) as Record<string, unknown>[];
+    const hasMore = rows.length > safeLimit;
+    return {
+      messages: rows.slice(0, safeLimit).reverse().map((row) => this.messageFromRow(row)),
+      hasMore,
+    };
   }
 
   listMessagesByContentType(accountId: string, contentType: number, limit = 100): DatabaseMessage[] {
@@ -777,12 +1071,13 @@ export class LineyDatabase {
   }
 
   private messageFromRow(row: Record<string, unknown>): DatabaseMessage {
+    const storedStatus = String(row.status ?? "sent");
     return {
       id: String(row.id),
       chatId: String(row.chat_id),
       kind: String(row.kind) as ChatKind,
       text: row.text === null ? undefined : String(row.text ?? ""),
-      filename: row.filename ? String(row.filename) : undefined,
+      filename: row.filename ? String(row.filename) : row.outbox_filename ? String(row.outbox_filename) : undefined,
       isMine: Boolean(row.is_mine),
       createdTime: Number(row.created_time ?? 0),
       contentType: Number(row.content_type ?? 0),
@@ -794,7 +1089,12 @@ export class LineyDatabase {
       reactions: fromJson(row.reactions_json),
       replyToId: row.reply_to_id ? String(row.reply_to_id) : undefined,
       unsent: Boolean(row.unsent),
-      status: String(row.status ?? "sent") as DatabaseMessage["status"],
+      status: storedStatus === "failed" || storedStatus === "error"
+        ? "error"
+        : storedStatus === "queued" || storedStatus === "sending"
+          ? "sending"
+          : storedStatus === "unknown" ? "unknown" : "sent",
+      sendError: row.send_error ? String(row.send_error) : undefined,
       raw: fromMessageJson(row.raw_json),
     };
   }
@@ -1099,19 +1399,139 @@ export class LineyDatabase {
     };
   }
 
+  getLinkPreview(accountId: string, url: string, maxAgeMs = 7 * 24 * 60 * 60_000): Record<string, unknown> | null {
+    const row = this.db.query(`
+      SELECT preview_json, updated_at
+      FROM link_previews
+      WHERE account_id = ? AND url = ?
+      LIMIT 1
+    `).get(accountId, url) as { preview_json?: unknown; updated_at?: unknown } | null;
+    if (!row) return null;
+    const updatedAt = Number(row.updated_at ?? 0);
+    if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > Math.max(0, maxAgeMs)) {
+      this.db.query("DELETE FROM link_previews WHERE account_id = ? AND url = ?").run(accountId, url);
+      return null;
+    }
+    const preview = fromJson(row.preview_json);
+    if (!preview || typeof preview !== "object" || Array.isArray(preview)) {
+      this.db.query("DELETE FROM link_previews WHERE account_id = ? AND url = ?").run(accountId, url);
+      return null;
+    }
+    this.db.query("UPDATE link_previews SET accessed_at = MAX(accessed_at, ?) + 1 WHERE account_id = ? AND url = ?")
+      .run(Date.now(), accountId, url);
+    return preview as Record<string, unknown>;
+  }
+
+  saveLinkPreview(accountId: string, url: string, preview: Record<string, unknown>, maxEntries = 400): void {
+    const now = Date.now();
+    const json = asJson(preview);
+    if (!json) return;
+    this.transaction(() => {
+      this.db.query(`
+        INSERT INTO link_previews(account_id, url, preview_json, updated_at, accessed_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(account_id, url) DO UPDATE SET
+          preview_json=excluded.preview_json,
+          updated_at=excluded.updated_at,
+          accessed_at=excluded.accessed_at
+      `).run(accountId, url, json, now, now);
+      this.db.query(`
+        DELETE FROM link_previews
+        WHERE account_id = ? AND url IN (
+          SELECT url FROM link_previews
+          WHERE account_id = ?
+          ORDER BY accessed_at DESC, updated_at DESC, rowid DESC
+          LIMIT -1 OFFSET ?
+        )
+      `).run(accountId, accountId, Math.max(1, Math.floor(maxEntries)));
+    });
+  }
+
+  pruneMessageCache(
+    accountId: string,
+    options: { maxPerChat?: number; maxTotal?: number; keepPerChat?: number } = {},
+  ): { removed: number; remaining: number } {
+    const maxPerChat = Math.max(1, Math.floor(options.maxPerChat ?? 180));
+    const maxTotal = Math.max(maxPerChat, Math.floor(options.maxTotal ?? 12_000));
+    const keepPerChat = Math.max(1, Math.min(maxPerChat, Math.floor(options.keepPerChat ?? 12)));
+    const beforeRow = this.db.query(
+      "SELECT COUNT(*) AS count FROM messages WHERE account_id = ?",
+    ).get(accountId) as { count?: unknown } | null;
+    const before = Number(beforeRow?.count ?? 0);
+    if (before <= maxPerChat) return { removed: 0, remaining: before };
+
+    this.transaction(() => {
+      // Message list RPCs expose at most a bounded recent window. Keep a wider
+      // durable window than the UI needs, but do not let a few very active rooms
+      // grow SQLite forever. Pending/failed outbox rows are deliberately not
+      // touched here; only already-sent history is cache-evictable.
+      this.db.query(`
+        WITH ranked AS (
+          SELECT rowid,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY chat_id
+                   ORDER BY created_time DESC, id DESC
+                 ) AS rank_in_chat
+          FROM messages
+          WHERE account_id = ? AND status = 'sent'
+        )
+        DELETE FROM messages
+        WHERE rowid IN (
+          SELECT rowid FROM ranked WHERE rank_in_chat > ?
+        )
+      `).run(accountId, maxPerChat);
+
+      const countRow = this.db.query(
+        "SELECT COUNT(*) AS count FROM messages WHERE account_id = ?",
+      ).get(accountId) as { count?: unknown } | null;
+      const current = Number(countRow?.count ?? 0);
+      const excess = Math.max(0, current - maxTotal);
+      if (excess > 0) {
+        // Preserve a small recent tail for every room so reopening an old room
+        // still has useful offline context. Evict oldest rows beyond that tail
+        // until the account-wide cap is satisfied.
+        this.db.query(`
+          WITH ranked AS (
+            SELECT rowid, created_time,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY chat_id
+                     ORDER BY created_time DESC, id DESC
+                   ) AS rank_in_chat
+            FROM messages
+            WHERE account_id = ? AND status = 'sent'
+          )
+          DELETE FROM messages
+          WHERE rowid IN (
+            SELECT rowid FROM ranked
+            WHERE rank_in_chat > ?
+            ORDER BY created_time ASC, rowid ASC
+            LIMIT ?
+          )
+        `).run(accountId, keepPerChat, excess);
+      }
+    });
+
+    const afterRow = this.db.query(
+      "SELECT COUNT(*) AS count FROM messages WHERE account_id = ?",
+    ).get(accountId) as { count?: unknown } | null;
+    const remaining = Number(afterRow?.count ?? 0);
+    return { removed: Math.max(0, before - remaining), remaining };
+  }
+
   clearHistory(accountId: string): void {
     this.transaction(() => {
       this.db.query("DELETE FROM messages WHERE account_id = ?").run(accountId);
       this.db.query("DELETE FROM hidden_messages WHERE account_id = ?").run(accountId);
       this.db.query("DELETE FROM outbox WHERE account_id = ?").run(accountId);
       this.db.query("DELETE FROM media_cache WHERE account_id = ?").run(accountId);
+      this.db.query("DELETE FROM link_previews WHERE account_id = ?").run(accountId);
       this.db.query("DELETE FROM protocol_events WHERE account_id = ?").run(accountId);
     });
   }
 
   clearAccount(accountId: string): void {
     this.transaction(() => {
-      for (const table of ["chats", "chat_members", "messages", "outbox", "sync_state", "protocol_events", "media_cache", "hidden_messages"] as const) {
+      for (const table of ["chats", "chat_members", "messages", "outbox", "sync_state", "protocol_events", "media_cache", "link_previews", "hidden_messages", "talk_identity_aliases"] as const) {
         this.db.query(`DELETE FROM ${table} WHERE account_id = ?`).run(accountId);
       }
       this.db.query("DELETE FROM accounts WHERE account_id = ?").run(accountId);

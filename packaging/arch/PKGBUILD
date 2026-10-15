@@ -4,14 +4,11 @@ pkgrel=1
 pkgdesc='Independent unofficial LINE desktop client for Linux'
 arch=('x86_64')
 url='https://github.com/Cytech-Team/Liney'
-license=('custom:TLL-1.0')
+license=('MIT')
 depends=(
   'webkit2gtk-4.1'
   'gtk3'
   'libappindicator-gtk3'
-  'gstreamer'
-  'gst-plugins-base'
-  'pipewire'
 )
 makedepends=(
   'bun'
@@ -23,12 +20,14 @@ makedepends=(
   'git'
   'curl'
   'file'
+  'alsa-lib'
+  'pipewire'
 )
 optdepends=(
-  'libsecret: persistent Secret Service credential storage'
-  'gst-plugins-good: additional media codecs'
-  'gst-plugins-bad: additional media codecs'
-  'gst-libav: FFmpeg-backed media codecs'
+  'alsa-lib: native microphone, speaker and call-tone capability'
+  'pipewire: preferred screen sharing through XDG Desktop Portal'
+  'xdg-desktop-portal: desktop-managed screen/window chooser'
+  'wayland: direct Wayland screen-capture fallback'
 )
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 # Replace this with the release tarball checksum before publishing to AUR.
@@ -55,6 +54,11 @@ package() {
 
   install -Dm755 src-tauri/target/release/liney "$pkgdir/usr/lib/liney/liney"
   install -Dm755 "src-tauri/binaries/liney-engine-$target" "$pkgdir/usr/lib/liney/liney-engine"
+  install -Dm755 "src-tauri/binaries/liney-media-$target" "$pkgdir/usr/lib/liney/liney-media"
+  install -Dm755 "src-tauri/binaries/liney-audio-$target" "$pkgdir/usr/lib/liney/liney-audio"
+  install -Dm755 "src-tauri/binaries/liney-screen-$target" "$pkgdir/usr/lib/liney/liney-screen"
+  install -Dm755 "src-tauri/binaries/liney-screen-wayland-$target" "$pkgdir/usr/lib/liney/liney-screen-wayland"
+  install -Dm755 "src-tauri/binaries/liney-screen-x11-$target" "$pkgdir/usr/lib/liney/liney-screen-x11"
   install -Dm755 packaging/liney-launcher "$pkgdir/usr/bin/liney"
   install -Dm644 packaging/liney.desktop "$pkgdir/usr/share/applications/liney.desktop"
   install -Dm644 packaging/liney.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/liney.png"

@@ -361,7 +361,15 @@ class LineyEngine {
 
   private async startInternal(): Promise<boolean> {
     const generation = ++this.lifecycleGeneration;
-    const command = Command.sidecar("binaries/liney-engine");
+    // Bun's native fetch pool defaults to a very high concurrency. LINEJS's
+    // long-lived PUSH/polling traffic can otherwise fan out into hundreds of
+    // SYN-SENT sockets when a LINE edge is slow/unreachable, eventually
+    // freezing the desktop process. Keep the sidecar pool intentionally small;
+    // Liney's normal RPC/media workload does not need hundreds of simultaneous
+    // HTTP connections.
+    const command = Command.sidecar("binaries/liney-engine", [], {
+      env: { BUN_CONFIG_MAX_HTTP_REQUESTS: "8" },
+    });
     command.stdout.on("data", (data) => {
       if (generation === this.lifecycleGeneration) this.consume(String(data));
     });

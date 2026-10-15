@@ -1,0 +1,10 @@
+[package]
+name = "liney-screen-wayland"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+libwayshot = { path = "../vendor/libwayshot-liney", default-features = false }
+openh264 = "0.5.0"
+serde_json = "1.0"

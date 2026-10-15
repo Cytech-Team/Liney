@@ -21,6 +21,7 @@ export type DiskMedia = {
 };
 
 const DEFAULT_MAX_BYTES = 256 * 1024 * 1024;
+const DEFAULT_MAX_ENTRIES = 1_200;
 const MAX_ENTRY_BYTES = 25 * 1024 * 1024;
 
 function cacheFileName(key: string): string {
@@ -34,10 +35,12 @@ function dataUrl(mime: string, bytes: Uint8Array): string {
 export class LineyMediaCache {
   readonly root: string;
   private readonly maxBytes: number;
+  private readonly maxEntries: number;
 
-  constructor(root: string, maxBytes = DEFAULT_MAX_BYTES) {
+  constructor(root: string, maxBytes = DEFAULT_MAX_BYTES, maxEntries = DEFAULT_MAX_ENTRIES) {
     this.root = root;
     this.maxBytes = Math.max(MAX_ENTRY_BYTES, maxBytes);
+    this.maxEntries = Math.max(1, Math.floor(maxEntries));
     ensurePrivateDirectory(root);
   }
 
@@ -107,11 +110,13 @@ export class LineyMediaCache {
     }));
     const candidates = files.filter((item): item is { path: string; size: number; atimeMs: number } => Boolean(item));
     let total = candidates.reduce((sum, item) => sum + item.size, 0);
-    if (total <= this.maxBytes) return;
+    let count = candidates.length;
+    if (total <= this.maxBytes && count <= this.maxEntries) return;
     for (const item of candidates.filter((entry) => entry.path !== protectedPath).sort((a, b) => a.atimeMs - b.atimeMs)) {
-      if (total <= this.maxBytes) break;
+      if (total <= this.maxBytes && count <= this.maxEntries) break;
       await rm(item.path, { force: true });
       total -= item.size;
+      count -= 1;
     }
   }
 }
