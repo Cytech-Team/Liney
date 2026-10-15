@@ -17,6 +17,6 @@ This is an **unofficial, experimental LINE client for Linux** by Cytech Team Dev
 - Video, screen sharing, Albums and some OpenChat functions remain experimental.
 - Upstream unofficial LINE protocol changes may cause sessions to fail or be restricted by the provider.
 - Desktop UI is legacy Tauri/React; the planned GTK4/Libadwaita frontend is not yet shipped.
-- Some distribution-specific AppImage/WebKit integration may require additional review.
+- AppImage is **not included** in this preview; Bun's standalone Engine ELF currently causes linuxdeploy/GTK's dependency scanner to fail. DEB, RPM, and portable tarball are the supported preview artifacts.
 
 Do not use a critical account without understanding the risks. Keep local sessions and keys private. Check `.sha256` files for downloaded packages. This prerelease does not auto-merge future upstream changes.

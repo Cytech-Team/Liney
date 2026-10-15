@@ -89,7 +89,6 @@ jobs:
           name: liney-linux-${{ matrix.arch }}
           if-no-files-found: error
           path: |
-            release/Liney-*-linux-${{ matrix.arch }}.AppImage
             release/Liney-*-linux-${{ matrix.arch }}.deb
             release/Liney-*-linux-${{ matrix.arch }}.rpm
             release/Liney-*-linux-${{ matrix.arch }}.tar.gz
@@ -112,7 +111,6 @@ jobs:
         run: |
           set -euo pipefail
           find release-assets -maxdepth 1 -type f -printf '%f\n' | sort
-          test -n "$(find release-assets -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
           test -n "$(find release-assets -maxdepth 1 -type f -name '*.deb' -print -quit)"
           test -n "$(find release-assets -maxdepth 1 -type f -name '*.rpm' -print -quit)"
           test -n "$(find release-assets -maxdepth 1 -type f -name '*.tar.gz' -print -quit)"
