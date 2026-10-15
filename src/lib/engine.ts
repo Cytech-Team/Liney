@@ -47,6 +47,42 @@ type WebConnectorResponse = {
   error?: WebConnectorError | string;
 };
 
+type HomeRunnerResponse<T = unknown> = {
+  ok?: boolean;
+  result?: T;
+  error?: WebConnectorError | string;
+};
+
+type HomeRunnerPrivateConfig = {
+  mode: "private";
+  url: string;
+  token: string;
+};
+
+type HomeRunnerPublicConfig = {
+  mode: "public";
+  url: string;
+  sessionId: string;
+  sessionToken: string;
+  expiresAt?: number;
+};
+
+type HomeRunnerConfig = HomeRunnerPrivateConfig | HomeRunnerPublicConfig;
+
+type PublicSessionResult = {
+  sessionId?: string;
+  sessionToken?: string;
+  expiresAt?: number;
+  ttlSeconds?: number;
+};
+
+const DEFAULT_HOME_RUNNER_URL = "https://cdn.cytechteam.site/liney-runner";
+const HOME_RUNNER_URL_KEY = "liney.homeRunner.url";
+const HOME_RUNNER_PRIVATE_TOKEN_KEY = "liney.homeRunner.privateToken";
+const HOME_RUNNER_SESSION_ID_KEY = "liney.homeRunner.sessionId";
+const HOME_RUNNER_SESSION_TOKEN_KEY = "liney.homeRunner.sessionToken";
+const HOME_RUNNER_SESSION_EXPIRES_KEY = "liney.homeRunner.sessionExpiresAt";
+
 declare global {
   interface Window {
     lineyConnector?: {
@@ -64,6 +100,8 @@ class LineyEngine {
   private lifecycleGeneration = 0;
   private lineBuffer = "";
   private webStarted = false;
+  private webEventCursor = 0;
+  private webEventTimer: ReturnType<typeof setInterval> | null = null;
 
   get isNative() {
     return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -82,12 +120,145 @@ class LineyEngine {
     }
   }
 
+  private runnerUrlFromLocation(): string | null {
+    if (typeof window === "undefined") return null;
+    const search = new URLSearchParams(window.location.search);
+    const urlFromQuery = search.get("runner") || search.get("lineyRunner") || search.get("liney-runner");
+    const privateTokenFromQuery = search.get("runnerToken") || search.get("lineyToken") || search.get("liney-token");
+    if (urlFromQuery) window.localStorage.setItem(HOME_RUNNER_URL_KEY, urlFromQuery);
+    if (privateTokenFromQuery) window.localStorage.setItem(HOME_RUNNER_PRIVATE_TOKEN_KEY, privateTokenFromQuery);
+    if (urlFromQuery || privateTokenFromQuery || search.has("private") || search.has("runnerMode")) {
+      search.delete("runner");
+      search.delete("lineyRunner");
+      search.delete("liney-runner");
+      search.delete("runnerToken");
+      search.delete("lineyToken");
+      search.delete("liney-token");
+      search.delete("private");
+      search.delete("runnerMode");
+      const nextUrl = `${window.location.pathname}${search.toString() ? `?${search}` : ""}${window.location.hash}`;
+      window.history.replaceState({}, "", nextUrl);
+    }
+    return (window.localStorage.getItem(HOME_RUNNER_URL_KEY) || DEFAULT_HOME_RUNNER_URL).replace(/\/$/, "");
+  }
+
+  private clearPublicHomeRunnerSession() {
+    if (typeof window === "undefined") return;
+    window.localStorage.removeItem(HOME_RUNNER_SESSION_ID_KEY);
+    window.localStorage.removeItem(HOME_RUNNER_SESSION_TOKEN_KEY);
+    window.localStorage.removeItem(HOME_RUNNER_SESSION_EXPIRES_KEY);
+  }
+
+  private async homeRunnerConfig(): Promise<HomeRunnerConfig | null> {
+    if (typeof window === "undefined" || window.location.pathname !== "/app") return null;
+    const search = new URLSearchParams(window.location.search);
+    const privateMode = search.get("private") === "1" || search.get("runnerMode") === "private";
+    const privateTokenFromQuery = search.get("runnerToken") || search.get("lineyToken") || search.get("liney-token");
+    const url = this.runnerUrlFromLocation();
+    if (!url) return null;
+
+    const privateToken = privateTokenFromQuery || window.localStorage.getItem(HOME_RUNNER_PRIVATE_TOKEN_KEY) || "";
+    if ((privateMode || privateTokenFromQuery) && privateToken) return { mode: "private", url, token: privateToken };
+
+    const now = Date.now();
+    const storedId = window.localStorage.getItem(HOME_RUNNER_SESSION_ID_KEY) || "";
+    const storedToken = window.localStorage.getItem(HOME_RUNNER_SESSION_TOKEN_KEY) || "";
+    const storedExpiresAt = Number(window.localStorage.getItem(HOME_RUNNER_SESSION_EXPIRES_KEY) || "0");
+    if (storedId && storedToken && (!storedExpiresAt || storedExpiresAt - now > 30_000)) {
+      return { mode: "public", url, sessionId: storedId, sessionToken: storedToken, expiresAt: storedExpiresAt || undefined };
+    }
+
+    const session = await this.homeRunnerJson<PublicSessionResult>(url, "/public/session", {
+      method: "POST",
+      body: "{}",
+    }, 12_000, {});
+    if (!session.sessionId || !session.sessionToken) {
+      throw new EngineRequestError("Liney public session could not be created", "SESSION_CREATE_FAILED", true);
+    }
+    window.localStorage.setItem(HOME_RUNNER_SESSION_ID_KEY, session.sessionId);
+    window.localStorage.setItem(HOME_RUNNER_SESSION_TOKEN_KEY, session.sessionToken);
+    if (session.expiresAt) window.localStorage.setItem(HOME_RUNNER_SESSION_EXPIRES_KEY, String(session.expiresAt));
+    else window.localStorage.removeItem(HOME_RUNNER_SESSION_EXPIRES_KEY);
+    return {
+      mode: "public",
+      url,
+      sessionId: session.sessionId,
+      sessionToken: session.sessionToken,
+      expiresAt: session.expiresAt,
+    };
+  }
+
+  private async homeRunnerJson<T>(url: string, path: string, init: RequestInit = {}, timeout = 15_000, headers: Record<string, string> = {}): Promise<T> {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeout);
+    try {
+      const response = await fetch(`${url}${path}`, {
+        ...init,
+        signal: controller.signal,
+        cache: "no-store",
+        headers: {
+          "content-type": "application/json",
+          ...headers,
+          ...(init.headers || {}),
+        },
+      });
+      const data = await response.json() as HomeRunnerResponse<T>;
+      if (!response.ok || !data.ok) {
+        const rawError = data.error;
+        if (rawError && typeof rawError === "object") {
+          throw new EngineRequestError(
+            String(rawError.message ?? "Liney Home Runner request failed"),
+            String(rawError.code ?? "RUNNER_ERROR"),
+            Boolean(rawError.retryable),
+          );
+        }
+        throw new EngineRequestError(String(rawError ?? `Liney Home Runner HTTP ${response.status}`), "RUNNER_ERROR", response.status >= 500);
+      }
+      return data.result as T;
+    } catch (error) {
+      if (error instanceof EngineRequestError) throw error;
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw new EngineRequestError("Liney Home Runner timed out", "TIMEOUT", true);
+      }
+      throw new EngineRequestError(error instanceof Error ? error.message : String(error), "RUNNER_UNAVAILABLE", true);
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+
+  private async homeRunnerRequest<T = unknown>(config: HomeRunnerConfig, method: string, params: Record<string, unknown> = {}, timeout = 15_000): Promise<T> {
+    const after = Number(params.after ?? 0);
+    const headers: Record<string, string> = {};
+    if (config.mode === "public") {
+      headers["x-liney-session-id"] = config.sessionId;
+      headers["x-liney-session-token"] = config.sessionToken;
+    } else {
+      headers.authorization = `Bearer ${config.token}`;
+    }
+    const path = method === "connector.events"
+      ? `${config.mode === "public" ? "/public/events" : "/events"}?after=${encodeURIComponent(String(after))}`
+      : config.mode === "public" ? "/public/rpc" : "/rpc";
+    try {
+      if (method === "connector.events") return await this.homeRunnerJson<T>(config.url, path, { method: "GET" }, timeout, headers);
+      return await this.homeRunnerJson<T>(config.url, path, {
+        method: "POST",
+        body: JSON.stringify({ method, params, timeout }),
+      }, timeout, headers);
+    } catch (error) {
+      if (config.mode === "public" && error instanceof EngineRequestError && ["SESSION_EXPIRED", "UNAUTHORIZED"].includes(error.code)) {
+        this.clearPublicHomeRunnerSession();
+      }
+      throw error;
+    }
+  }
+
   private async startWebConnector(): Promise<boolean> {
     if (this.webStarted) return true;
     try {
-      const capabilities = await this.webRequest<Record<string, unknown>>("capabilities", {}, 3_500);
+      const capabilities = await this.webRequest<Record<string, unknown>>("capabilities", {}, 8_000);
       this.webStarted = true;
       this.started = true;
+      this.startWebEventPolling();
       this.emit({
         type: "engine.ready",
         engine: "liney-connector",
@@ -109,8 +280,10 @@ class LineyEngine {
 
   private async webRequest<T = unknown>(method: string, params: Record<string, unknown> = {}, timeout = 15_000): Promise<T> {
     if (typeof window === "undefined") {
-      throw new EngineRequestError("Liney Connector requires a browser window", "CONNECTOR_UNAVAILABLE", true);
+      throw new EngineRequestError("Liney Web runtime requires a browser window", "CONNECTOR_UNAVAILABLE", true);
     }
+    const homeRunner = await this.homeRunnerConfig();
+    if (homeRunner) return this.homeRunnerRequest<T>(homeRunner, method, params, timeout);
     if (window.lineyConnector?.request) return window.lineyConnector.request<T>(method, params, timeout);
 
     const id = crypto.randomUUID();
@@ -126,8 +299,8 @@ class LineyEngine {
       const timer = window.setTimeout(() => {
         window.removeEventListener("message", onMessage);
         reject(new EngineRequestError(
-          "Liney Connector extension is not installed or not responding",
-          "CONNECTOR_UNAVAILABLE",
+          "Liney public session could not start and no connector fallback responded",
+          "PUBLIC_SESSION_UNAVAILABLE",
           true,
         ));
       }, timeout);
@@ -159,6 +332,31 @@ class LineyEngine {
 
     window.postMessage(payload, targetOrigin);
     return promise;
+  }
+
+  private startWebEventPolling() {
+    if (typeof window === "undefined" || this.webEventTimer) return;
+    const poll = async () => {
+      try {
+        const result = await this.webRequest<{ cursor?: number; events?: EngineEvent[] }>("connector.events", { after: this.webEventCursor }, 8_000);
+        const events = Array.isArray(result.events) ? result.events : [];
+        if (typeof result.cursor === "number") this.webEventCursor = Math.max(this.webEventCursor, result.cursor);
+        for (const event of events) {
+          const seq = typeof event.seq === "number" ? event.seq : Number(event.seq ?? 0);
+          if (seq > this.webEventCursor) this.webEventCursor = seq;
+          this.emit(event);
+        }
+      } catch {
+        // Keep polling lightweight; foreground requests surface actionable errors.
+      }
+    };
+    void poll();
+    this.webEventTimer = window.setInterval(() => void poll(), 1_000);
+  }
+
+  private stopWebEventPolling() {
+    if (this.webEventTimer) window.clearInterval(this.webEventTimer);
+    this.webEventTimer = null;
   }
 
   private async startInternal(): Promise<boolean> {
@@ -237,6 +435,7 @@ class LineyEngine {
 
   async stop() {
     if (!this.isNative) {
+      this.stopWebEventPolling();
       this.webStarted = false;
       this.started = false;
       return;
