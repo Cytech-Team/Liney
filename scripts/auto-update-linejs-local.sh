@@ -21,11 +21,35 @@ fi
 test -x "$BUN" || { echo "bun not found: $BUN" >&2; exit 1; }
 cd "$ROOT"
 
+# The scheduled user timer is check-only by default. Updating installed code
+# requires an explicit --apply and a clean source tree; a green unit suite is
+# not enough to silently swap binaries for a logged-in LINE session.
+MODE=${1:---check}
+case "$MODE" in
+  --check|--apply) ;;
+  *) echo "Usage: $0 [--check|--apply]" >&2; exit 2 ;;
+esac
+
 current_version() {
   "$BUN" -e 'const p=require("./package.json"); const s=p.dependencies["@evex/linejs"]; const m=s.match(/@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/); if(!m) process.exit(2); console.log(m[1])'
 }
 
 BEFORE=$(current_version)
+if [ "$MODE" = "--check" ]; then
+  CHECK_OUTPUT=$(mktemp "$STATE_DIR/linejs-check.XXXXXX")
+  trap 'rm -f "$CHECK_OUTPUT"' EXIT HUP INT TERM
+  GITHUB_OUTPUT="$CHECK_OUTPUT" "$BUN" scripts/update-linejs-release.ts --check
+  LATEST=$(sed -n 's/^latest=//p' "$CHECK_OUTPUT" | tail -1)
+  AVAILABLE=$(sed -n 's/^update_available=//p' "$CHECK_OUTPUT" | tail -1)
+  printf 'checked current=%s latest=%s available=%s at=%s\n' "$BEFORE" "$LATEST" "$AVAILABLE" "$(date -Is)" > "$STATUS_FILE"
+  exit 0
+fi
+
+# Refuse to overwrite local feature development, including untracked files.
+if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
+  echo "LINEJS apply refused: Git worktree contains uncommitted work. Use upstream update PR instead." >&2
+  exit 2
+fi
 BACKUP=$(mktemp -d "$STATE_DIR/linejs-update.XXXXXX")
 cp package.json bun.lock engine/linejs/adapter.ts "$BACKUP/"
 UPDATED=0
