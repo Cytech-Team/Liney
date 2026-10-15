@@ -70,5 +70,5 @@ jobs:
           fi
 
           if [ -n "$pr" ]; then
-            gh pr merge "$pr" --auto --squash || echo "Auto-merge is unavailable; PR #${pr} remains open after validation."
+            echo "LINEJS update PR #${pr} is ready for manual validation; auto-merge is disabled."
           fi
