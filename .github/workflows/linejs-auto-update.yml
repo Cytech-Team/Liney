@@ -1,21 +1,63 @@
 name: LINEJS auto update
 
 on:
+  pull_request:
+    paths:
+      - 'package.json'
+      - 'bun.lock'
+      - 'engine/linejs/**'
+      - 'scripts/*linejs*'
+      - '.github/workflows/linejs-auto-update.yml'
   workflow_dispatch:
   schedule:
     - cron: '17 */6 * * *'
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
-  group: linejs-auto-update
+  group: linejs-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  update:
+  verify:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri -> target'
+      - name: Install Linux native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config patchelf libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev librsvg2-dev libasound2-dev \
+            libpipewire-0.3-dev libwayland-dev libx11-dev \
+            libxext-dev libxfixes-dev libxdamage-dev libxcomposite-dev \
+            libxrandr-dev libxdo-dev libssl-dev
+      - name: Verify proposed LINEJS update
+        run: |
+          bun install --frozen-lockfile
+          bun test
+          bun run lint
+          bun run web:build
+          bun run engine:build
+          git diff --check
+
+  update:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,7 +78,7 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev libasound2-dev \
             libpipewire-0.3-dev libwayland-dev libx11-dev \
             libxext-dev libxfixes-dev libxdamage-dev libxcomposite-dev \
-            libxrandr-dev libssl-dev
+            libxrandr-dev libxdo-dev libssl-dev
 
       - name: Install current dependencies
         run: bun install --frozen-lockfile
