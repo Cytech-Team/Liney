@@ -1,5 +1,7 @@
 import { BaseStorage, type Storage } from "./linejs/adapter";
+import { resolveLineyMediaBinary } from "./native-sidecar";
 import { spawnSync } from "node:child_process";
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -17,122 +19,92 @@ import { dirname, join } from "node:path";
 type JsonRecord = Record<string, unknown>;
 type StoredValue = Storage["Value"];
 
-const KEYRING_APP = "liney";
-const KEYRING_ACCOUNT = "default";
 const CREDENTIAL_KIND = "credential";
 const REFRESH_KIND = "refresh-token";
 
-export function secretToolExecutableAvailable(runner: typeof spawnSync = spawnSync): boolean {
-  // `secret-tool` does not provide a portable `--version` option. Some
-  // distributions print usage and exit non-zero for it, which used to make a
-  // working Secret Service look unavailable and silently forced every login
-  // into session-only mode. Invoking it without arguments still lets
-  // spawnSync distinguish a missing executable (`result.error`) from a
-  // present executable; `probe()` below checks the actual D-Bus service.
-  const result = runner("secret-tool", [], {
-    encoding: "utf8",
-    timeout: 2_500,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  return !result.error && result.status !== null && !result.signal;
-}
+type KeyringRunner = typeof spawnSync;
 
-function secretTool(
+function runNativeKeyring(
+  binary: string,
   args: string[],
+  runner: KeyringRunner,
   input?: string,
-  allowMissing = false,
-): string | null {
-  const result = spawnSync("secret-tool", args, {
-    input,
+): { ok: boolean; stdout: string } {
+  const result = runner(binary, args, {
+    ...(input !== undefined ? { input } : {}),
     encoding: "utf8",
-    timeout: 4_000,
+    timeout: 5_000,
     stdio: ["pipe", "pipe", "pipe"],
   });
-  if (result.error || result.signal === "SIGTERM") {
-    throw new Error("Secret Service is unavailable");
+  if (result.error || result.signal || result.status !== 0) {
+    return { ok: false, stdout: "" };
   }
-  if (result.status !== 0) {
-    const stderr = String(result.stderr ?? "");
-    if (allowMissing && /not found|no such item|could not find/i.test(stderr)) return null;
-    throw new Error("Secret Service operation failed");
+  return { ok: true, stdout: String(result.stdout ?? "").trim() };
+}
+
+export function nativeKeyringSidecarAvailable(
+  binary = resolveLineyMediaBinary(),
+  runner: KeyringRunner = spawnSync,
+): boolean {
+  if (!binary) return false;
+  const result = runNativeKeyring(binary, ["--liney-keyring-probe"], runner);
+  if (!result.ok) return false;
+  try {
+    return Boolean((JSON.parse(result.stdout) as { available?: unknown }).available);
+  } catch {
+    return false;
   }
-  return String(result.stdout ?? "").trim() || null;
 }
 
 export class LineyKeyring {
   readonly available: boolean;
+  private readonly binary?: string;
+  private readonly runner: KeyringRunner;
 
-  constructor() {
-    this.available = secretToolExecutableAvailable() && this.probe();
-  }
-
-  private probe(): boolean {
-    try {
-      // `search` returns 1 when no item exists, which is still a healthy
-      // Secret Service. A transport/DBus failure contains a useful marker.
-      const result = spawnSync(
-        "secret-tool",
-        ["search", "application", KEYRING_APP, "account", KEYRING_ACCOUNT],
-        {
-          encoding: "utf8",
-          timeout: 4_000,
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
-      const stderr = String(result.stderr ?? "");
-      return !result.error && !/cannot|failed|dbus|daemon|no such file/i.test(stderr);
-    } catch {
-      return false;
-    }
+  constructor(
+    binary = resolveLineyMediaBinary(),
+    runner: KeyringRunner = spawnSync,
+  ) {
+    this.binary = binary;
+    this.runner = runner;
+    this.available = nativeKeyringSidecarAvailable(binary, runner);
   }
 
   get(kind: string): string | null {
-    if (!this.available) return null;
+    if (!this.available || !this.binary) return null;
+    const result = runNativeKeyring(
+      this.binary,
+      ["--liney-keyring-get", "--kind", kind],
+      this.runner,
+    );
+    if (!result.ok) return null;
     try {
-      return secretTool(
-        ["lookup", "application", KEYRING_APP, "account", KEYRING_ACCOUNT, "kind", kind],
-        undefined,
-        true,
-      );
+      const parsed = JSON.parse(result.stdout) as { available?: unknown; value?: unknown };
+      return parsed.available && typeof parsed.value === "string" ? parsed.value : null;
     } catch {
       return null;
     }
   }
 
   set(kind: string, value: string): boolean {
-    if (!this.available) return false;
-    try {
-      secretTool(
-        [
-          "store",
-          "--label=Liney credential",
-          "application",
-          KEYRING_APP,
-          "account",
-          KEYRING_ACCOUNT,
-          "kind",
-          kind,
-        ],
-        value,
-      );
-      return this.get(kind) === value;
-    } catch {
-      return false;
-    }
+    if (!this.available || !this.binary || !value) return false;
+    const result = runNativeKeyring(
+      this.binary,
+      ["--liney-keyring-set", "--kind", kind],
+      this.runner,
+      value,
+    );
+    if (!result.ok) return false;
+    return this.get(kind) === value;
   }
 
   clear(kind: string): boolean {
-    if (!this.available) return false;
-    try {
-      secretTool(
-        ["clear", "application", KEYRING_APP, "account", KEYRING_ACCOUNT, "kind", kind],
-        undefined,
-        true,
-      );
-      return true;
-    } catch {
-      return false;
-    }
+    if (!this.available || !this.binary) return false;
+    return runNativeKeyring(
+      this.binary,
+      ["--liney-keyring-clear", "--kind", kind],
+      this.runner,
+    ).ok;
   }
 }
 
@@ -141,6 +113,167 @@ export type AuthCredential = {
   refreshToken?: string;
   expire?: number;
 };
+
+export type CredentialPersistenceMode = "wallet" | "encrypted-file" | "session-only";
+
+type EncryptedFallbackEnvelope = {
+  version: 1;
+  algorithm: "aes-256-gcm";
+  nonce: string;
+  tag: string;
+  ciphertext: string;
+};
+
+const FALLBACK_AAD = Buffer.from("liney-credential-fallback-v1", "utf8");
+
+export class LineyEncryptedFallback {
+  readonly vaultPath: string;
+  readonly keyPath: string;
+
+  constructor(dataDir: string, configDir = dataDir) {
+    this.vaultPath = join(dataDir, "credential-fallback.enc");
+    this.keyPath = join(configDir, "credential-fallback.key");
+    ensurePrivateDirectory(dataDir);
+    ensurePrivateDirectory(configDir);
+    this.hardenExistingFiles();
+  }
+
+  get usable(): boolean {
+    if (existsSync(this.vaultPath) && !existsSync(this.keyPath)) return false;
+    if (existsSync(this.keyPath)) return Boolean(this.readKey(false));
+    return true;
+  }
+
+  get hasSecrets(): boolean {
+    const secrets = this.readSecrets();
+    return Boolean(secrets && Object.keys(secrets).length);
+  }
+
+  get(kind: string): string | null {
+    const secrets = this.readSecrets();
+    if (!secrets) return null;
+    const value = secrets[kind];
+    return typeof value === "string" && value ? value : null;
+  }
+
+  set(kind: string, value: string): boolean {
+    if (!kind || !value) return false;
+    const current = this.readSecrets();
+    if (current === null) return false;
+    const key = this.readKey(true);
+    if (!key) return false;
+    current[kind] = value;
+    return this.writeSecrets(current, key);
+  }
+
+  clear(kind: string): boolean {
+    const current = this.readSecrets();
+    if (current === null) return false;
+    delete current[kind];
+    if (!Object.keys(current).length) {
+      this.clearAll();
+      return true;
+    }
+    const key = this.readKey(false);
+    return Boolean(key && this.writeSecrets(current, key));
+  }
+
+  clearAll(): void {
+    try { unlinkSync(this.vaultPath); } catch {}
+    try { unlinkSync(this.keyPath); } catch {}
+  }
+
+  private hardenExistingFiles(): void {
+    for (const path of [this.vaultPath, this.keyPath]) {
+      if (!existsSync(path)) continue;
+      try { chmodSync(path, 0o600); } catch {}
+    }
+  }
+
+  private readKey(create: boolean): Buffer | null {
+    if (existsSync(this.keyPath)) {
+      try {
+        const raw = readFileSync(this.keyPath, "utf8").trim();
+        const key = Buffer.from(raw, "base64");
+        if (key.length !== 32) return null;
+        try { chmodSync(this.keyPath, 0o600); } catch {}
+        return key;
+      } catch {
+        return null;
+      }
+    }
+
+    if (!create || existsSync(this.vaultPath)) return null;
+
+    const key = randomBytes(32);
+    try {
+      atomicWriteText(this.keyPath, key.toString("base64"), 0o600);
+      return key;
+    } catch {
+      return null;
+    }
+  }
+
+  private readSecrets(): Record<string, string> | null {
+    if (!existsSync(this.vaultPath)) return {};
+    const key = this.readKey(false);
+    if (!key) return null;
+    try {
+      const envelope = JSON.parse(readFileSync(this.vaultPath, "utf8")) as Partial<EncryptedFallbackEnvelope>;
+      if (
+        envelope.version !== 1
+        || envelope.algorithm !== "aes-256-gcm"
+        || typeof envelope.nonce !== "string"
+        || typeof envelope.tag !== "string"
+        || typeof envelope.ciphertext !== "string"
+      ) return null;
+
+      const nonce = Buffer.from(envelope.nonce, "base64");
+      const tag = Buffer.from(envelope.tag, "base64");
+      const ciphertext = Buffer.from(envelope.ciphertext, "base64");
+      if (nonce.length !== 12 || tag.length !== 16) return null;
+
+      const decipher = createDecipheriv("aes-256-gcm", key, nonce);
+      decipher.setAAD(FALLBACK_AAD);
+      decipher.setAuthTag(tag);
+      const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
+      const value = JSON.parse(plaintext);
+      if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+
+      const result: Record<string, string> = {};
+      for (const [kind, secret] of Object.entries(value as Record<string, unknown>)) {
+        if (typeof secret === "string" && secret) result[kind] = secret;
+      }
+      try { chmodSync(this.vaultPath, 0o600); } catch {}
+      return result;
+    } catch {
+      return null;
+    }
+  }
+
+  private writeSecrets(secrets: Record<string, string>, key: Buffer): boolean {
+    try {
+      const nonce = randomBytes(12);
+      const cipher = createCipheriv("aes-256-gcm", key, nonce);
+      cipher.setAAD(FALLBACK_AAD);
+      const ciphertext = Buffer.concat([
+        cipher.update(JSON.stringify(secrets), "utf8"),
+        cipher.final(),
+      ]);
+      const envelope: EncryptedFallbackEnvelope = {
+        version: 1,
+        algorithm: "aes-256-gcm",
+        nonce: nonce.toString("base64"),
+        tag: cipher.getAuthTag().toString("base64"),
+        ciphertext: ciphertext.toString("base64"),
+      };
+      atomicWriteJson(this.vaultPath, envelope, 0o600);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
 
 export function readCredentialFromWallet(keyring: LineyKeyring): AuthCredential | null {
   const raw = keyring.get(CREDENTIAL_KIND);
@@ -184,6 +317,64 @@ export function writeCredentialToWallet(
 export function clearCredentialFromWallet(keyring: LineyKeyring): void {
   keyring.clear(CREDENTIAL_KIND);
   keyring.clear(REFRESH_KIND);
+}
+
+export function readCredentialFromFallback(fallback: LineyEncryptedFallback): AuthCredential | null {
+  const raw = fallback.get(CREDENTIAL_KIND);
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as JsonRecord;
+    if (typeof value.accessToken !== "string" || !value.accessToken.trim()) return null;
+    const refreshToken = fallback.get(REFRESH_KIND);
+    return {
+      accessToken: value.accessToken,
+      ...(typeof refreshToken === "string"
+        ? { refreshToken }
+        : typeof value.refreshToken === "string" ? { refreshToken: value.refreshToken } : {}),
+      ...(typeof value.expire === "number" ? { expire: value.expire } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function writeCredentialToFallback(
+  fallback: LineyEncryptedFallback,
+  credential: AuthCredential,
+): boolean {
+  const payload = JSON.stringify({
+    accessToken: credential.accessToken,
+    ...(credential.expire !== undefined ? { expire: credential.expire } : {}),
+  });
+  if (!fallback.set(CREDENTIAL_KIND, payload)) return false;
+  if (credential.refreshToken && !fallback.set(REFRESH_KIND, credential.refreshToken)) {
+    fallback.clear(CREDENTIAL_KIND);
+    return false;
+  }
+  if (!credential.refreshToken) fallback.clear(REFRESH_KIND);
+  return true;
+}
+
+export function clearCredentialFromFallback(fallback: LineyEncryptedFallback): void {
+  fallback.clear(CREDENTIAL_KIND);
+  fallback.clear(REFRESH_KIND);
+}
+
+export function migrateFallbackCredentialToWallet(
+  keyring: LineyKeyring,
+  fallback: LineyEncryptedFallback,
+): { credential: AuthCredential | null; migrated: boolean } {
+  const credential = readCredentialFromFallback(fallback);
+  if (!credential) return { credential: null, migrated: false };
+  if (!keyring.available) return { credential, migrated: false };
+  if (!writeCredentialToWallet(keyring, credential)) return { credential, migrated: false };
+
+  const verified = readCredentialFromWallet(keyring);
+  if (!verified || verified.accessToken !== credential.accessToken) {
+    return { credential, migrated: false };
+  }
+  fallback.clearAll();
+  return { credential: verified, migrated: true };
 }
 
 const SECRET_FIELD = /^(refreshToken|accessToken|authToken|idToken|token|access_token|refresh_token)$/i;
@@ -249,6 +440,26 @@ export function atomicWriteJson(path: string, value: unknown, mode = 0o600): voi
   }
 }
 
+export function atomicWriteText(path: string, value: string, mode = 0o600): void {
+  ensurePrivateDirectory(dirname(path));
+  const temp = path + ".tmp-" + process.pid + "-" + Date.now();
+  const fd = openSync(temp, "wx", mode);
+  try {
+    writeFileSync(fd, value, "utf8");
+    try { fsyncSync(fd); } catch {}
+  } finally {
+    closeSync(fd);
+  }
+  try { chmodSync(temp, mode); } catch {}
+  try {
+    renameSync(temp, path);
+    try { chmodSync(path, mode); } catch {}
+  } catch (error) {
+    try { unlinkSync(temp); } catch {}
+    throw error;
+  }
+}
+
 export function readJsonFile(path: string): JsonRecord | null {
   if (!existsSync(path)) return null;
   try {
@@ -267,12 +478,18 @@ export class SecureLineStorage extends BaseStorage {
   private writeLock: Promise<void> = Promise.resolve();
   private readonly path: string;
   private readonly keyring: LineyKeyring;
+  private readonly fallback: LineyEncryptedFallback;
   private memoryRefreshToken?: string;
 
-  constructor(path: string, keyring = new LineyKeyring()) {
+  constructor(
+    path: string,
+    keyring = new LineyKeyring(),
+    fallback = new LineyEncryptedFallback(dirname(path)),
+  ) {
     super();
     this.path = path;
     this.keyring = keyring;
+    this.fallback = fallback;
     ensurePrivateDirectory(dirname(path));
     const legacy = readJsonFile(path);
     const sanitized = sanitizeStoredValue(legacy);
@@ -292,8 +509,22 @@ export class SecureLineStorage extends BaseStorage {
     return this.keyring.available;
   }
 
+  get fallbackAvailable(): boolean {
+    return this.fallback.usable;
+  }
+
   get sessionOnly(): boolean {
-    return !this.keyring.available && Boolean(this.memoryRefreshToken);
+    return !this.keyring.available && !this.fallback.usable && Boolean(this.memoryRefreshToken);
+  }
+
+  get persistenceMode(): CredentialPersistenceMode {
+    // A populated fallback means the Wallet was unavailable or failed during
+    // the current lifecycle, even if the initial startup probe said it was
+    // available. Prefer the storage that actually owns the newest secret.
+    if (this.fallback.hasSecrets) return "encrypted-file";
+    if (this.keyring.available) return "wallet";
+    if (this.fallback.usable) return "encrypted-file";
+    return "session-only";
   }
 
   get keyringInstance(): LineyKeyring {
@@ -307,8 +538,11 @@ export class SecureLineStorage extends BaseStorage {
         if (!token) {
           this.memoryRefreshToken = undefined;
           this.keyring.clear(REFRESH_KIND);
-        } else if (!this.keyring.set(REFRESH_KIND, token)) {
-          // Session-only is allowed for this process, never persisted.
+          this.fallback.clear(REFRESH_KIND);
+        } else if (this.keyring.set(REFRESH_KIND, token)) {
+          this.memoryRefreshToken = token;
+          this.fallback.clear(REFRESH_KIND);
+        } else if (this.fallback.set(REFRESH_KIND, token)) {
           this.memoryRefreshToken = token;
         } else {
           this.memoryRefreshToken = token;
@@ -331,7 +565,12 @@ export class SecureLineStorage extends BaseStorage {
   }
 
   async get(key: string): Promise<StoredValue | undefined> {
-    if (key.toLowerCase() === "refreshtoken") return this.memoryRefreshToken ?? this.keyring.get(REFRESH_KIND) ?? undefined;
+    if (key.toLowerCase() === "refreshtoken") {
+      return this.memoryRefreshToken
+        ?? this.keyring.get(REFRESH_KIND)
+        ?? this.fallback.get(REFRESH_KIND)
+        ?? undefined;
+    }
     if (SECRET_FIELD.test(key)) return this.memorySecrets.get(key);
     return this.data[key];
   }
@@ -341,6 +580,7 @@ export class SecureLineStorage extends BaseStorage {
       if (key.toLowerCase() === "refreshtoken") {
         this.memoryRefreshToken = undefined;
         this.keyring.clear(REFRESH_KIND);
+        this.fallback.clear(REFRESH_KIND);
       } else if (SECRET_FIELD.test(key)) {
         this.memorySecrets.delete(key);
       } else {
@@ -356,6 +596,7 @@ export class SecureLineStorage extends BaseStorage {
       this.memoryRefreshToken = undefined;
       this.memorySecrets.clear();
       clearCredentialFromWallet(this.keyring);
+      this.fallback.clearAll();
       this.persist();
     });
   }
@@ -386,7 +627,11 @@ export class SecureLineStorage extends BaseStorage {
   }
 }
 
-export function migrateLegacyCredentials(dataDir: string, keyring: LineyKeyring): {
+export function migrateLegacyCredentials(
+  dataDir: string,
+  keyring: LineyKeyring,
+  fallback = new LineyEncryptedFallback(dataDir),
+): {
   credential: AuthCredential | null;
   migrated: boolean;
 } {
@@ -406,16 +651,8 @@ export function migrateLegacyCredentials(dataDir: string, keyring: LineyKeyring)
       ? legacySession.expire
       : undefined;
 
-  if (!accessToken || !keyring.available) {
-    // Remove sensitive legacy files even when migration cannot persist yet.
-    // The selected fallback policy is session-only: keeping an old access
-    // token around would silently turn that fallback into plaintext storage.
-    if (existsSync(authPath)) {
-      try { unlinkSync(authPath); } catch { /* the next QR login can recover */ }
-    }
-    if (legacySession) {
-      atomicWriteJson(sessionPath, safeSessionData(legacySession), 0o600);
-    }
+  if (!accessToken) {
+    if (legacySession) atomicWriteJson(sessionPath, safeSessionData(legacySession), 0o600);
     return { credential: null, migrated: false };
   }
 
@@ -424,11 +661,15 @@ export function migrateLegacyCredentials(dataDir: string, keyring: LineyKeyring)
     ...(refreshToken ? { refreshToken } : {}),
     ...(expire !== undefined ? { expire } : {}),
   };
-  if (!writeCredentialToWallet(keyring, credential)) return { credential: null, migrated: false };
-
-  // Verify from the Wallet before removing the plaintext legacy file.
-  const verified = readCredentialFromWallet(keyring);
-  if (!verified || verified.accessToken !== accessToken) return { credential: null, migrated: false };
+  let verified: AuthCredential | null = null;
+  if (keyring.available && writeCredentialToWallet(keyring, credential)) {
+    verified = readCredentialFromWallet(keyring);
+  } else if (writeCredentialToFallback(fallback, credential)) {
+    verified = readCredentialFromFallback(fallback);
+  }
+  if (!verified || verified.accessToken !== accessToken) {
+    return { credential: null, migrated: false };
+  }
   if (existsSync(authPath)) {
     try { unlinkSync(authPath); } catch { /* restore can still use the Wallet */ }
   }
@@ -438,6 +679,6 @@ export function migrateLegacyCredentials(dataDir: string, keyring: LineyKeyring)
   return { credential: verified, migrated: true };
 }
 
-export function credentialPersistenceStatus(storage: SecureLineStorage): "wallet" | "session-only" {
-  return storage.walletAvailable ? "wallet" : "session-only";
+export function credentialPersistenceStatus(storage: SecureLineStorage): CredentialPersistenceMode {
+  return storage.persistenceMode;
 }

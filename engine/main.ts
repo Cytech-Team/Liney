@@ -1,4 +1,4 @@
-import { getTargetProfiles, LineJsAdapter, type LineClient } from "./linejs/adapter";
+import { bindClientStorage, createTemporaryQrStorage, getTargetProfiles, LineJsAdapter, type LineClient, type LineyPollingSession } from "./linejs/adapter";
 // Keep all LINEJS values behind the adapter boundary. This makes replacing the
 // protocol implementation a local engine change instead of a repository-wide
 // import migration.
@@ -11,7 +11,7 @@ const {
   fetchMessageAsset,
   fromRawTalk,
   parseCancelCall,
-  parseIncomingCall,
+  parseIncomingCallForClient,
 } = LineJsAdapter;
 import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
@@ -21,19 +21,35 @@ import { rename as renameAsync, rm as rmAsync, unlink as unlinkAsync, writeFile 
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { runFallbackPolling } from "./events/fallback-polling";
+import { OrderedOperationDispatcher, talkOperationIdentity, squareOperationIdentity } from "./events/ordered-operation-dispatcher";
+import { PUSH_STARTUP_GRACE_MS, shouldUsePollingFallback } from "./events/push-health";
+import {
+  SYSTEM_ACCOUNT_EVENT_THROTTLE_MS,
+  SYSTEM_ACCOUNT_MISSING_BASELINE_CURSOR,
+  SYSTEM_ACCOUNT_RECONCILE_INTERVAL_MS,
+  shouldRecordMissingSystemAccountBaseline,
+  systemAccountMessageBoxLimit,
+} from "./events/system-account-policy";
+import { eventTransportPolicy } from "./events/transport-policy";
 import { CallManager } from "./call-manager";
 import { LineyDatabase, type DatabaseChat, type DatabaseMessage, type OutboxRecord } from "./database";
 import { LineyMediaCache } from "./media-cache";
 import { decodeMediaBase64, MediaWorker } from "./media-worker";
 import { detectImageMime, normalizeImageBlob } from "./media-format";
 import {
+  LineyEncryptedFallback,
   LineyKeyring,
   SecureLineStorage,
   credentialPersistenceStatus,
   ensurePrivateDirectory,
+  migrateFallbackCredentialToWallet,
   migrateLegacyCredentials,
+  readCredentialFromFallback,
   readCredentialFromWallet,
   type AuthCredential,
+  type CredentialPersistenceMode,
+  writeCredentialToFallback,
   writeCredentialToWallet,
 } from "./secure-storage";
 import {
@@ -47,7 +63,6 @@ import {
   LINE_SYSTEM_ACCOUNT_MID,
   talkMessageBoxHistoryState,
   talkMessageBoxId,
-  shouldRetryTalkHistory,
 } from "./talk-history";
 import { parseFlexMessage } from "./flex";
 import { parseRichMessage } from "./rich";
@@ -71,8 +86,7 @@ let listenerAbort: AbortController | null = null;
 let currentProfile: any = null;
 let pushHealthy = false;
 let pushConnectedSince = 0;
-let lastTalkPushEventAt = 0;
-let lastSquarePushEventAt = 0;
+let pushFallbackNotBefore = 0;
 const mediaPreviewCache = new Map<string, string>();
 const messageMediaSourceCache = new Map<string, { raw: any; isSquare: boolean }>();
 const preSyncedMessages = new Map<string, any[]>();
@@ -80,6 +94,19 @@ const MEDIA_PREVIEW_MEMORY_LIMIT = 48;
 const MESSAGE_MEDIA_SOURCE_LIMIT = 420;
 const TALK_MESSAGE_BOX_CACHE_LIMIT = 500;
 const MESSAGE_LIST_RESULT_LIMIT = 100;
+const LINK_PREVIEW_CACHE_TTL_MS = 7 * 24 * 60 * 60_000;
+const LINK_PREVIEW_CACHE_VERSION = 4;
+const LINK_PREVIEW_FAILURE_TTL_MS = 5 * 60_000;
+const LINK_PREVIEW_CACHE_MAX_ENTRIES = 400;
+const linkPreviewInflight = new Map<string, Promise<Record<string, unknown>>>();
+const linkPreviewFailureUntil = new Map<string, number>();
+const PERSISTENT_CACHE_MAX_PER_CHAT = 180;
+const PERSISTENT_CACHE_MAX_TOTAL = 12_000;
+const PERSISTENT_CACHE_KEEP_PER_CHAT = 12;
+const PERSISTENT_CACHE_PRUNE_INTERVAL_MS = 5 * 60_000;
+const MESSAGE_CACHE_ENRICH_TTL_MS = 10 * 60_000;
+const messageCacheEnrichInFlight = new Map<string, Promise<void>>();
+const messageCacheEnrichedAt = new Map<string, number>();
 
 function trimMapOldest<K, V>(map: Map<K, V>, limit: number): void {
   while (map.size > limit) {
@@ -145,11 +172,10 @@ const talkMessageBoxCache = new Map<string, any>();
 let systemAccountTrackInFlight: Promise<void> | null = null;
 let lastSystemAccountTrackAt = 0;
 const SYSTEM_ACCOUNT_TRACK_KEY = "line-system-account-cursor";
-const SYSTEM_ACCOUNT_TRACK_INTERVAL_MS = 15_000;
-const SYSTEM_ACCOUNT_TRACK_EVENT_THROTTLE_MS = 1_000;
-type SenderIdentity = { id: string; name: string; avatarUrl: string; isOfficialAccount?: boolean };
+type SenderIdentity = { id: string; name: string; avatarUrl: string; identityKey?: string; profileSnapshotTime?: number; profileFetchedAt?: number; displayNameOverride?: boolean; isOfficialAccount?: boolean; profileNameFromApi?: boolean };
 const talkSenderCache = new Map<string, SenderIdentity>();
-const talkSenderProfileChecked = new Set<string>();
+const talkSenderProfileChecked = new Map<string, number>();
+const TALK_SENDER_PROFILE_REFRESH_INTERVAL_MS = 4 * 60_000;
 const talkSenderResolutionCache = new Map<string, Promise<SenderIdentity | null>>();
 const squareSenderCache = new Map<string, SenderIdentity>();
 let ownedStickerCache: { expiresAt: number; stickers: ReturnType<typeof ownedStickersFromPurchases> } | null = null;
@@ -295,6 +321,12 @@ function storagePath() {
   return join(dataPath(), "linejs-session.json");
 }
 
+function configPath() {
+  const explicit = process.env.LINEY_CONFIG_DIR;
+  const base = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+  return explicit || join(base, "liney");
+}
+
 function databasePath() {
   return join(dataPath(), "liney.sqlite");
 }
@@ -302,21 +334,51 @@ function databasePath() {
 ensureDataDir();
 const stickerCatalogCache = new StickerCatalogCache(join(dataPath(), "sticker-catalog-cache.json"));
 const keyring = new LineyKeyring();
-const legacyMigration = migrateLegacyCredentials(dataPath(), keyring);
-const store = new SecureLineStorage(storagePath(), keyring);
+const credentialFallback = new LineyEncryptedFallback(dataPath(), configPath());
+const fallbackMigration = migrateFallbackCredentialToWallet(keyring, credentialFallback);
+const legacyMigration = migrateLegacyCredentials(dataPath(), keyring, credentialFallback);
+const store = new SecureLineStorage(storagePath(), keyring, credentialFallback);
 const database = new LineyDatabase(databasePath());
 if (readCredential()) ACCOUNT_ID = database.latestAccountId() ?? ACCOUNT_ID;
+// Recover names for cached direct chats from messages sent by that exact MID.
+database.restorePlaceholderDmNamesFromHistory(ACCOUNT_ID);
+let lastPersistentCachePruneAt = 0;
+function prunePersistentCache(force = false): void {
+  const now = Date.now();
+  if (!force && now - lastPersistentCachePruneAt < PERSISTENT_CACHE_PRUNE_INTERVAL_MS) return;
+  lastPersistentCachePruneAt = now;
+  try {
+    database.pruneMessageCache(ACCOUNT_ID, {
+      maxPerChat: PERSISTENT_CACHE_MAX_PER_CHAT,
+      maxTotal: PERSISTENT_CACHE_MAX_TOTAL,
+      keepPerChat: PERSISTENT_CACHE_KEEP_PER_CHAT,
+    });
+  } catch {
+    // Cache pruning must never block startup or message persistence.
+  }
+}
+prunePersistentCache(true);
 const mediaDiskCache = new LineyMediaCache(join(dataPath(), "media"));
 const mediaUploadTempDir = join(dataPath(), "media-upload-tmp");
 let syncCoordinator: SyncCoordinator | null = null;
 function getSyncCoordinator(): SyncCoordinator {
   if (syncCoordinator) return syncCoordinator;
   syncCoordinator = new SyncCoordinator(database, emit, {
+    currentAccountId: () => ACCOUNT_ID,
     loadFriends: () => loadFriendsList(false),
     loadChats: () => loadChatsList(false),
     loadOpenChats: () => loadOpenChatList(false),
-    persistLists: (friends, chats, openChats) => database.upsertChats(ACCOUNT_ID, [...friends, ...chats, ...openChats] as DatabaseChat[]),
-    fetchTalk: fetchTalkMessagesNormalized,
+    loadCachedFriends: () => collapseTalkIdentityAliases(database.listChats(ACCOUNT_ID, "dm")),
+    loadCachedChats: () => collapseTalkIdentityAliases(database.listChats(ACCOUNT_ID).filter((chat) => chat.kind !== "openchat")),
+    loadCachedOpenChats: () => database.listChats(ACCOUNT_ID, "openchat"),
+    persistLists: (friends, chats, openChats) => {
+      database.upsertChats(ACCOUNT_ID, [...friends, ...chats, ...openChats] as DatabaseChat[]);
+      const talkIdentities = [...friends, ...chats].filter((chat) => chat.kind !== "openchat");
+      persistStableTalkIdentityAliases(talkIdentities);
+      friends.splice(0, friends.length, ...collapseTalkIdentityAliases(friends));
+      chats.splice(0, chats.length, ...collapseTalkIdentityAliases(chats));
+    },
+    fetchTalk: fetchTalkMessagesWithFallback,
     fetchOpen: fetchOpenChatMessagesNormalized,
     persist: persistNormalizedMessages,
     isHidden: (chatId, isSquare, messageId, kind) => database.isMessageHidden(ACCOUNT_ID, chatId, kind as any, messageId),
@@ -346,20 +408,39 @@ function redactSecrets(value: string): string {
 
 function errorInfo(error: unknown): { code: string; message: string; retryable: boolean } {
   const message = redactSecrets(error instanceof Error ? error.message : String(error));
+  const data = (error as { data?: { code?: unknown; e?: { code?: unknown } } } | null)?.data;
+  const codeValue = String(data?.code ?? data?.e?.code ?? "");
+  const normalizedMessage = message.toLowerCase();
+  const isSenderKeyFailure =
+    codeValue === "E2EE_UPDATE_SENDER_KEY"
+    || codeValue === "83"
+    || message.includes("E2EE_UPDATE_SENDER_KEY")
+    || normalizedMessage.includes("invalid sender key")
+    || normalizedMessage.includes("verified e2ee sender key");
+  if (isSenderKeyFailure) {
+    const requiresReconnect = normalizedMessage.includes("still rejects")
+      || normalizedMessage.includes("reconnect this line account");
+    return {
+      code: "E2EE_SENDER_KEY_INVALID",
+      message: requiresReconnect
+        ? "LINE ยังปฏิเสธคีย์เข้ารหัสหลังต่ออายุแล้ว ต้องเชื่อมบัญชี LINE ใหม่ด้วย QR ก่อนส่งอีกครั้ง"
+        : "LINE ปฏิเสธคีย์เข้ารหัสเดิม กด “ลองใหม่” เพื่อให้ Liney ต่ออายุคีย์ก่อนส่งอีกครั้ง",
+      retryable: !requiresReconnect,
+    };
+  }
   const code = /not authenticated/i.test(message)
     ? "NOT_AUTHENTICATED"
     : /timed out|timeout/i.test(message)
       ? "TIMEOUT"
       : /unavailable/i.test(message)
         ? "UNAVAILABLE"
-    : /unknown method/i.test(message)
-      ? "UNKNOWN_METHOD"
-      : /protocol version/i.test(message)
-        ? "PROTOCOL_VERSION_UNSUPPORTED"
-          : "ENGINE_ERROR";
+        : /unknown method/i.test(message)
+          ? "UNKNOWN_METHOD"
+          : /protocol version/i.test(message)
+            ? "PROTOCOL_VERSION_UNSUPPORTED"
+            : "ENGINE_ERROR";
   return { code, message, retryable: isRetryableError(error) };
 }
-
 const mediaWorker = new MediaWorker(
   (event) => emit(event),
   (error) => errorInfo(error),
@@ -373,7 +454,7 @@ function normalize(value: any): any {
   return normalizeJsonValue(value);
 }
 
-async function persistCredential(next: LineClient) {
+async function persistCredential(next: LineClient): Promise<CredentialPersistenceMode> {
   const refreshToken = await store.get("refreshToken");
   const expireValue = await store.get("expire");
   const credential: AuthCredential = {
@@ -381,19 +462,34 @@ async function persistCredential(next: LineClient) {
     ...(typeof refreshToken === "string" ? { refreshToken } : {}),
     ...(typeof expireValue === "number" ? { expire: expireValue } : {}),
   };
-  const persisted = writeCredentialToWallet(keyring, credential);
-  if (!persisted) {
+
+  if (writeCredentialToWallet(keyring, credential)) {
+    credentialFallback.clearAll();
+    return "wallet";
+  }
+
+  if (writeCredentialToFallback(credentialFallback, credential)) {
     emit({
       type: "auth.persistence",
-      mode: "session-only",
-      warning: "Secret Service unavailable; credentials will not survive restart",
+      mode: "encrypted-file",
+      warning: "Secret Service unavailable; using Liney's encrypted local fallback until a Wallet becomes available",
     });
+    return "encrypted-file";
   }
-  return persisted;
+
+  emit({
+    type: "auth.persistence",
+    mode: "session-only",
+    warning: "Credential persistence is unavailable; login will last for this process only",
+  });
+  return "session-only";
 }
 
 function readCredential(): AuthCredential | null {
-  return readCredentialFromWallet(keyring) ?? legacyMigration.credential;
+  return readCredentialFromWallet(keyring)
+    ?? readCredentialFromFallback(credentialFallback)
+    ?? fallbackMigration.credential
+    ?? legacyMigration.credential;
 }
 
 async function clearLocalSession() {
@@ -406,8 +502,7 @@ async function clearLocalSession() {
   invalidateChatListRefreshes();
   pushHealthy = false;
   pushConnectedSince = 0;
-  lastTalkPushEventAt = 0;
-  lastSquarePushEventAt = 0;
+  pushFallbackNotBefore = 0;
   mediaWorker.cancelAll();
   client = null;
   currentProfile = null;
@@ -720,7 +815,7 @@ async function fetchMessageMediaBlob(messageId: string, isSquare: boolean, chatI
     try {
       const recovered = isSquare
         ? await fetchOpenChatMessagesNormalized(chatId, 100)
-        : await fetchTalkMessagesNormalized(chatId, 100);
+        : await fetchTalkMessagesWithFallback(chatId, 100);
       const match = recovered.find((item: any) => String(item?.id ?? "") === messageId);
       if (match?.raw) {
         raw = match.raw;
@@ -908,14 +1003,89 @@ function cdnUrl(pathOrHash: unknown) {
 }
 
 /**
- * LINE profile hashes can become stale after a user changes their avatar.
- * The OBS talk profile endpoint is keyed by MID and always resolves the
- * current profile image, so prefer it for normal Talk users.
+ * The OBS talk profile endpoint is keyed by MID. Add LINE's current picture
+ * status/path as a cache key so image edits invalidate the desktop image cache.
  */
-function talkProfileImageUrl(mid: string, fallback?: unknown): string {
+function talkProfileImageVersion(...values: unknown[]): string {
+  return values
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean)
+    .join("|")
+    .slice(0, 256);
+}
+
+function talkProfileIdentityKey(value: unknown): string | undefined {
+  const profileId = String(value ?? "").trim();
+  return profileId
+    ? `profile:${createHash("sha256").update(profileId).digest("hex")}`
+    : undefined;
+}
+
+function talkProfileSnapshotTime(value: unknown): number | undefined {
+  const snapshotTime = Number(value);
+  return Number.isFinite(snapshotTime) && snapshotTime > 0 ? snapshotTime : undefined;
+}
+
+function talkProfileFetchedAtFrom(value: any): number {
+  return Number(value?.profileFetchedAt ?? value?.raw?.profileFetchedAt ?? 0) || 0;
+}
+
+function talkProfileRefreshVersion(): string {
+  return `refresh-${Math.floor(Date.now() / (5 * 60_000))}`;
+}
+
+function talkSenderProfileNeedsRefresh(mid: string): boolean {
+  const checkedAt = talkSenderProfileChecked.get(mid) ?? 0;
+  return Date.now() - checkedAt >= TALK_SENDER_PROFILE_REFRESH_INTERVAL_MS;
+}
+
+function markTalkSenderProfileChecked(mid: string): void {
+  talkSenderProfileChecked.set(mid, Date.now());
+}
+
+function talkProfileRefreshAvatarUrl(value: unknown, version: unknown): string {
+  const avatarUrl = String(value ?? "").trim();
+  const cacheVersion = String(version ?? "").trim();
+  if (!avatarUrl) return avatarUrl;
+  try {
+    const url = new URL(avatarUrl);
+    const versions = [
+      ...(url.searchParams.get("v") ?? "").split("|"),
+      cacheVersion,
+    ].map((part) => part.trim()).filter((part, index, all) => part && all.indexOf(part) === index);
+    if (versions.length) {
+      const combined = versions.join("|");
+      url.searchParams.set(
+        "v",
+        combined.length <= 256
+          ? combined
+          : "sha256-" + createHash("sha256").update(combined).digest("hex"),
+      );
+    }
+    return url.toString();
+  } catch {
+    return avatarUrl;
+  }
+}
+
+function talkProfileImageUrl(mid: string, fallback?: unknown, picturePath?: unknown): string {
+  const directPath = [picturePath, fallback].find((value) => {
+    if (typeof value !== "string") return false;
+    const candidate = value.trim();
+    return candidate.length >= 16
+      && !candidate.includes("|")
+      && !/^refresh-/i.test(candidate)
+      && !/^\d+$/.test(candidate);
+  });
+  if (directPath) return cdnUrl(directPath);
+
   const normalizedMid = String(mid ?? "").trim();
   if (/^u[0-9a-f]{32}$/i.test(normalizedMid)) {
-    return `https://obs.line-scdn.net/r/talk/p/${encodeURIComponent(normalizedMid)}`;
+    const version = typeof fallback === "string" || typeof fallback === "number"
+      ? String(fallback).trim().slice(0, 256)
+      : "";
+    const cacheKey = version ? `?v=${encodeURIComponent(version)}` : "";
+    return `https://obs.line-scdn.net/r/talk/p/${encodeURIComponent(normalizedMid)}${cacheKey}`;
   }
   return cdnUrl(fallback);
 }
@@ -947,45 +1117,130 @@ function finiteMessageTime(value: unknown): number {
   return Number.isFinite(time) && time > 0 ? time : Date.now();
 }
 
+function usefulTalkName(value: unknown): string {
+  const name = String(value ?? "").trim();
+  return name && !["LINE User", "LINE Chat"].includes(name) ? name : "";
+}
+
 function talkProfileIdentity(mid: string, raw: any, isOfficialAccount = false): SenderIdentity {
   const detail = raw?.targetProfileDetail ?? raw?.contact ?? raw ?? {};
   const name = String(detail?.profileName ?? detail?.displayName ?? "LINE User").trim() || "LINE User";
-  const avatarUrl = talkProfileImageUrl(mid, detail?.pictureStatus || detail?.picturePath);
-  return { id: mid, name, avatarUrl, ...(isOfficialAccount ? { isOfficialAccount: true } : {}) };
+  const profileSnapshotTime = talkProfileSnapshotTime(detail?.snapshotTimeMillis);
+  const pictureVersion = talkProfileImageVersion(detail?.pictureStatus, detail?.picturePath, profileSnapshotTime);
+  const picturePath = detail?.picturePath || detail?.pictureStatus;
+  const avatarUrl = /^u[0-9a-f]{32}$/i.test(mid)
+    ? talkProfileImageUrl(mid, pictureVersion || talkProfileRefreshVersion(), picturePath)
+    : cdnUrl(picturePath);
+  const identityKey = talkProfileIdentityKey(detail?.profileId);
+  return {
+    id: mid,
+    name,
+    avatarUrl,
+    profileNameFromApi: Boolean(usefulTalkName(name)),
+    ...(identityKey ? { identityKey } : {}),
+    ...(profileSnapshotTime ? { profileSnapshotTime } : {}),
+    ...(isOfficialAccount ? { isOfficialAccount: true } : {}),
+  };
 }
 
 function talkContactIdentity(mid: string, contact: any): SenderIdentity {
-  const name = String(contact?.displayNameOverridden || contact?.displayName || "LINE User").trim() || "LINE User";
-  const avatarUrl = talkProfileImageUrl(mid, contact?.pictureStatus || contact?.picturePath || contact?.thumbnailUrl);
-  return { id: mid, name, avatarUrl };
+  const root = contact && typeof contact === "object" ? contact : {};
+  const detail = root?.contact && typeof root.contact === "object" ? root.contact : root;
+  const profile = root?.targetProfileDetail
+    ?? detail?.targetProfileDetail
+    ?? root?.profile
+    ?? detail?.profile
+    ?? {};
+  const displayNameOverride = String(detail?.displayNameOverridden || root?.displayNameOverridden || "").trim();
+  const name = String(
+    displayNameOverride
+      || profile?.profileName
+      || profile?.displayName
+      || detail?.profileName
+      || detail?.displayName
+      || root?.profileName
+      || root?.displayName
+      || "LINE User",
+  ).trim() || "LINE User";
+  const profileSnapshotTime = talkProfileSnapshotTime(
+    profile?.snapshotTimeMillis ?? detail?.snapshotTimeMillis ?? root?.snapshotTimeMillis,
+  );
+  const pictureVersion = talkProfileImageVersion(
+    profile?.pictureStatus,
+    profile?.picturePath,
+    profileSnapshotTime,
+    detail?.pictureStatus,
+    detail?.picturePath,
+    root?.pictureStatus,
+    root?.picturePath,
+  );
+  const picturePath = profile?.picturePath
+    || detail?.picturePath
+    || root?.picturePath
+    || profile?.pictureStatus
+    || detail?.pictureStatus
+    || root?.pictureStatus;
+  const avatarUrl = /^u[0-9a-f]{32}$/i.test(mid)
+    ? talkProfileImageUrl(mid, pictureVersion || talkProfileRefreshVersion(), picturePath)
+    : cdnUrl(detail?.thumbnailUrl || root?.thumbnailUrl || picturePath);
+  const identityKey = talkProfileIdentityKey(profile?.profileId ?? detail?.profileId ?? root?.profileId);
+  return {
+    id: mid,
+    name,
+    avatarUrl,
+    profileNameFromApi: Boolean(usefulTalkName(name)),
+    ...(identityKey ? { identityKey } : {}),
+    ...(profileSnapshotTime ? { profileSnapshotTime } : {}),
+    ...(displayNameOverride ? { displayNameOverride: true } : {}),
+  };
 }
 
 async function resolveTalkSender(mid: string): Promise<SenderIdentity | null> {
   if (!client || !mid || !mid.startsWith("u")) return null;
   const cached = talkSenderCache.get(mid);
-  if (cached && (cached.isOfficialAccount || talkSenderProfileChecked.has(mid))) return cached;
+  if (cached && !talkSenderProfileNeedsRefresh(mid)) return cached;
+
+  const rememberCandidate = (identity: SenderIdentity): SenderIdentity => {
+    const current = talkSenderCache.get(mid);
+    const name = usefulTalkName(identity.name)
+      || usefulTalkName(current?.name)
+      || String(identity.name || current?.name || "LINE User");
+    const merged: SenderIdentity = {
+      ...current,
+      ...identity,
+      id: mid,
+      name,
+      avatarUrl: identity.avatarUrl || current?.avatarUrl || "",
+      identityKey: identity.identityKey || current?.identityKey,
+      profileSnapshotTime: identity.profileSnapshotTime ?? current?.profileSnapshotTime,
+      profileFetchedAt: identity.profileFetchedAt ?? current?.profileFetchedAt,
+      profileNameFromApi: identity.profileNameFromApi ?? current?.profileNameFromApi,
+      ...(identity.displayNameOverride || current?.displayNameOverride ? { displayNameOverride: true } : {}),
+      ...(identity.isOfficialAccount || current?.isOfficialAccount ? { isOfficialAccount: true } : {}),
+    };
+    talkSenderCache.set(mid, merged);
+    return merged;
+  };
+
   try {
     const profiles = await getTargetProfiles(client, [mid]);
-    talkSenderProfileChecked.add(mid);
+    markTalkSenderProfileChecked(mid);
     const [profile] = profiles;
     if (profile) {
-      const identity = talkProfileIdentity(mid, profile, isBotTargetProfile(profile));
-      if (identity.name !== "LINE User" || identity.avatarUrl || identity.isOfficialAccount) {
-        talkSenderCache.set(mid, identity);
-        return identity;
-      }
+      const identity = { ...talkProfileIdentity(mid, profile, isBotTargetProfile(profile)), profileFetchedAt: Date.now() };
+      const candidate = rememberCandidate(identity);
+      if (usefulTalkName(identity.name)) return candidate;
     }
   } catch {
-    // Profile classification is best-effort; regular contact fallbacks below
-    // still keep the message visible when RelationService is unavailable.
+    markTalkSenderProfileChecked(mid);
+    // A failed batch profile lookup must not block the per-user contact fallbacks.
   }
+
   try {
     const user: any = await LineJsAdapter.getUser(client, mid);
-    const identity = talkProfileIdentity(mid, user?.raw);
-    if (identity.name !== "LINE User" || identity.avatarUrl) {
-      talkSenderCache.set(mid, identity);
-      return identity;
-    }
+    const identity = { ...talkProfileIdentity(mid, user?.raw), profileFetchedAt: Date.now() };
+    const candidate = rememberCandidate(identity);
+    if (usefulTalkName(identity.name)) return candidate;
   } catch {
     // Continue through Talk contact fallbacks for non-friend group members.
   }
@@ -993,9 +1248,9 @@ async function resolveTalkSender(mid: string): Promise<SenderIdentity | null> {
     const response: any = await LineJsAdapter.getContactsV2(client, { mids: [mid] });
     const contact = response?.contacts?.[mid]?.contact;
     if (contact) {
-      const identity = talkContactIdentity(mid, contact);
-      talkSenderCache.set(mid, identity);
-      return identity;
+      const identity = { ...talkContactIdentity(mid, contact), profileFetchedAt: Date.now() };
+      const candidate = rememberCandidate(identity);
+      if (usefulTalkName(identity.name)) return candidate;
     }
   } catch {
     // Older / restricted desktop sessions can reject V2.
@@ -1004,14 +1259,22 @@ async function resolveTalkSender(mid: string): Promise<SenderIdentity | null> {
     const contacts: any[] = await LineJsAdapter.getContacts(client, { mids: [mid] });
     const contact = contacts?.[0];
     if (contact) {
-      const identity = talkContactIdentity(mid, contact);
-      talkSenderCache.set(mid, identity);
-      return identity;
+      const identity = { ...talkContactIdentity(mid, contact), profileFetchedAt: Date.now() };
+      const candidate = rememberCandidate(identity);
+      if (usefulTalkName(identity.name)) return candidate;
     }
   } catch {
-    // Last fallback below.
+    // Continue to the persisted, same-MID history fallback.
   }
-  const fallback = { id: mid, name: "LINE User", avatarUrl: "" };
+
+  const current = talkSenderCache.get(mid);
+  const fallback: SenderIdentity = {
+    ...current,
+    id: mid,
+    name: database.getLatestPeerName(ACCOUNT_ID, mid) || usefulTalkName(current?.name) || "LINE User",
+    avatarUrl: current?.avatarUrl || "",
+    profileNameFromApi: current?.profileNameFromApi ?? false,
+  };
   talkSenderCache.set(mid, fallback);
   return fallback;
 }
@@ -1033,37 +1296,65 @@ async function resolveTalkIdentities(ids: string[]): Promise<Map<string, SenderI
 
   // Resolve group participants in one RPC where possible. This is both faster
   // and more complete than getUser() for people who are not in the friend list.
+  const contactBatches: string[][] = [];
   for (let start = 0; start < missing.length; start += 50) {
-    const mids = missing.slice(start, start + 50);
+    contactBatches.push(missing.slice(start, start + 50));
+  }
+  while (contactBatches.length) {
+    const mids = contactBatches.shift()!;
     try {
       const response: any = await LineJsAdapter.getContactsV2(client, { mids });
       for (const mid of mids) {
         const contact = response?.contacts?.[mid]?.contact;
-        if (contact) talkSenderCache.set(mid, talkContactIdentity(mid, contact));
+        if (contact) talkSenderCache.set(mid, { ...talkContactIdentity(mid, contact), profileFetchedAt: Date.now() });
       }
-    } catch {
-      // Fall back per sender below.
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/INVALID_LENGTH|invalid length/i.test(message) && mids.length > 1) {
+        const middle = Math.ceil(mids.length / 2);
+        contactBatches.unshift(mids.slice(middle));
+        contactBatches.unshift(mids.slice(0, middle));
+      }
+      // Missing profiles stay eligible for the individual and background fallbacks.
     }
   }
 
   // Official Accounts are returned as BOT target profiles even when the
-  // normal user/contact endpoints hide their profile. Classify in bounded
-  // batches so historical messages can retain an actionable client fallback.
-  for (let start = 0; start < unique.length; start += 50) {
-    const mids = unique.slice(start, start + 50);
+  // normal user/contact endpoints hide their profile. Never re-query MIDs that
+  // were already classified in this session; cache reads are a hot path.
+  const uncheckedProfiles = unique.filter(talkSenderProfileNeedsRefresh);
+  for (let start = 0; start < uncheckedProfiles.length; start += 50) {
+    const mids = uncheckedProfiles.slice(start, start + 50);
     try {
       const profiles = await getTargetProfiles(client, mids);
-      for (const mid of mids) talkSenderProfileChecked.add(mid);
       for (const profile of profiles) {
         const mid = midString(profile?.targetUserMid);
         if (!mid) continue;
         const current = talkSenderCache.get(mid);
         const isOfficialAccount = isBotTargetProfile(profile);
         const profileIdentity = talkProfileIdentity(mid, profile, isOfficialAccount);
+        const profileFetchedAt = Date.now();
+        const hasCurrentProfile = Boolean(usefulTalkName(profileIdentity.name))
+          || Boolean(profileIdentity.avatarUrl)
+          || profileIdentity.isOfficialAccount;
+        if (usefulTalkName(profileIdentity.name)) markTalkSenderProfileChecked(mid);
+        if (!hasCurrentProfile) continue;
+        // snapshotTimeMillis describes the server snapshot and can lag or use a
+        // different clock. A successful response is still the latest value we
+        // have received, so it must replace the cached profile.
         talkSenderCache.set(mid, {
           id: mid,
-          name: current?.name && current.name !== "LINE User" ? current.name : profileIdentity.name,
-          avatarUrl: current?.avatarUrl || profileIdentity.avatarUrl,
+          name: current?.displayNameOverride
+            ? current.name
+            : usefulTalkName(profileIdentity.name)
+              ? profileIdentity.name
+              : current?.name || profileIdentity.name,
+          avatarUrl: profileIdentity.avatarUrl || current?.avatarUrl || "",
+          identityKey: profileIdentity.identityKey || current?.identityKey,
+          profileSnapshotTime: profileIdentity.profileSnapshotTime ?? current?.profileSnapshotTime,
+          profileFetchedAt,
+          profileNameFromApi: Boolean(usefulTalkName(profileIdentity.name)) || Boolean(current?.profileNameFromApi),
+          ...(current?.displayNameOverride ? { displayNameOverride: true } : {}),
           ...(isOfficialAccount || current?.isOfficialAccount ? { isOfficialAccount: true } : {}),
         });
       }
@@ -1072,7 +1363,7 @@ async function resolveTalkIdentities(ids: string[]): Promise<Map<string, SenderI
     }
   }
   await resolveIdentities(
-    unique.filter((id) => !talkSenderCache.has(id)),
+    unique.filter((id) => !talkSenderCache.get(id)?.profileNameFromApi),
     resolveTalkSender,
   );
   return new Map(unique.flatMap((id) => {
@@ -1178,7 +1469,7 @@ async function loadTalkMessageBoxes(): Promise<any[]> {
     const boxResult: any = await LineJsAdapter.getMessageBoxes(client, {
       messageBoxListRequest: {
         activeOnly: false,
-        messageBoxCountLimit: 1000,
+        messageBoxCountLimit: systemAccountMessageBoxLimit("chat-list"),
         withUnreadCount: true,
         lastMessagesPerMessageBoxCount: 1,
         unreadOnly: false,
@@ -1219,36 +1510,253 @@ function systemAccountCursor(box: any): { messageId: string; deliveredTime: numb
   };
 }
 
+function hasTalkMessagePayload(raw: any): boolean {
+  return (typeof raw?.text === "string" && raw.text.trim().length > 0)
+    || (typeof raw?.contentPreview === "string" && raw.contentPreview.trim().length > 0)
+    || raw?.hasContent === true
+    || contentTypeCode(raw?.contentType) !== 0
+    || (Array.isArray(raw?.chunks) && raw.chunks.length > 0);
+}
+
+async function ingestLineSystemMessage(
+  next: LineClient,
+  candidate: any,
+  fromSystemAccountHistory = false,
+): Promise<boolean> {
+  const messageId = String(candidate?.id ?? "").trim();
+  if (!messageId || !hasTalkMessagePayload(candidate)) return false;
+
+  const from = midString(candidate?.from);
+  const to = midString(candidate?.to);
+  const belongsToSystemAccount = [from, to].some((mid) =>
+    Boolean(mid) && canonicalTalkIdentityMid(mid) === LINE_SYSTEM_ACCOUNT_MID
+  );
+  if (!belongsToSystemAccount && (!fromSystemAccountHistory || (from && to))) return false;
+
+  const existing = database.getMessage(ACCOUNT_ID, LINE_SYSTEM_ACCOUNT_MID, messageId);
+  if (existing && !existing.raw?.lineySystemNotification) return true;
+
+  const syntheticId = `line-system:${messageId}`;
+  const placeholder = database.getMessage(ACCOUNT_ID, LINE_SYSTEM_ACCOUNT_MID, syntheticId);
+  if (placeholder?.raw?.lineySystemNotification) {
+    database.hideMessageForMe(ACCOUNT_ID, LINE_SYSTEM_ACCOUNT_MID, "dm", syntheticId);
+    emit({
+      type: "event.message.removed",
+      source: "talk-system",
+      chatId: LINE_SYSTEM_ACCOUNT_MID,
+      messageId: syntheticId,
+      scope: "local",
+    });
+  }
+
+  let raw = candidate;
+  try {
+    raw = await LineJsAdapter.decryptE2EEMessage(next, candidate);
+  } catch (error) {
+    // Some LINE-managed notifications arrive already readable. Keep their
+    // supplied content if decryption is unavailable, without inventing text.
+    raw = candidate;
+    const hasReadableText = [candidate?.text, candidate?.contentPreview]
+      .some((value) => typeof value === "string" && value.trim().length > 0);
+    if (!hasReadableText) {
+      emit({
+        type: "event.message.decode_error",
+        source: "talk-system",
+        error: errorInfo(error).message,
+      });
+    }
+  }
+  if (!raw || typeof raw !== "object") return false;
+  if (!raw.text && contentTypeCode(raw.contentType) === 0 && raw.contentPreview) {
+    raw = { ...raw, text: raw.contentPreview };
+  }
+  if (!raw.id) raw = { ...raw, id: messageId };
+  if (!raw.from && from) raw = { ...raw, from };
+  if (!raw.to && to) raw = { ...raw, to };
+  if (fromSystemAccountHistory && !belongsToSystemAccount) {
+    const selfMid = midString(LineJsAdapter.profileMid(next));
+    const inferredFrom = from || LINE_SYSTEM_ACCOUNT_MID;
+    const inferredTo = to || (from === selfMid ? LINE_SYSTEM_ACCOUNT_MID : selfMid);
+    raw = {
+      ...raw,
+      from: inferredFrom,
+      ...(inferredTo ? { to: inferredTo } : {}),
+      ...(raw.toType === undefined ? { toType: "USER" } : {}),
+    };
+  }
+
+  await handleTalkMessage(next, LineJsAdapter.createTalkMessage(next, raw), raw);
+  return true;
+}
+
+async function recoverLineSystemMessages(next: LineClient, box: any, cursor: {
+  messageId: string;
+  deliveredTime: number;
+  unread: number;
+}): Promise<void> {
+  const candidates = new Map<string, any>();
+  const addCandidates = (items: unknown) => {
+    if (!Array.isArray(items)) return;
+    for (const candidate of items) {
+      const messageId = String((candidate as any)?.id ?? "").trim();
+      if (messageId) candidates.set(messageId, candidate);
+    }
+  };
+  addCandidates(box?.lastMessages);
+
+  const hasLatestPayload = () => {
+    const latest = candidates.get(cursor.messageId);
+    return Boolean(latest && hasTalkMessagePayload(latest));
+  };
+
+  if (!hasLatestPayload()) {
+    try {
+      addCandidates(await LineJsAdapter.getRecentMessages(next, {
+        messageBoxId: LINE_SYSTEM_ACCOUNT_MID,
+        messagesCount: 20,
+      }));
+    } catch {
+      // History access is best-effort for LINE-managed accounts.
+    }
+  }
+
+  if (!hasLatestPayload() && ![...candidates.values()].some(hasTalkMessagePayload)) {
+    const endMessageId = box?.lastDeliveredMessageId;
+    if (endMessageId?.messageId !== undefined && endMessageId?.deliveredTime !== undefined) {
+      try {
+        addCandidates(await LineJsAdapter.getPreviousMessages(next, {
+          request: {
+            messageBoxId: LINE_SYSTEM_ACCOUNT_MID,
+            endMessageId,
+            messagesCount: 20,
+            withReadCount: true,
+            receivedOnly: false,
+          },
+          syncReason: "INTERNAL",
+        }));
+      } catch {
+        // Some System Account history cursors have no message payload endpoint.
+      }
+    }
+  }
+
+  const ordered = [...candidates.values()]
+    .filter(hasTalkMessagePayload)
+    .sort((left, right) => {
+      const timeDifference = Number(left?.createdTime ?? 0) - Number(right?.createdTime ?? 0);
+      return timeDifference || String(left?.id ?? "").localeCompare(String(right?.id ?? ""));
+    });
+  for (const candidate of ordered) {
+    await ingestLineSystemMessage(next, candidate, true);
+  }
+}
+
+const SYSTEM_ACCOUNT_BOX_DISCOVERY_FALLBACK_LIMIT = 500;
+
+async function findLineSystemAccountBox(next: LineClient): Promise<{
+  box: any | null;
+  source: "exact-range" | "prefix-range" | "bounded-list" | "missing";
+  count: number | null;
+  limit: number;
+  succeeded: boolean;
+}> {
+  const requests = [
+    {
+      source: "exact-range" as const,
+      limit: 1,
+      messageBoxListRequest: {
+        minChatId: LINE_SYSTEM_ACCOUNT_MID,
+        maxChatId: LINE_SYSTEM_ACCOUNT_MID,
+        activeOnly: false,
+        messageBoxCountLimit: 1,
+        withUnreadCount: true,
+        lastMessagesPerMessageBoxCount: 5,
+        unreadOnly: false,
+      },
+    },
+    {
+      source: "prefix-range" as const,
+      limit: 10,
+      messageBoxListRequest: {
+        minChatId: LINE_SYSTEM_ACCOUNT_MID.slice(0, -1),
+        maxChatId: LINE_SYSTEM_ACCOUNT_MID + "0",
+        activeOnly: false,
+        messageBoxCountLimit: 10,
+        withUnreadCount: true,
+        lastMessagesPerMessageBoxCount: 1,
+        unreadOnly: false,
+      },
+    },
+    {
+      source: "bounded-list" as const,
+      limit: SYSTEM_ACCOUNT_BOX_DISCOVERY_FALLBACK_LIMIT,
+      messageBoxListRequest: {
+        activeOnly: false,
+        messageBoxCountLimit: SYSTEM_ACCOUNT_BOX_DISCOVERY_FALLBACK_LIMIT,
+        withUnreadCount: true,
+        lastMessagesPerMessageBoxCount: 0,
+        unreadOnly: false,
+      },
+    },
+  ];
+
+  let succeeded = false;
+  let count: number | null = null;
+  let limit = requests[0].limit;
+  let lastError: unknown;
+  for (const request of requests) {
+    limit = request.limit;
+    try {
+      const result: any = await LineJsAdapter.getMessageBoxes(next, {
+        messageBoxListRequest: request.messageBoxListRequest,
+      } as any);
+      const boxes = Array.isArray(result?.messageBoxes) ? result.messageBoxes : [];
+      succeeded = true;
+      count = boxes.length;
+      const box = boxes.find((candidate: any) => talkMessageBoxId(candidate) === LINE_SYSTEM_ACCOUNT_MID);
+      if (box) {
+        return { box, source: request.source, count, limit, succeeded };
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (!succeeded && lastError) throw lastError;
+  return { box: null, source: "missing", count, limit, succeeded };
+}
+
 async function trackLineSystemAccount(next: LineClient, reason: string, force = false): Promise<void> {
   if (client !== next) return;
   const now = Date.now();
-  if (!force && now - lastSystemAccountTrackAt < SYSTEM_ACCOUNT_TRACK_EVENT_THROTTLE_MS) return;
+  if (!force && now - lastSystemAccountTrackAt < SYSTEM_ACCOUNT_EVENT_THROTTLE_MS) return;
   if (systemAccountTrackInFlight) return systemAccountTrackInFlight;
   lastSystemAccountTrackAt = now;
   systemAccountTrackInFlight = (async () => {
     try {
-      const result: any = await LineJsAdapter.getMessageBoxes(next, {
-        messageBoxListRequest: {
-          activeOnly: false,
-          messageBoxCountLimit: 1000,
-          withUnreadCount: true,
-          lastMessagesPerMessageBoxCount: 1,
-          unreadOnly: false,
-        },
-      } as any);
-      const boxes = Array.isArray(result?.messageBoxes) ? result.messageBoxes : [];
-      const box = boxes.find((candidate: any) => talkMessageBoxId(candidate) === LINE_SYSTEM_ACCOUNT_MID);
-      if (!box) return;
+      const lookup = await findLineSystemAccountBox(next);
+      const previous = database.getSyncState(ACCOUNT_ID, SYSTEM_ACCOUNT_TRACK_KEY);
+      const box = lookup.box;
+      if (!box) {
+        if (shouldRecordMissingSystemAccountBaseline(reason, previous?.cursor, false)) {
+          database.setSyncState(ACCOUNT_ID, {
+            key: SYSTEM_ACCOUNT_TRACK_KEY,
+            cursor: SYSTEM_ACCOUNT_MISSING_BASELINE_CURSOR,
+            generation: Date.now(),
+            status: "ready",
+          });
+        }
+        return;
+      }
       talkMessageBoxCache.delete(LINE_SYSTEM_ACCOUNT_MID);
       talkMessageBoxCache.set(LINE_SYSTEM_ACCOUNT_MID, box);
       trimMapOldest(talkMessageBoxCache, TALK_MESSAGE_BOX_CACHE_LIMIT);
       const cursor = systemAccountCursor(box);
       if (!cursor) return;
 
-      const previous = database.getSyncState(ACCOUNT_ID, SYSTEM_ACCOUNT_TRACK_KEY);
       if (!previous?.cursor) {
-        // Establish a baseline only. Existing system notifications must not be
-        // surfaced as new merely because Liney has started for the first time.
+        // Establish a baseline only. Existing notifications are recovered into
+        // history without being surfaced as new unread activity.
+        await recoverLineSystemMessages(next, box, cursor);
         database.setSyncState(ACCOUNT_ID, {
           key: SYSTEM_ACCOUNT_TRACK_KEY,
           cursor: cursor.messageId,
@@ -1257,7 +1765,10 @@ async function trackLineSystemAccount(next: LineClient, reason: string, force = 
         });
         return;
       }
-      if (previous.cursor === cursor.messageId) return;
+      if (previous.cursor === cursor.messageId) {
+        if (force || reason === "startup") await recoverLineSystemMessages(next, box, cursor);
+        return;
+      }
 
       database.setSyncState(ACCOUNT_ID, {
         key: SYSTEM_ACCOUNT_TRACK_KEY,
@@ -1265,10 +1776,12 @@ async function trackLineSystemAccount(next: LineClient, reason: string, force = 
         generation: cursor.deliveredTime,
         status: "ready",
       });
+      await recoverLineSystemMessages(next, box, cursor);
 
       const syntheticId = `line-system:${cursor.messageId}`;
+      const actualMessage = database.getMessage(ACCOUNT_ID, LINE_SYSTEM_ACCOUNT_MID, cursor.messageId);
       const alreadyStored = database.getMessage(ACCOUNT_ID, LINE_SYSTEM_ACCOUNT_MID, syntheticId);
-      if (!alreadyStored) {
+      if (!actualMessage && !alreadyStored) {
         database.upsertMessages(ACCOUNT_ID, [{
           id: syntheticId,
           chatId: LINE_SYSTEM_ACCOUNT_MID,
@@ -1309,6 +1822,12 @@ async function trackLineSystemAccount(next: LineClient, reason: string, force = 
             trackedUnread: cursor.unread,
           },
         });
+      } else if (actualMessage) {
+        database.setTrackedChatActivity(ACCOUNT_ID, LINE_SYSTEM_ACCOUNT_MID, {
+          preview: compactPreview(actualMessage.text, actualMessage.contentType, actualMessage.raw),
+          createdTime: actualMessage.createdTime,
+          unread: cursor.unread,
+        });
       }
 
       emit({
@@ -1336,9 +1855,9 @@ async function trackLineSystemAccount(next: LineClient, reason: string, force = 
 async function consumeSystemAccountTracking(next: LineClient, signal: AbortSignal): Promise<void> {
   await trackLineSystemAccount(next, "startup", true);
   while (!signal.aborted && client === next) {
-    await waitForSignal(SYSTEM_ACCOUNT_TRACK_INTERVAL_MS, signal);
+    await waitForSignal(SYSTEM_ACCOUNT_RECONCILE_INTERVAL_MS, signal);
     if (signal.aborted || client !== next) return;
-    await trackLineSystemAccount(next, "interval", true);
+    await trackLineSystemAccount(next, "reconcile");
   }
 }
 
@@ -1354,6 +1873,11 @@ async function normalizeTalkChat(chat: any, box: any, historyState = talkMessage
   if (isDm && !identity) identity = { id: mid, name: "LINE User", avatarUrl: "" };
   const chatName = String(chat?.name ?? "").trim();
   const hasUsefulChatName = Boolean(chatName) && !["LINE Chat", "LINE User"].includes(chatName);
+  const identityName = String(identity?.name ?? "").trim();
+  const hasUsefulIdentityName = Boolean(identityName) && !["LINE Chat", "LINE User"].includes(identityName);
+  const cachedPeerName = isDm && !hasUsefulIdentityName && !hasUsefulChatName
+    ? database.getLatestPeerName(ACCOUNT_ID, mid)
+    : undefined;
   const rawLast = box?.lastMessages?.[0];
   if (rawLast) rememberMessageMedia(rawLast, false);
 
@@ -1375,14 +1899,28 @@ async function normalizeTalkChat(chat: any, box: any, historyState = talkMessage
 
   let avatarUrl = cdnUrl(chat?.raw?.picturePath);
   if (isDm) {
-    // MID-based OBS URLs track the current Talk profile image and do not go
-    // stale when LINE rotates pictureStatus/picturePath after an avatar edit.
-    avatarUrl = talkProfileImageUrl(mid, identity?.avatarUrl);
+    const pictureVersion = talkProfileImageVersion(chat?.raw?.pictureStatus, chat?.raw?.picturePath);
+    const profileVersion = pictureVersion || identity?.profileFetchedAt || identity?.profileSnapshotTime || talkProfileRefreshVersion();
+    avatarUrl = talkProfileRefreshAvatarUrl(
+      identity?.avatarUrl || talkProfileImageUrl(mid, profileVersion),
+      profileVersion,
+    );
   }
   const favoriteTimestamp = Number(chat?.raw?.favoriteTimestamp ?? 0);
+  const normalizedRaw = normalize(chat?.raw);
+  const raw = identity?.identityKey || identity?.profileSnapshotTime || identity?.profileFetchedAt
+    ? {
+        ...(normalizedRaw && typeof normalizedRaw === "object" ? normalizedRaw as Record<string, unknown> : {}),
+        ...(identity.identityKey ? { profileIdentityKey: identity.identityKey } : {}),
+        ...(identity.profileSnapshotTime ? { profileSnapshotTime: identity.profileSnapshotTime } : {}),
+        ...(identity.profileFetchedAt ? { profileFetchedAt: identity.profileFetchedAt } : {}),
+      }
+    : normalizedRaw;
   return {
     id: mid,
-    name: hasUsefulChatName ? chatName : String(identity?.name || "LINE Chat"),
+    name: isDm
+      ? (hasUsefulIdentityName ? identityName : hasUsefulChatName ? chatName : cachedPeerName || String(identity?.name || "LINE Chat"))
+      : (hasUsefulChatName ? chatName : String(identity?.name || "LINE Chat")),
     kind: isDm ? "dm" : "group",
     avatarUrl,
     preview,
@@ -1391,8 +1929,183 @@ async function normalizeTalkChat(chat: any, box: any, historyState = talkMessage
     favoriteTimestamp,
     pinned: favoriteTimestamp > 0,
     historyState,
-    raw: normalize(chat?.raw),
+    identityKey: identity?.identityKey,
+    profileSnapshotTime: identity?.profileSnapshotTime,
+    profileFetchedAt: identity?.profileFetchedAt,
+    raw,
   };
+}
+
+function talkProfileIdentityKeyFromChat(chat: any): string {
+  const key = String(
+    chat?.identityKey
+      ?? chat?.profileIdentityKey
+      ?? chat?.raw?.profileIdentityKey
+      ?? "",
+  ).trim();
+  return /^profile:[0-9a-f]{64}$/i.test(key) ? key : "";
+}
+
+function talkIdentityAliasesForChats(chats: any[]): Map<string, string> {
+  const aliases = new Map(
+    database.listTalkIdentityAliases(ACCOUNT_ID).map(({ aliasMid, canonicalMid }) => [aliasMid, canonicalMid]),
+  );
+  const canonicalMidFor = (mid: string): string => {
+    let current = mid;
+    const seen = new Set([current]);
+    for (let depth = 0; depth < aliases.size; depth += 1) {
+      const next = aliases.get(current);
+      if (!next || seen.has(next)) break;
+      current = next;
+      seen.add(current);
+    }
+    return current;
+  };
+
+  // LINE can expose the same profile through more than one MID after its
+  // contact/chat snapshots refresh at different times. Only an identical
+  // server profileId hash is strong enough evidence to join those records.
+  const byProfile = new Map<string, any[]>();
+  for (const chat of chats) {
+    const id = String(chat?.id ?? "");
+    const profileKey = talkProfileIdentityKeyFromChat(chat);
+    if (chat?.kind !== "dm" || !/^u[0-9a-f]{32}$/i.test(id) || !profileKey) continue;
+    const group = byProfile.get(profileKey) ?? [];
+    group.push(chat);
+    byProfile.set(profileKey, group);
+  }
+
+  for (const entries of byProfile.values()) {
+    const unique = [...new Map(entries.map((entry) => [String(entry.id), entry])).values()];
+    if (unique.length < 2) continue;
+    const ranked = [...unique].sort((a, b) => {
+      const freshnessA = talkProfileFetchedAtFrom(a) || Number(a?.profileSnapshotTime ?? a?.raw?.profileSnapshotTime ?? 0) || 0;
+      const freshnessB = talkProfileFetchedAtFrom(b) || Number(b?.profileSnapshotTime ?? b?.raw?.profileSnapshotTime ?? 0) || 0;
+      if (freshnessA !== freshnessB) return freshnessB - freshnessA;
+      const activityA = Number(a?.lastMessageTime ?? 0) || 0;
+      const activityB = Number(b?.lastMessageTime ?? 0) || 0;
+      if (activityA !== activityB) return activityB - activityA;
+      return String(a?.id ?? "").localeCompare(String(b?.id ?? ""));
+    });
+    // Keep an existing canonical choice when the freshest row is already an
+    // alias, while still using its profile metadata to choose the winner.
+    const canonical = canonicalMidFor(String(ranked[0]?.id ?? ""));
+    if (!canonical) continue;
+    for (const entry of unique) {
+      const id = String(entry?.id ?? "");
+      if (id && id !== canonical) aliases.set(id, canonical);
+    }
+  }
+  return aliases;
+}
+
+function persistStableTalkIdentityAliases(chats: any[]): void {
+  for (const [aliasMid, canonicalMid] of talkIdentityAliasesForChats(chats)) {
+    if (aliasMid !== canonicalMid) {
+      database.mergeTalkIdentity(ACCOUNT_ID, aliasMid, canonicalMid);
+    }
+  }
+}
+
+function collapseTalkIdentityAliases(chats: any[]): any[] {
+  const aliases = talkIdentityAliasesForChats(chats);
+  if (!aliases.size) return chats;
+
+  const canonicalMidFor = (mid: string): string => {
+    let current = mid;
+    const seen = new Set([current]);
+    for (let depth = 0; depth < aliases.size; depth += 1) {
+      const next = aliases.get(current);
+      if (!next || seen.has(next)) break;
+      current = next;
+      seen.add(current);
+    }
+    return current;
+  };
+  const groups = new Map<string, any[]>();
+  for (const chat of chats) {
+    const id = String(chat?.id ?? "");
+    const canonical = chat?.kind === "dm" && /^u[0-9a-f]{32}$/i.test(id)
+      ? canonicalMidFor(id)
+      : id;
+    const group = groups.get(canonical) ?? [];
+    group.push(chat);
+    groups.set(canonical, group);
+  }
+
+  return [...groups.entries()].map(([canonical, entries]) => {
+    if (entries.length === 1 && String(entries[0]?.id ?? "") === canonical) return entries[0];
+
+    const timeOf = (entry: any) => Number(entry?.lastMessageTime ?? 0) || 0;
+    const snapshotOf = (entry: any) => Number(entry?.profileSnapshotTime ?? entry?.raw?.profileSnapshotTime ?? 0) || 0;
+    const freshnessOf = (entry: any) => talkProfileFetchedAtFrom(entry) || snapshotOf(entry);
+    const canonicalEntry = entries.find((entry) => String(entry?.id ?? "") === canonical);
+    const latestEntry = entries.reduce((best, entry) => timeOf(entry) > timeOf(best) ? entry : best, entries[0]);
+    const freshestEntry = entries.reduce((best, entry) => freshnessOf(entry) > freshnessOf(best) ? entry : best, canonicalEntry ?? latestEntry);
+    const usefulName = (value: unknown) => {
+      const name = String(value ?? "").trim();
+      return name && !["LINE User", "LINE Chat"].includes(name) ? name : "";
+    };
+    const canonicalHasProfile = Boolean(
+      canonicalEntry
+        && (usefulName(canonicalEntry.name)
+          || String(canonicalEntry.avatarUrl ?? "").trim()
+          || String(canonicalEntry.identityKey ?? canonicalEntry.raw?.profileIdentityKey ?? "").trim()),
+    );
+    const profileEntry = canonicalHasProfile && freshnessOf(canonicalEntry) >= freshnessOf(freshestEntry)
+      ? canonicalEntry
+      : freshnessOf(freshestEntry) > 0
+        ? freshestEntry
+        : canonicalEntry ?? latestEntry;
+    const name = usefulName(profileEntry?.name) || usefulName(canonicalEntry?.name) || usefulName(latestEntry?.name) || "LINE User";
+    const profileFetchedAt = Math.max(...entries.map(talkProfileFetchedAtFrom)) || undefined;
+    const profileSnapshotTime = Number(
+      profileEntry?.profileSnapshotTime
+        ?? profileEntry?.raw?.profileSnapshotTime
+        ?? (profileFetchedAt ? 0 : Math.max(...entries.map(snapshotOf))),
+    ) || undefined;
+    const sourceRaw = profileEntry?.raw && typeof profileEntry.raw === "object" && !Array.isArray(profileEntry.raw)
+      ? profileEntry.raw as Record<string, unknown>
+      : {};
+    const identityKey = String(
+      profileEntry?.profileIdentityKey
+        ?? profileEntry?.identityKey
+        ?? sourceRaw.profileIdentityKey
+        ?? ("manual:" + createHash("sha256").update(ACCOUNT_ID + ":" + canonical).digest("hex")),
+    );
+    const raw = {
+      ...sourceRaw,
+      profileIdentityKey: identityKey,
+      ...(profileSnapshotTime ? { profileSnapshotTime } : {}),
+      ...(profileFetchedAt ? { profileFetchedAt } : {}),
+    };
+
+    return {
+      ...latestEntry,
+      ...profileEntry,
+      id: canonical,
+      name,
+      kind: "dm",
+      avatarUrl: profileEntry?.avatarUrl || canonicalEntry?.avatarUrl || latestEntry?.avatarUrl || "",
+      preview: latestEntry?.preview || profileEntry?.preview || "",
+      unread: entries.reduce((sum, entry) => sum + Math.max(0, Number(entry?.unread ?? 0) || 0), 0),
+      lastMessageTime: Math.max(...entries.map(timeOf)),
+      pinned: entries.some((entry) => Boolean(entry?.pinned)),
+      favoriteTimestamp: Math.max(...entries.map((entry) => Number(entry?.favoriteTimestamp ?? 0) || 0)),
+      favoriteTime: Math.max(...entries.map((entry) => Number(entry?.favoriteTime ?? 0) || 0)),
+      isFavorite: entries.some((entry) => Boolean(entry?.isFavorite)),
+      historyState: entries.some((entry) => entry?.historyState === "available")
+        ? "available"
+        : entries.some((entry) => entry?.historyState === "new")
+          ? "new"
+          : "unavailable",
+      identityKey,
+      profileIdentityKey: identityKey,
+      profileSnapshotTime,
+      profileFetchedAt,
+      raw,
+    };
+  });
 }
 
 function mergeKnownTalkChats(remote: any[]): any[] {
@@ -1414,6 +2127,34 @@ function mergeKnownTalkChats(remote: any[]): any[] {
     }
     const currentName = String(current.name ?? "").trim();
     const usefulName = Boolean(currentName) && !["LINE Chat", "LINE User"].includes(currentName);
+    const currentProfileKey = talkProfileIdentityKeyFromChat(current);
+    const knownProfileKey = talkProfileIdentityKeyFromChat(known);
+    const currentSnapshot = Number(current.profileSnapshotTime ?? current.raw?.profileSnapshotTime ?? 0) || 0;
+    const knownSnapshot = Number(known.profileSnapshotTime ?? known.raw?.profileSnapshotTime ?? 0) || 0;
+    const currentFetchedAt = talkProfileFetchedAtFrom(current);
+    const knownFetchedAt = talkProfileFetchedAtFrom(known);
+    const hasFetchTimestamps = currentFetchedAt > 0 || knownFetchedAt > 0;
+    const currentProfileIsNewer = hasFetchTimestamps
+      ? currentFetchedAt >= knownFetchedAt
+      : currentSnapshot >= knownSnapshot;
+    const profileIdentityKey = currentProfileKey && currentProfileIsNewer
+      ? currentProfileKey
+      : knownProfileKey || currentProfileKey;
+    const profileSnapshotTime = currentFetchedAt ? (currentSnapshot || undefined) : Math.max(currentSnapshot, knownSnapshot) || undefined;
+    const profileFetchedAt = Math.max(currentFetchedAt, knownFetchedAt) || undefined;
+    const knownRaw = known.raw && typeof known.raw === "object" && !Array.isArray(known.raw)
+      ? known.raw as Record<string, unknown>
+      : {};
+    const currentRaw = current.raw && typeof current.raw === "object" && !Array.isArray(current.raw)
+      ? current.raw as Record<string, unknown>
+      : {};
+    const raw = {
+      ...knownRaw,
+      ...currentRaw,
+      ...(profileIdentityKey ? { profileIdentityKey } : {}),
+      ...(profileSnapshotTime ? { profileSnapshotTime } : {}),
+      ...(profileFetchedAt ? { profileFetchedAt } : {}),
+    };
     byId.set(id, {
       ...known,
       ...current,
@@ -1422,6 +2163,11 @@ function mergeKnownTalkChats(remote: any[]): any[] {
       preview: current.preview || known.preview,
       lastMessageTime: Math.max(Number(current.lastMessageTime ?? 0), Number(known.lastMessageTime ?? 0)),
       historyState: known.historyState === "available" ? "available" : current.historyState ?? known.historyState ?? "available",
+      identityKey: profileIdentityKey || current.identityKey || known.identityKey,
+      profileIdentityKey: profileIdentityKey || current.profileIdentityKey || known.profileIdentityKey,
+      profileSnapshotTime,
+      profileFetchedAt,
+      raw,
     });
   }
   return [...byId.values()];
@@ -1474,76 +2220,126 @@ async function loadChatsList(persist = true, canPersist: () => boolean = () => t
       };
     }),
   ];
+  const directMids = [...new Set(jobs
+    .map(({ chat, box }) => String(chat?.mid ?? talkMessageBoxId(box)))
+    .filter((mid) => mid.startsWith("u")))];
+  if (directMids.length) await resolveTalkIdentities(directMids);
   const remoteResult = new Array<any>(jobs.length);
   await runPool(jobs, 4, async ({ chat, box, historyState }, index) => {
     remoteResult[index] = await normalizeTalkChat(chat, box, historyState);
   });
-  const result = mergeKnownTalkChats(remoteResult);
+  let result = mergeKnownTalkChats(remoteResult);
   if (!result.length && joinedError) throw joinedError;
+  if (persist && canPersist()) {
+    // Store both MIDs before reconciling so the database transaction can move
+    // the complete history, unread state, and outbox to the canonical chat.
+    database.upsertChats(ACCOUNT_ID, result as DatabaseChat[]);
+    persistStableTalkIdentityAliases(result);
+  }
+  result = collapseTalkIdentityAliases(result);
   result.sort((a, b) => b.lastMessageTime - a.lastMessageTime);
-  if (persist && canPersist()) database.upsertChats(ACCOUNT_ID, result as DatabaseChat[]);
   return result;
 }
 
 async function loadFriendsList(persist = true, canPersist: () => boolean = () => true): Promise<any[]> {
   if (!client) throw new Error("not authenticated");
-  const friendIds: string[] = (await LineJsAdapter.getUserFriendIds(client, {
-    request: { blockStatus: "ALL" },
-  })).userFriendMids ?? [];
-  const contacts: any[] = [];
-  for (let offset = 0; offset < friendIds.length; offset += 50) {
-    const mids = friendIds.slice(offset, offset + 50);
-    try {
-      const response: any = await LineJsAdapter.getContactsV2(client, { mids });
-      for (const [mid, entry] of Object.entries<any>(response?.contacts ?? {})) {
-        const contact = entry?.contact ?? {};
-        contacts.push({ mid, contact });
-      }
-    } catch {
-      // If getContactsV2 fails, fall back to the local sender cache only —
-      // NOT a per-contact getUser() loop, which fans out N network requests
-      // and is the main reason a post-cache refresh is slow at startup.
-      for (const mid of mids) {
-        const known = talkSenderCache.get(mid);
-        if (known) {
-          contacts.push({
-            mid,
-            contact: {
-              displayName: known.name,
-              picturePath: known.avatarUrl,
-              pictureStatus: "",
-              statusMessage: "",
-              favoriteTime: 0,
-            },
-          });
-        }
-      }
-    }
-  }
-  const result = contacts.map(({ mid, contact }) => {
-    const favoriteTime = Number(contact?.favoriteTime ?? 0);
-    const identity: SenderIdentity = {
-      id: String(mid),
-      name: String(contact?.displayNameOverridden || contact?.displayName || "LINE User"),
-      avatarUrl: talkProfileImageUrl(String(mid), contact?.pictureStatus || contact?.picturePath),
+  const users: any[] = await LineJsAdapter.fetchUsers(client);
+  const contacts = users.map((user) => {
+    const raw = user?.raw ?? {};
+    const mid = String(user?.mid ?? raw?.targetUserMid ?? "").trim();
+    const contact = raw?.contact ?? raw?.targetProfileDetail ?? raw;
+    return { mid, raw, contact };
+  }).filter(({ mid }) => mid.startsWith("u"));
+  const friendsByMid = new Map<string, any>();
+  for (const { mid, raw, contact } of contacts) {
+    const favoriteTime = Number(contact?.favoriteTime ?? raw?.favoriteTime ?? 0);
+    const identity = talkContactIdentity(mid, raw);
+    const previousIdentity = talkSenderCache.get(mid);
+    const currentName = usefulTalkName(identity.name);
+    const previousName = usefulTalkName(previousIdentity?.name);
+    const cachedPeerName = currentName || previousName
+      ? undefined
+      : database.getLatestPeerName(ACCOUNT_ID, mid);
+    const refreshedIdentity: SenderIdentity = {
+      ...previousIdentity,
+      ...identity,
+      name: identity.displayNameOverride
+        ? identity.name
+        : currentName || previousName || cachedPeerName || identity.name,
+      avatarUrl: identity.avatarUrl || previousIdentity?.avatarUrl || talkProfileImageUrl(mid, talkProfileRefreshVersion()),
+      identityKey: identity.identityKey || previousIdentity?.identityKey,
+      profileSnapshotTime: identity.profileSnapshotTime ?? previousIdentity?.profileSnapshotTime,
+      profileFetchedAt: Date.now(),
+      displayNameOverride: identity.displayNameOverride,
+      ...(identity.isOfficialAccount || previousIdentity?.isOfficialAccount ? { isOfficialAccount: true } : {}),
     };
-    talkSenderCache.set(String(mid), identity);
-    return {
-      id: String(mid),
-      name: identity.name,
+    const profileIdentity: SenderIdentity = {
+      ...refreshedIdentity,
+      profileNameFromApi: Boolean(currentName) || Boolean(previousIdentity?.profileNameFromApi),
+    };
+    talkSenderCache.set(mid, profileIdentity);
+    friendsByMid.set(mid, {
+      id: mid,
+      name: refreshedIdentity.name,
       kind: "dm",
-      avatarUrl: identity.avatarUrl,
+      avatarUrl: refreshedIdentity.avatarUrl,
+      identityKey: refreshedIdentity.identityKey,
+      profileSnapshotTime: refreshedIdentity.profileSnapshotTime,
+      profileFetchedAt: refreshedIdentity.profileFetchedAt,
+      raw: {
+        ...(refreshedIdentity.identityKey ? { profileIdentityKey: refreshedIdentity.identityKey } : {}),
+        ...(refreshedIdentity.profileSnapshotTime ? { profileSnapshotTime: refreshedIdentity.profileSnapshotTime } : {}),
+        ...(refreshedIdentity.profileFetchedAt ? { profileFetchedAt: refreshedIdentity.profileFetchedAt } : {}),
+      },
       statusMessage: String(contact?.statusMessage ?? ""),
       favoriteTime,
       isFavorite: favoriteTime > 0,
+    });
+  }
+
+  const refreshedIdentities = await resolveTalkIdentities([...friendsByMid.keys()]);
+  let result = [...friendsByMid.values()].map((friend) => {
+    const identity = refreshedIdentities.get(friend.id) ?? talkSenderCache.get(friend.id);
+    if (!identity) return friend;
+    const profileVersion = identity.profileFetchedAt ?? identity.profileSnapshotTime ?? talkProfileRefreshVersion();
+    const identityName = identity.name.trim();
+    const name = identity.displayNameOverride
+      ? identity.name
+      : identityName && !["LINE User", "LINE Chat"].includes(identityName)
+        ? identityName
+        : friend.name;
+    const identityKey = identity.identityKey || friend.identityKey;
+    const profileSnapshotTime = identity.profileSnapshotTime ?? friend.profileSnapshotTime;
+    const profileFetchedAt = identity.profileFetchedAt ?? friend.profileFetchedAt;
+    const avatarUrl = talkProfileRefreshAvatarUrl(
+      identity.avatarUrl || talkProfileImageUrl(friend.id, profileVersion),
+      profileVersion,
+    );
+    return {
+      ...friend,
+      name,
+      avatarUrl,
+      identityKey,
+      profileSnapshotTime,
+      profileFetchedAt,
+      raw: {
+        ...friend.raw,
+        ...(identityKey ? { profileIdentityKey: identityKey } : {}),
+        ...(profileSnapshotTime ? { profileSnapshotTime } : {}),
+        ...(profileFetchedAt ? { profileFetchedAt } : {}),
+      },
     };
   });
+  if (persist && canPersist()) {
+    database.upsertChats(ACCOUNT_ID, result as DatabaseChat[]);
+    persistStableTalkIdentityAliases(result);
+  }
+  result = collapseTalkIdentityAliases(result);
   result.sort((a, b) => {
     if (a.isFavorite !== b.isFavorite) return a.isFavorite ? -1 : 1;
     if (a.favoriteTime !== b.favoriteTime) return b.favoriteTime - a.favoriteTime;
     return a.name.localeCompare(b.name, "th");
   });
-  if (persist && canPersist()) database.upsertChats(ACCOUNT_ID, result as DatabaseChat[]);
   return result;
 }
 
@@ -1660,9 +2456,14 @@ async function fetchOpenChatMessagesNormalized(chatId: string, limit: number): P
   }));
 }
 
-async function fetchTalkMessagesNormalized(chatId: string, limit: number): Promise<any[]> {
+async function fetchTalkMessagesNormalized(
+  chatId: string,
+  limit: number,
+  endMessageId?: { messageId: string | bigint; deliveredTime: number },
+): Promise<any[]> {
   if (!client) throw new Error("not authenticated");
   let list: any[];
+  const isOlderPage = endMessageId !== undefined;
   const decode = async (rawList: unknown): Promise<any[]> => Promise.all(
     (Array.isArray(rawList) ? rawList : []).map(async (raw: any) => {
       try {
@@ -1671,55 +2472,111 @@ async function fetchTalkMessagesNormalized(chatId: string, limit: number): Promi
         return {
           raw,
           text: raw?.text ?? "",
-           isMyMessage: midString(raw?.from) === midString(LineJsAdapter.profileMid(client)),
+          isMyMessage: midString(raw?.from) === midString(LineJsAdapter.profileMid(client)),
         };
       }
     }),
   );
 
-  try {
-    let box = talkMessageBoxCache.get(chatId);
-    if (!box) {
+  const sourceLists: any[][] = [];
+  const routeErrors: unknown[] = [];
+  let box = talkMessageBoxCache.get(chatId);
+  // Older-page requests already have an explicit cursor. Initial loads still
+  // try MessageBox discovery, but a discovery failure must not block the
+  // direct recent-message fallback.
+  if (!box && !endMessageId) {
+    try {
       const boxes = await loadTalkMessageBoxes();
       box = boxes.find((candidate: any) => talkMessageBoxId(candidate) === chatId);
+    } catch (error) {
+      routeErrors.push(error);
     }
+  }
 
-    const cursor = box?.lastDeliveredMessageId;
-    const rawList = cursor && cursor.messageId !== undefined && cursor.deliveredTime !== undefined
-           ? await LineJsAdapter.getPreviousMessages(client, {
+  const cursor = endMessageId ?? box?.lastDeliveredMessageId;
+  const readRoute = async (request: () => Promise<unknown>): Promise<number> => {
+    try {
+      const rawList = await request();
+      const decoded = await decode(rawList);
+      sourceLists.push(decoded);
+      return decoded.length;
+    } catch (error) {
+      routeErrors.push(error);
+      return 0;
+    }
+  };
+
+  if (isOlderPage) {
+    await readRoute(() => LineJsAdapter.getPreviousMessages(client!, {
+      request: {
+        messageBoxId: chatId,
+        endMessageId: cursor!,
+        messagesCount: limit,
+      },
+    }));
+    if (routeErrors.length && !sourceLists.some((batch) => batch.length)) {
+      throw routeErrors.at(-1);
+    }
+    list = sourceLists[0] ?? [];
+  } else {
+    let cursorCount = 0;
+    if (cursor && cursor.messageId !== undefined && cursor.deliveredTime !== undefined) {
+      cursorCount = await readRoute(() => LineJsAdapter.getPreviousMessages(client!, {
         request: {
           messageBoxId: chatId,
           endMessageId: cursor,
           messagesCount: limit,
         },
-      })
-       : await LineJsAdapter.getRecentMessages(client, {
-        messageBoxId: chatId,
-        messagesCount: limit,
-      });
-    list = await decode(rawList);
-    if (shouldRetryTalkHistory(cursor, list.length)) {
-      const recentRaw: any[] = await LineJsAdapter.getRecentMessages(client, {
-        messageBoxId: chatId,
-        messagesCount: limit,
-      });
-      list = await decode(recentRaw);
+      }));
     }
-  } catch {
-    // One corrupt/old E2EE payload must not make an entire room disappear.
-    // Pull raw Talk messages and decode them independently so good messages
-    // survive even when one historical encryption key is unavailable.
-    try {
-       const rawList: any[] = await LineJsAdapter.getRecentMessages(client, {
+
+    // Keep every source bounded to this room and merge partial responses. LINE
+    // can return a short cursor page even when the recent window or MessageBox
+    // still has a usable payload.
+    // A full cursor page can still end before a newer sidebar event when
+    // LINE has published stale MessageBox metadata. In that case try the
+    // recent window too, then merge and deduplicate both responses.
+    if (!cursorCount || cursorCount < limit || !historySnapshotCoversSidebar(chatId, sourceLists.flat())) {
+      await readRoute(() => LineJsAdapter.getRecentMessages(client!, {
         messageBoxId: chatId,
         messagesCount: limit,
-      });
-      list = await decode(rawList);
-    } catch (fallbackError) {
-      const reason = String(fallbackError instanceof Error ? fallbackError.message : fallbackError);
-      if (chatId.startsWith("u") || reason.includes("Message box not found")) return [];
-      throw fallbackError;
+      }));
     }
+    if (Array.isArray(box?.lastMessages) && box.lastMessages.length) {
+      sourceLists.push(await decode(box.lastMessages));
+    }
+
+    const byId = new Map<string, any>();
+    for (const batch of sourceLists) {
+      for (const message of batch) {
+        const raw = message?.raw ?? {};
+        const key = String(raw?.id ?? message?.id ?? [
+          Number(raw?.createdTime ?? message?.createdTime ?? 0),
+          midString(raw?.from ?? message?.from),
+          midString(raw?.to ?? message?.to),
+          contentTypeCode(raw?.contentType ?? message?.contentType),
+        ].join(":"));
+        const previous = byId.get(key);
+        if (!previous) {
+          byId.set(key, message);
+        } else {
+          byId.set(key, {
+            ...previous,
+            ...message,
+            text: message?.text || previous?.text || "",
+            rich: message?.rich ?? previous?.rich,
+            flex: message?.flex ?? previous?.flex,
+            call: message?.call ?? previous?.call,
+            stickerUrl: message?.stickerUrl ?? previous?.stickerUrl,
+            reactions: message?.reactions ?? previous?.reactions,
+          });
+        }
+      }
+    }
+    list = [...byId.values()].sort((left, right) =>
+      Number(left?.raw?.createdTime ?? left?.createdTime ?? 0)
+        - Number(right?.raw?.createdTime ?? right?.createdTime ?? 0));
+    if (!list.length && routeErrors.length) throw routeErrors.at(-1);
   }
   const rows = list.map((message: any) => {
     const contentType = contentTypeCode(message?.raw?.contentType);
@@ -1770,6 +2627,93 @@ async function fetchTalkMessagesNormalized(chatId: string, limit: number): Promi
         isOfficialAccount: sender?.isOfficialAccount,
     };
   }));
+}
+
+async function loadTalkMessagesBefore(
+  chatId: string,
+  before: { messageId: string; createdTime: number },
+  limit: number,
+): Promise<{ messages: any[]; hasMore: boolean }> {
+  const safeLimit = Math.max(1, Math.min(limit, MESSAGE_LIST_RESULT_LIMIT));
+  const cached = database.listMessagesBefore(
+    ACCOUNT_ID,
+    chatId,
+    before.createdTime,
+    before.messageId,
+    safeLimit,
+  );
+  let hasMore = cached.hasMore;
+
+  if (cached.messages.length >= safeLimit && !cached.hasMore) {
+    // A full local page does not prove the remote history is exhausted.
+    // The next page request checks the older cursor without OFFSET.
+    hasMore = true;
+  } else if (
+    cached.messages.length < safeLimit
+    && !cached.hasMore
+    && client
+    && chatId !== LINE_SYSTEM_ACCOUNT_MID
+  ) {
+    const pivot = cached.messages[0]
+      ?? database.getMessage(ACCOUNT_ID, chatId, before.messageId)
+      ?? { id: before.messageId, createdTime: before.createdTime, raw: undefined };
+    const pivotId = String(pivot.id);
+    const pivotTime = Number(pivot.createdTime);
+    const pivotRaw = (pivot.raw && typeof pivot.raw === "object" ? pivot.raw : {}) as Record<string, unknown>;
+    const deliveredTime = Number(pivotRaw.deliveredTime ?? pivotTime);
+    const remaining = safeLimit - cached.messages.length;
+    if (!/^\d+$/.test(pivotId) || !Number.isFinite(deliveredTime) || deliveredTime <= 0) {
+      const decorated = await recoverMissingStickerMetadata(
+        chatId,
+        false,
+        await enrichStoredTalkSenders(cached.messages),
+        safeLimit,
+      );
+      return { messages: decorated, hasMore: cached.hasMore };
+    }
+    const remote = await fetchTalkMessagesNormalized(chatId, remaining, {
+      messageId: BigInt(pivotId),
+      deliveredTime,
+    });
+    const olderRemote = remote
+      .filter((message: any) => {
+        const time = Number(message?.createdTime ?? 0);
+        const id = String(message?.id ?? "");
+        return time < pivotTime || (time === pivotTime && id < pivotId);
+      })
+      .sort((left: any, right: any) => (
+        Number(left?.createdTime ?? 0) - Number(right?.createdTime ?? 0)
+        || String(left?.id ?? "").localeCompare(String(right?.id ?? ""))
+      ));
+    const knownIds = new Set(cached.messages.map((message) => String(message.id)));
+    const newRemoteCount = olderRemote.filter((message: any) => !knownIds.has(String(message.id))).length;
+    if (olderRemote.length) persistNormalizedMessages(chatId, false, olderRemote);
+
+    const refreshed = database.listMessagesBefore(
+      ACCOUNT_ID,
+      chatId,
+      before.createdTime,
+      before.messageId,
+      safeLimit,
+    );
+    hasMore = refreshed.hasMore
+      || (remote.length >= remaining && newRemoteCount > 0);
+    const decorated = await recoverMissingStickerMetadata(
+      chatId,
+      false,
+      await enrichStoredTalkSenders(refreshed.messages),
+      safeLimit,
+    );
+    return { messages: decorated, hasMore };
+  }
+
+  const decorated = await recoverMissingStickerMetadata(
+    chatId,
+    false,
+    await enrichStoredTalkSenders(cached.messages),
+    safeLimit,
+  );
+  return { messages: decorated, hasMore };
 }
 
 async function runPool<T>(items: T[], concurrency: number, worker: (item: T, index: number) => Promise<void>) {
@@ -1831,6 +2775,31 @@ function decorateStoredMessages(messages: DatabaseMessage[]): any[] {
       : message;
   });
   return decorateReplyReferences(decorated);
+}
+
+function mergeHistorySnapshots(previous: any[], fresh: any[]): any[] {
+  const byId = new Map<string, any>();
+  for (const message of [...previous, ...fresh]) {
+    const id = String(message?.id ?? "");
+    if (!id) continue;
+    const existing = byId.get(id);
+    if (!existing) {
+      byId.set(id, message);
+      continue;
+    }
+    byId.set(id, {
+      ...existing,
+      ...message,
+      text: message?.text || existing?.text || "",
+      rich: message?.rich ?? existing?.rich,
+      flex: message?.flex ?? existing?.flex,
+      call: message?.call ?? existing?.call,
+      stickerUrl: message?.stickerUrl ?? existing?.stickerUrl,
+      reactions: message?.reactions ?? existing?.reactions,
+    });
+  }
+  return [...byId.values()].sort((left, right) =>
+    Number(left?.createdTime ?? 0) - Number(right?.createdTime ?? 0));
 }
 
 function listCallHistory(limit = 200): any[] {
@@ -1917,7 +2886,7 @@ async function recoverMissingStickerMetadata(
     // resolve STKID/STKOPT instead of remaining text-only forever.
     const recovered = openchat
       ? await fetchOpenChatMessagesNormalized(chatId, Math.max(limit, 100))
-      : await fetchTalkMessagesNormalized(chatId, Math.max(limit, 100));
+      : await fetchTalkMessagesWithFallback(chatId, Math.max(limit, 100));
     if (recovered.some((message: any) => messageStickerUrl(message))) {
       persistNormalizedMessages(chatId, openchat, recovered);
       return decorateStoredMessages(database.listMessages(ACCOUNT_ID, chatId, limit));
@@ -1928,11 +2897,39 @@ async function recoverMissingStickerMetadata(
   return decorateStoredMessages(messages);
 }
 
+function enrichCachedMessagesInBackground(
+  chatId: string,
+  openchat: boolean,
+  messages: DatabaseMessage[],
+  limit: number,
+): void {
+  if (!client || !messages.length) return;
+  const key = `${openchat ? "openchat" : "talk"}:${chatId}`;
+  const now = Date.now();
+  if (messageCacheEnrichInFlight.has(key)) return;
+  if (now - (messageCacheEnrichedAt.get(key) ?? 0) < MESSAGE_CACHE_ENRICH_TTL_MS) return;
+  messageCacheEnrichedAt.set(key, now);
+  trimMapOldest(messageCacheEnrichedAt, 128);
+
+  const task = (async () => {
+    const enriched = openchat ? messages : await enrichStoredTalkSenders(messages);
+    await recoverMissingStickerMetadata(chatId, openchat, enriched, limit);
+  })()
+    .catch(() => {
+      // Cached history is already usable. Background enrichment is best-effort.
+    })
+    .finally(() => {
+      if (messageCacheEnrichInFlight.get(key) === task) messageCacheEnrichInFlight.delete(key);
+    });
+  messageCacheEnrichInFlight.set(key, task);
+}
+
 function persistNormalizedMessages(chatId: string, openchat: boolean, messages: any[]): void {
-  const kind = chatKindFor(chatId, openchat);
+  const canonicalChatId = openchat ? chatId : canonicalTalkIdentityMid(chatId);
+  const kind = chatKindFor(canonicalChatId, openchat);
   const rows: DatabaseMessage[] = messages.map((message) => ({
     id: String(message.id),
-    chatId,
+    chatId: canonicalChatId,
     kind,
     text: typeof message.text === "string" ? message.text : "",
     filename: typeof message.filename === "string" ? message.filename : undefined,
@@ -1950,7 +2947,10 @@ function persistNormalizedMessages(chatId: string, openchat: boolean, messages: 
     status: "sent",
     raw: normalize(message.raw),
   }));
-  if (rows.length) database.upsertMessages(ACCOUNT_ID, rows);
+  if (rows.length) {
+    database.upsertMessages(ACCOUNT_ID, rows);
+    prunePersistentCache();
+  }
 }
 
 function persistLiveMessage(
@@ -1959,6 +2959,7 @@ function persistLiveMessage(
   message: any,
   localId?: string,
 ): void {
+  if (kind !== "openchat") chatId = canonicalTalkIdentityMid(chatId);
   const messageId = String(message.id ?? crypto.randomUUID());
   if (database.isMessageHidden(ACCOUNT_ID, chatId, kind, messageId)) return;
   const createdTime = finiteMessageTime(message.createdTime);
@@ -1985,6 +2986,7 @@ function persistLiveMessage(
   };
   if (localId) database.reconcileMessage(ACCOUNT_ID, localId, { ...row, id: messageId }, messageId);
   else database.upsertMessage(ACCOUNT_ID, row);
+  prunePersistentCache();
 
   // A pre-sync result is a one-shot optimization. Once a live event touches
   // a room, force message.list to read the durable SQLite row instead of
@@ -2069,17 +3071,148 @@ function waitForSignal(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+function canonicalTalkIdentityMid(mid: string): string {
+  return database.resolveTalkIdentityMid(ACCOUNT_ID, mid);
+}
+
+function canonicalTalkChatId(chatId: string, kind: string): string {
+  return kind === "openchat" ? chatId : canonicalTalkIdentityMid(chatId);
+}
+
+function talkHistoryActivity(chatId: string): { hasActivity: boolean; lastMessageTime: number } {
+  const transient = preSyncedChats?.find((chat) => String(chat?.id ?? "") === chatId);
+  const persisted = database.listConversationChats(ACCOUNT_ID).find((chat) => chat.id === chatId);
+  const rows = [transient, persisted].filter(Boolean) as any[];
+  const lastMessageTime = rows.reduce(
+    (latest, chat) => Math.max(latest, Number(chat?.lastMessageTime ?? 0) || 0),
+    0,
+  );
+  const hasActivity = lastMessageTime > 0
+    || rows.some((chat) => Boolean(String(chat?.preview ?? "").trim()))
+    || rows.some((chat) => ["available", "unavailable"].includes(String(chat?.historyState ?? "")));
+  return { hasActivity, lastMessageTime };
+}
+
+function historySnapshotCoversSidebar(chatId: string, messages: readonly any[]): boolean {
+  const activity = talkHistoryActivity(chatId);
+  if (!activity.hasActivity) return true;
+  if (!messages.length) return false;
+  if (!activity.lastMessageTime) return true;
+  const latest = messages.reduce(
+    (value, message) => Math.max(value, Number(message?.createdTime ?? message?.raw?.createdTime ?? 0) || 0),
+    0,
+  );
+  return latest >= activity.lastMessageTime;
+}
+
+const talkHistoryMetadataRefreshAt = new Map<string, number>();
+const TALK_HISTORY_METADATA_REFRESH_TTL_MS = 30_000;
+
+async function recoverTalkHistoryFromCursorMatchedMid(chatId: string, limit: number): Promise<any[]> {
+  const currentChatId = canonicalTalkIdentityMid(chatId);
+  const box = talkMessageBoxCache.get(currentChatId) ?? talkMessageBoxCache.get(chatId);
+  const cursorMessageId = String(box?.lastDeliveredMessageId?.messageId ?? "").trim();
+  const cursorDeliveredTime = Number(box?.lastDeliveredMessageId?.deliveredTime ?? 0);
+  if (!cursorMessageId || !Number.isFinite(cursorDeliveredTime) || cursorDeliveredTime <= 0) return [];
+
+  // A LINE message ID plus its delivery time is a stronger identity link than
+  // a display name or avatar. Only auto-recover when exactly one prior DM has
+  // that same server message; uncertain matches stay separate for user review.
+  const priorChatId = database.findTalkChatForCursorMessage(
+    ACCOUNT_ID,
+    currentChatId,
+    cursorMessageId,
+    cursorDeliveredTime,
+  );
+  if (!priorChatId || priorChatId === currentChatId) return [];
+  if (!database.mergeTalkIdentity(ACCOUNT_ID, priorChatId, currentChatId)) return [];
+  return enrichStoredTalkSenders(database.listMessages(ACCOUNT_ID, currentChatId, limit));
+}
+
+async function fetchTalkMessagesWithFallback(
+  chatId: string,
+  limit: number,
+  metadataAlreadyFresh = false,
+): Promise<any[]> {
+  let firstResult: any[] = [];
+  let firstError: unknown;
+  try {
+    firstResult = await fetchTalkMessagesNormalized(chatId, limit);
+  } catch (error) {
+    firstError = error;
+  }
+
+  const firstCoversSidebar = historySnapshotCoversSidebar(chatId, firstResult);
+  if (firstCoversSidebar) {
+    if (firstError) throw firstError;
+    return firstResult;
+  }
+  if (!talkHistoryActivity(chatId).hasActivity) {
+    if (firstError) throw firstError;
+    return firstResult;
+  }
+  if (metadataAlreadyFresh) {
+    const restored = await recoverTalkHistoryFromCursorMatchedMid(chatId, limit);
+    if (restored.length) return mergeHistorySnapshots(firstResult, restored);
+    if (firstError) throw new Error("LINE history could not be loaded after refreshing the MessageBox.");
+    return firstResult;
+  }
+
+  const now = Date.now();
+  const lastRefreshAt = talkHistoryMetadataRefreshAt.get(chatId) ?? 0;
+  if (now - lastRefreshAt < TALK_HISTORY_METADATA_REFRESH_TTL_MS) {
+    const restored = await recoverTalkHistoryFromCursorMatchedMid(chatId, limit);
+    if (restored.length) return mergeHistorySnapshots(firstResult, restored);
+    if (firstError) throw new Error("LINE history could not be loaded from its current MessageBox.");
+    return firstResult;
+  }
+  talkHistoryMetadataRefreshAt.set(chatId, now);
+  trimMapOldest(talkHistoryMetadataRefreshAt, 256);
+
+  // A stale cursor can make every history route return an old or empty page.
+  // Refresh MessageBoxes once; fetchTalkMessagesNormalized also tries the
+  // recent endpoint when the cursor page does not reach sidebar activity.
+  talkMessageBoxCache.delete(chatId);
+  await loadTalkMessageBoxes();
+  const refreshedChatId = canonicalTalkIdentityMid(chatId);
+  let refreshed: any[] = [];
+  let refreshedError: unknown;
+  try {
+    refreshed = await fetchTalkMessagesNormalized(refreshedChatId, limit);
+  } catch (error) {
+    refreshedError = error;
+  }
+  if (historySnapshotCoversSidebar(refreshedChatId, refreshed)) return refreshed;
+
+  const restored = await recoverTalkHistoryFromCursorMatchedMid(refreshedChatId, limit);
+  if (restored.length) return mergeHistorySnapshots(mergeHistorySnapshots(firstResult, refreshed), restored);
+
+  if (refreshedError) {
+    if (firstError) {
+      throw new Error("LINE history could not be loaded after refreshing the MessageBox.");
+    }
+    if (firstResult.length) return firstResult;
+    throw new Error("LINE history could not be loaded from the cursor, recent window, or MessageBox payload.");
+  }
+  // Keep known rows visible if LINE still serves an incomplete window. The
+  // caller merges this with SQLite and exposes retry when no safe source exists.
+  return mergeHistorySnapshots(firstResult, refreshed);
+}
+
 function talkChatId(raw: any, message: any, isMine: boolean, from: string, to: string): string {
   const toType = midTypeName(raw?.toType ?? (() => {
     try { return message?.to?.type; } catch { return ""; }
   })());
-  if (toType === "GROUP" || toType === "ROOM") return to || from;
-  if (toType === "USER") return isMine ? (to || from) : (from || to);
-  // Some LINE sessions return the enum as a numeric value in raw and some
-  // return only the MID. The MID fallback preserves the DM direction in both
-  // forms while still using the room MID for group messages.
-  if (isMine) return to || from;
-  return to.startsWith("u") ? (from || to) : (to || from);
+  let chatId: string;
+  if (toType === "GROUP" || toType === "ROOM") chatId = to || from;
+  else if (toType === "USER") chatId = isMine ? (to || from) : (from || to);
+  else {
+    // Some LINE sessions return the enum as a numeric value in raw and some
+    // return only the MID. The MID fallback preserves the DM direction in both
+    // forms while still using the room MID for group messages.
+    chatId = isMine ? (to || from) : (to.startsWith("u") ? (from || to) : (to || from));
+  }
+  return canonicalTalkIdentityMid(chatId);
 }
 
 const SQUARE_OPERATION_NAMES: Record<string, string> = {
@@ -2112,7 +3245,7 @@ function operationTalkChatId(operation: any, isMine: boolean): string {
   if (from || to) return talkChatId(raw, undefined, isMine, from, to);
   for (const value of [operation?.chatMid, operation?.chatId, operation?.param2, operation?.param3]) {
     const candidate = String(value ?? "").trim();
-    if (candidate.startsWith("c") || candidate.startsWith("r") || candidate.startsWith("u")) return candidate;
+    if (candidate.startsWith("c") || candidate.startsWith("r") || candidate.startsWith("u")) return canonicalTalkIdentityMid(candidate);
   }
   return "";
 }
@@ -2143,6 +3276,7 @@ function persistReactionEvent(
 }
 
 async function handleTalkMessage(next: LineClient, message: any, rawOverride?: any, eventKind: "message" | "edit" = "message"): Promise<void> {
+  if (client !== next) return;
   const raw = rawOverride ?? message?.raw ?? {};
   if (!raw || typeof raw !== "object") return;
   const contentType = contentTypeCode(raw?.contentType);
@@ -2166,11 +3300,16 @@ async function handleTalkMessage(next: LineClient, message: any, rawOverride?: a
   // Never wait for a profile RPC before delivering the message to the UI.
   // Full sync normally warms this cache, while a new group member can be
   // resolved in the background without blocking later events.
+  const isLineSystemSender = Boolean(
+    from && canonicalTalkIdentityMid(from) === LINE_SYSTEM_ACCOUNT_MID,
+  );
   const sender = isMine
     ? null
-    : talkSenderCache.get(from) ?? (from ? { id: from, name: "LINE User", avatarUrl: "" } : null);
-  const shouldResolveSender = !isMine && Boolean(from)
-    && (!talkSenderCache.has(from) || !talkSenderProfileChecked.has(from));
+    : isLineSystemSender
+      ? { id: from, name: "LINE", avatarUrl: "" }
+      : talkSenderCache.get(from) ?? (from ? { id: from, name: "LINE User", avatarUrl: "" } : null);
+  const shouldResolveSender = !isMine && !isLineSystemSender && Boolean(from)
+    && (!talkSenderCache.has(from) || talkSenderProfileNeedsRefresh(from));
   let textValue: unknown = raw?.text;
   try { if (message?.text !== undefined) textValue = message.text; } catch { /* raw text fallback */ }
   const messageId = String(raw?.id ?? crypto.randomUUID());
@@ -2265,6 +3404,7 @@ async function handleSquareMessage(
   fallbackName = "",
   reactionStatus?: any,
 ): Promise<void> {
+  if (client !== next) return;
   const envelope = message?.raw ?? {};
   const raw = envelope?.message ?? envelope;
   if (!raw || typeof raw !== "object") return;
@@ -2322,6 +3462,7 @@ async function handleSquareMessage(
 }
 
 async function handleTalkOperation(next: LineClient, operation: any): Promise<void> {
+  if (client !== next) return;
   const type = canonicalTalkOperationType(operation?.type, LINEJS_VERSION);
   if (isLineServiceChatOperation(type)) {
     const revision = String(operation?.revision ?? "").trim();
@@ -2351,7 +3492,9 @@ async function handleTalkOperation(next: LineClient, operation: any): Promise<vo
       param2: param2 || undefined,
       param3: param3 || undefined,
     });
+    await ingestLineSystemMessage(next, operation?.message);
     void trackLineSystemAccount(next, `op:${type}`).catch(() => undefined);
+    return;
   } else if (type === "DUMMY") {
     void trackLineSystemAccount(next, `op:${type}`).catch(() => undefined);
   }
@@ -2359,7 +3502,7 @@ async function handleTalkOperation(next: LineClient, operation: any): Promise<vo
     // LINE sends this as param1=chat MID, param2=reader MID and
     // param3=the highest message id they have read. It is a peer event, not
     // the local mark-read request we send when opening a room.
-    const chatId = String(operation?.param1 ?? "").trim();
+    const chatId = canonicalTalkIdentityMid(String(operation?.param1 ?? "").trim());
     const readerMid = String(operation?.param2 ?? "").trim();
     const messageId = String(operation?.param3 ?? "").trim();
     const selfMid = midString(LineJsAdapter.profileMid(next));
@@ -2369,7 +3512,30 @@ async function handleTalkOperation(next: LineClient, operation: any): Promise<vo
     return;
   }
   if (type === "NOTIFIED_RECEIVED_CALL") {
-    callManager.rememberIncoming(parseIncomingCall(operation));
+    const incoming: any = parseIncomingCallForClient(next, operation);
+    callManager.rememberIncoming(incoming);
+
+    // Call UI should use the same identity/cache path as normal Talk messages.
+    // Never block the ringing prompt on profile resolution: emit cached data
+    // immediately when available, then refresh it in the background.
+    const callerMid = String(
+      incoming?.audio?.callerMid ?? incoming?.from ?? operation?.param1 ?? "",
+    ).trim();
+    const emitCallIdentity = (identity: SenderIdentity | null | undefined) => {
+      if (!identity || !callerMid) return;
+      emit({
+        type: "event.call.identity",
+        peer: callerMid,
+        name: identity.name,
+        avatarUrl: identity.avatarUrl,
+      });
+    };
+    emitCallIdentity(talkSenderCache.get(callerMid));
+    if (callerMid.startsWith("u")) {
+      void resolveTalkSenderInBackground(callerMid)
+        .then(emitCallIdentity)
+        .catch(() => undefined);
+    }
     return;
   }
   if (type === "CANCEL_CALL") {
@@ -2411,11 +3577,14 @@ async function handleTalkOperation(next: LineClient, operation: any): Promise<vo
     await handleTalkMessage(next, { raw, text: fallbackText }, raw, eventKind);
     return;
   }
+  // Decryption is asynchronous: a logout/account switch may have happened.
+  if (client !== next) return;
   const eventKind = type === "EDIT_MESSAGE" || type === "NOTIFIED_EDIT_MESSAGE" ? "edit" : "message";
   await handleTalkMessage(next, createTalkMessage(next, raw), raw, eventKind);
 }
 
 async function handleSquareOperation(next: LineClient, operation: any): Promise<void> {
+  if (client !== next) return;
   const type = operationTypeName(operation?.type, SQUARE_OPERATION_NAMES);
   const payload = operation?.payload ?? {};
   if (type === "NOTIFIED_DESTROY_MESSAGE") {
@@ -2452,16 +3621,17 @@ async function handleSquareOperation(next: LineClient, operation: any): Promise<
   );
 }
 
-async function consumeTalkEvents(next: LineClient, signal: AbortSignal, push: any): Promise<void> {
+async function consumeTalkEvents(next: LineClient, signal: AbortSignal, push: any, dispatcher: OrderedOperationDispatcher<any>): Promise<void> {
   while (!signal.aborted && client === next) {
     const stream = LineJsAdapter.pushStream(push, "op");
     try {
       for await (const operation of stream as AsyncIterable<any>) {
         if (signal.aborted || client !== next) return;
-        lastTalkPushEventAt = Date.now();
-        void handleTalkOperation(next, operation).catch((error) => {
+        try {
+          await dispatcher.dispatch(operation);
+        } catch (error) {
           if (!signal.aborted) emit({ type: "event.message.error", source: "talk", error: errorInfo(error).message });
-        });
+        }
       }
     } catch (error) {
       if (!signal.aborted) emit({ type: "event.transport.error", transport: "talk", error: errorInfo(error).message });
@@ -2473,16 +3643,17 @@ async function consumeTalkEvents(next: LineClient, signal: AbortSignal, push: an
   }
 }
 
-async function consumeSquareEvents(next: LineClient, signal: AbortSignal, push: any): Promise<void> {
+async function consumeSquareEvents(next: LineClient, signal: AbortSignal, push: any, dispatcher: OrderedOperationDispatcher<any>): Promise<void> {
   while (!signal.aborted && client === next) {
     const stream = LineJsAdapter.pushStream(push, "sq");
     try {
       for await (const operation of stream as AsyncIterable<any>) {
         if (signal.aborted || client !== next) return;
-        lastSquarePushEventAt = Date.now();
-        void handleSquareOperation(next, operation).catch((error) => {
+        try {
+          await dispatcher.dispatch(operation);
+        } catch (error) {
           if (!signal.aborted) emit({ type: "event.message.error", source: "openchat", error: errorInfo(error).message });
-        });
+        }
       }
     } catch (error) {
       if (!signal.aborted) emit({ type: "event.transport.error", transport: "openchat", error: errorInfo(error).message });
@@ -2494,72 +3665,67 @@ async function consumeSquareEvents(next: LineClient, signal: AbortSignal, push: 
   }
 }
 
-function isPushHealthy(): boolean {
-  return pushHealthy && pushConnectedSince > 0 && Date.now() - pushConnectedSince >= 2_000;
+function needsPollingFallback(): boolean {
+  return shouldUsePollingFallback({
+    healthy: pushHealthy,
+    connectedSince: pushConnectedSince,
+    fallbackNotBefore: pushFallbackNotBefore,
+    now: Date.now(),
+  });
 }
 
-function isTalkPushFresh(): boolean {
-  return isPushHealthy() && lastTalkPushEventAt > 0 && Date.now() - lastTalkPushEventAt < 15_000;
-}
-
-function isSquarePushFresh(): boolean {
-  return isPushHealthy() && lastSquarePushEventAt > 0 && Date.now() - lastSquarePushEventAt < 15_000;
-}
-
-async function consumeTalkPolling(next: LineClient, signal: AbortSignal): Promise<void> {
-  while (!signal.aborted && client === next) {
-    if (isTalkPushFresh()) {
-      await waitForSignal(5_000, signal);
-      continue;
-    }
-    const polling = LineJsAdapter.createPolling(next) as any;
-    try {
-      for await (const operation of polling._listenTalkEvents({
-        signal,
-        pollingInterval: 1_000,
-        onError: (error: unknown) => {
-          if (!signal.aborted) emit({ type: "event.transport.error", transport: "talk-poll", error: errorInfo(error).message });
-        },
-      }) as AsyncIterable<any>) {
-        if (signal.aborted || client !== next) return;
-        if (isTalkPushFresh()) break;
-        void handleTalkOperation(next, operation).catch((error) => {
-          if (!signal.aborted) emit({ type: "event.message.error", source: "talk-poll", error: errorInfo(error).message });
-        });
+async function consumeTalkPolling(next: LineClient, signal: AbortSignal, polling: LineyPollingSession, dispatcher: OrderedOperationDispatcher<any>): Promise<void> {
+  await runFallbackPolling({
+    signal,
+    shouldPoll: () => client === next && needsPollingFallback(),
+    createStream: (cycleSignal) => polling.talk({
+      signal: cycleSignal,
+      pollingInterval: 1_000,
+      onError: (error: unknown) => {
+        // LINEJS catches polling errors internally and otherwise retries every
+        // pollingInterval. Re-throw here so our supervisor can apply bounded
+        // exponential backoff/circuit breaking instead of opening sockets in
+        // a tight failure loop.
+        if (!signal.aborted && !cycleSignal.aborted) throw error;
+      },
+    }),
+    onEvent: async (operation) => {
+      if (signal.aborted || client !== next) return;
+      try {
+        await dispatcher.dispatch(operation);
+      } catch (error) {
+        if (!signal.aborted) emit({ type: "event.message.error", source: "talk-poll", error: errorInfo(error).message });
       }
-    } catch (error) {
+    },
+    onError: (error) => {
       if (!signal.aborted) emit({ type: "event.transport.error", transport: "talk-poll", error: errorInfo(error).message });
-    }
-    if (!signal.aborted && client === next && !isTalkPushFresh()) await waitForSignal(1_000, signal);
-  }
+    },
+  });
 }
 
-async function consumeSquarePolling(next: LineClient, signal: AbortSignal): Promise<void> {
-  while (!signal.aborted && client === next) {
-    if (isSquarePushFresh()) {
-      await waitForSignal(5_000, signal);
-      continue;
-    }
-    const polling = LineJsAdapter.createPolling(next) as any;
-    try {
-      for await (const operation of polling._listenSquareEvents({
-        signal,
-        pollingInterval: 1_000,
-        onError: (error: unknown) => {
-          if (!signal.aborted) emit({ type: "event.transport.error", transport: "openchat-poll", error: errorInfo(error).message });
-        },
-      }) as AsyncIterable<any>) {
-        if (signal.aborted || client !== next) return;
-        if (isSquarePushFresh()) break;
-        void handleSquareOperation(next, operation).catch((error) => {
-          if (!signal.aborted) emit({ type: "event.message.error", source: "openchat-poll", error: errorInfo(error).message });
-        });
+async function consumeSquarePolling(next: LineClient, signal: AbortSignal, polling: LineyPollingSession, dispatcher: OrderedOperationDispatcher<any>): Promise<void> {
+  await runFallbackPolling({
+    signal,
+    shouldPoll: () => client === next && needsPollingFallback(),
+    createStream: (cycleSignal) => polling.square({
+      signal: cycleSignal,
+      pollingInterval: 1_000,
+      onError: (error: unknown) => {
+        if (!signal.aborted && !cycleSignal.aborted) throw error;
+      },
+    }),
+    onEvent: async (operation) => {
+      if (signal.aborted || client !== next) return;
+      try {
+        await dispatcher.dispatch(operation);
+      } catch (error) {
+        if (!signal.aborted) emit({ type: "event.message.error", source: "openchat-poll", error: errorInfo(error).message });
       }
-    } catch (error) {
+    },
+    onError: (error) => {
       if (!signal.aborted) emit({ type: "event.transport.error", transport: "openchat-poll", error: errorInfo(error).message });
-    }
-    if (!signal.aborted && client === next && !isSquarePushFresh()) await waitForSignal(1_000, signal);
-  }
+    },
+  });
 }
 
 async function supervisePush(next: LineClient, signal: AbortSignal, push: any): Promise<void> {
@@ -2578,8 +3744,6 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
         await LineJsAdapter.initializePushConnection(push, 1, [3, 8]);
         pushHealthy = true;
         pushConnectedSince = Date.now();
-        lastTalkPushEventAt = pushConnectedSince;
-        lastSquarePushEventAt = pushConnectedSince;
         emit({ type: "event.transport", transport: "line", state: "connected" });
         await LineJsAdapter.readPush(push, [3, 8]);
         // A connection that drops immediately is not healthy. Increase the
@@ -2618,6 +3782,15 @@ function attachEvents(next: LineClient) {
   listenerAbort = new AbortController();
   const signal = listenerAbort.signal;
   const push = LineJsAdapter.push(next) as any;
+  // One serial lane per LINE transport family, shared between PUSH and REST
+  // fallback. Backpressure keeps decrypt/write order and bounds in-flight work.
+  const active = () => !signal.aborted && client === next;
+  const talkDispatcher = new OrderedOperationDispatcher(active,
+    (operation: any) => talkOperationIdentity(operation, canonicalTalkOperationType(operation?.type, LINEJS_VERSION)),
+    (operation: any) => handleTalkOperation(next, operation));
+  const squareDispatcher = new OrderedOperationDispatcher(active,
+    (operation: any) => squareOperationIdentity(operation, operationTypeName(operation?.type, SQUARE_OPERATION_NAMES)),
+    (operation: any) => handleSquareOperation(next, operation));
 
   LineJsAdapter.on(next, "update:authtoken", () => {
     void persistCredential(next).catch(() => undefined);
@@ -2627,15 +3800,30 @@ function attachEvents(next: LineClient) {
   // decryption/handler error and silently stops delivering every later event.
   // Consuming the raw streams lets us isolate each operation and supervise
   // the HTTP/2 push connection independently.
-  LineJsAdapter.renewPushStreams(push);
-  void consumeTalkEvents(next, signal, push);
-  void consumeSquareEvents(next, signal, push);
-  void consumeSystemAccountTracking(next, signal);
-  if (process.env.LINEY_DISABLE_EVENT_POLLING !== "1") {
-    void consumeTalkPolling(next, signal);
-    void consumeSquarePolling(next, signal);
+  const transport = eventTransportPolicy(process.env);
+  // Health belongs to this authenticated session. Do not let a previous
+  // listener's state make a new session look connected.
+  pushHealthy = false;
+  pushConnectedSince = 0;
+  pushFallbackNotBefore = transport.pushEnabled ? Date.now() + PUSH_STARTUP_GRACE_MS : 0;
+  if (transport.pushEnabled) {
+    LineJsAdapter.renewPushStreams(push);
+    void consumeTalkEvents(next, signal, push, talkDispatcher);
+    void consumeSquareEvents(next, signal, push, squareDispatcher);
+    void supervisePush(next, signal, push);
+  } else {
+    pushHealthy = false;
+    pushConnectedSince = 0;
   }
-  void supervisePush(next, signal, push);
+  void consumeSystemAccountTracking(next, signal);
+  if (transport.pollingEnabled) {
+    // Keep one LINEJS Polling instance for the authenticated session. Its sync
+    // revision/token state must survive push recovery cycles; recreating it
+    // would restart fallback sync from revision/token zero.
+    const polling = LineJsAdapter.createPollingSession(next);
+    void consumeTalkPolling(next, signal, polling, talkDispatcher);
+    void consumeSquarePolling(next, signal, polling, squareDispatcher);
+  }
 }
 
 async function finishAuthentication(next: LineClient, restored: boolean) {
@@ -2644,27 +3832,34 @@ async function finishAuthentication(next: LineClient, restored: boolean) {
   // rooms here held the entire Tauri login screen in "starting" state.
   const profile: any = await next.getMyProfile();
   const account = await activateAccount(profile);
+  database.consolidateTalkIdentityAliases(ACCOUNT_ID);
   client = next;
   currentProfile = normalize(profile);
   database.upsertAccount(ACCOUNT_ID, {
     mid: String(profile?.mid ?? ""),
     displayName: String(profile?.displayName ?? ""),
   });
+  prunePersistentCache(true);
   callManager.attach(next);
   attachEvents(next);
-  const credentialPersisted = await persistCredential(next);
+  const credentialStorage = await persistCredential(next);
   emit({
     type: "auth.ready",
     restored,
     clientIdentity: clientIdentity(),
     profile: normalize(profile),
     authTokenPresent: Boolean(LineJsAdapter.authToken(next)),
-    storage: credentialPersisted ? "wallet" : "session-only",
+    storage: credentialStorage,
     accountChanged: account.changed && !account.migrated,
   });
-  // Full sync is intentionally opt-in on login. It can touch many rooms and
-  // media previews; running it at every desktop start made the native UI hot.
-  if (process.env.LINEY_FULL_SYNC_ON_LOGIN === "1" && process.env.LINEY_LIGHT_START !== "1") {
+  // Run Full Sync for a newly authenticated session or when this account has
+  // never completed one. A normal restored session with a completed sync stays
+  // cache-first and does not repeat the expensive account-wide pass.
+  const previousFullSync = database.getSyncState(ACCOUNT_ID, "account");
+  const shouldStartFullSync = !restored
+    || previousFullSync?.status !== "ready"
+    || process.env.LINEY_FULL_SYNC_ON_LOGIN === "1";
+  if (shouldStartFullSync && process.env.LINEY_LIGHT_START !== "1") {
     void startSync().catch(() => undefined);
   }
   void resumePendingOutbox();
@@ -2702,6 +3897,130 @@ async function startQrLogin(id: string) {
   } catch (error) {
     replyError(id, error);
   } finally {
+    loginInFlight = false;
+  }
+}
+
+async function importE2EEKeychainViaQr(id: string) {
+  const activeClient = client;
+  const targetMid = String(currentProfile?.mid ?? "").trim();
+  if (!activeClient || !targetMid) {
+    replyError(id, new Error("ต้องเชื่อมต่อบัญชี LINE ก่อนนำเข้าคีย์"));
+    return;
+  }
+  if (loginInFlight) {
+    replyError(id, new Error("มีการเข้าสู่ระบบอีกครั้งกำลังทำงานอยู่"));
+    return;
+  }
+
+  loginInFlight = true;
+  const generation = authGeneration;
+  let temporary: ReturnType<typeof createTemporaryQrStorage> | null = null;
+  try {
+    const originalData: Record<string, unknown> = { ...store.getAll() };
+    const refreshToken = await store.get("refreshToken");
+    if (typeof refreshToken === "string" && refreshToken) {
+      originalData.refreshToken = refreshToken;
+    }
+    temporary = createTemporaryQrStorage(originalData);
+    const identity = clientIdentity();
+    const next = await loginWithBrandedQR(
+      {
+        onReceiveQRUrl(url) {
+          emit({ type: "auth.qr", url });
+        },
+        onPincodeRequest(pin) {
+          emit({ type: "auth.pin", pin });
+        },
+      },
+      {
+        device: identity.device,
+        storage: temporary.storage,
+      },
+      identity,
+    );
+    if (generation !== authGeneration || client !== activeClient) {
+      throw new Error("เซสชัน LINE เปลี่ยนระหว่างนำเข้าคีย์ กรุณาลองใหม่");
+    }
+
+    const profile: any = await next.getMyProfile();
+    const importedMid = String(profile?.mid ?? "").trim();
+    if (!importedMid || importedMid !== targetMid) {
+      throw new Error("QR ที่สแกนต้องเป็นบัญชี LINE เดียวกับที่เปิดอยู่บน Desktop");
+    }
+
+    const snapshot = temporary.snapshot();
+    const aliasKey = `e2eeKeys:${targetMid}`;
+    const alias = snapshot[aliasKey];
+    const activeKey = alias && typeof alias === "object"
+      ? alias as Record<string, unknown>
+      : null;
+    const selectedKeyId = String(activeKey?.keyId ?? "").trim();
+    const selectedKey = selectedKeyId ? snapshot[`e2eeKeys:${selectedKeyId}`] : undefined;
+    const selectedRecord = selectedKey && typeof selectedKey === "object"
+      ? selectedKey as Record<string, unknown>
+      : null;
+    if (
+      !selectedKeyId
+      || !selectedRecord
+      || typeof activeKey?.privKey !== "string"
+      || typeof activeKey?.pubKey !== "string"
+      || activeKey.privKey !== selectedRecord.privKey
+      || activeKey.pubKey !== selectedRecord.pubKey
+      || String(selectedRecord.keyId ?? "") !== selectedKeyId
+    ) {
+      throw new Error("LINE ไม่ได้ส่ง keychain ที่เลือกกลับมา กรุณาสแกน QR ใหม่จากมือถือ");
+    }
+
+    const keyGenerationCount = Object.entries(snapshot).filter(([key, value]) =>
+      key.startsWith("e2eeKeys:")
+      && key !== aliasKey
+      && value !== null
+      && typeof value === "object"
+      && typeof (value as Record<string, unknown>).privKey === "string"
+      && typeof (value as Record<string, unknown>).pubKey === "string"
+    ).length;
+    if (keyGenerationCount < 1) {
+      throw new Error("ไม่พบคีย์ E2EE ที่นำเข้า");
+    }
+
+    // Write key-id entries before the account alias so a partial storage error
+    // can never activate an incomplete keychain. Keep all older generations.
+    const changedEntries = Object.entries(snapshot).filter(([key, value]) => {
+      const oldValue = originalData[key];
+      return JSON.stringify(oldValue) !== JSON.stringify(value);
+    });
+    changedEntries.sort(([left], [right]) => {
+      if (left === aliasKey) return 1;
+      if (right === aliasKey) return -1;
+      return left.localeCompare(right);
+    });
+    for (const [key, value] of changedEntries) {
+      await store.set(key, value as any);
+    }
+    const savedAlias = await store.get(aliasKey);
+    const savedKey = savedAlias && typeof savedAlias === "object"
+      ? savedAlias as Record<string, unknown>
+      : null;
+    if (
+      String(savedKey?.keyId ?? "") !== selectedKeyId
+      || savedKey?.privKey !== activeKey?.privKey
+      || savedKey?.pubKey !== activeKey?.pubKey
+    ) {
+      throw new Error("บันทึก keychain ลงเครื่องไม่สำเร็จ");
+    }
+
+    bindClientStorage(next, store);
+    await finishAuthentication(next, false);
+    emit({
+      id,
+      ok: true,
+      result: { authenticated: true, keychainImported: true, generations: keyGenerationCount },
+    });
+  } catch (error) {
+    replyError(id, error);
+  } finally {
+    if (temporary) await temporary.clear().catch(() => undefined);
     loginInFlight = false;
   }
 }
@@ -2872,23 +4191,15 @@ async function sendRemoteMessage(record: OutboxRecord): Promise<unknown> {
     const chat: any = await LineJsAdapter.getSquareChat(client, record.chatId);
     return chat.sendMessage(options);
   }
-  try {
-    return await LineJsAdapter.sendTalkMessage(client, {
-      to: record.chatId,
-      ...options,
-      // LINE stickers carry their payload in contentMetadata.  Encrypting an
-      // empty text body makes LINEJS create an invalid E2EE chunk instead.
-      e2ee: record.contentType === 7 ? false : true,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!message.includes("E2EE_RETRY_PLAIN")) throw error;
-    return LineJsAdapter.sendTalkMessage(client, {
-      to: record.chatId,
-      ...options,
-      e2ee: false,
-    });
-  }
+  // Leave normal text sends unspecified so LINEJS can negotiate the recipient's
+  // E2EE requirement and retry encrypted when LINE requires it. Forcing E2EE
+  // can fail before the request when recipient key metadata is not available.
+  return LineJsAdapter.sendTalkMessage(client, {
+    to: record.chatId,
+    ...options,
+    // Stickers carry their payload in contentMetadata; an empty E2EE body is invalid.
+    ...(record.contentType === 7 ? { e2ee: false } : {}),
+  });
 }
 
 async function sendRemoteMedia(record: OutboxRecord, jobId: string, signal: AbortSignal): Promise<unknown> {
@@ -2934,6 +4245,7 @@ async function sendRemoteMedia(record: OutboxRecord, jobId: string, signal: Abor
 }
 
 async function sendOutbox(record: OutboxRecord): Promise<unknown> {
+  record = { ...record, chatId: canonicalTalkChatId(record.chatId, record.kind) };
   const sending: OutboxRecord = {
     ...record,
     status: "sending",
@@ -2973,12 +4285,13 @@ async function sendOutbox(record: OutboxRecord): Promise<unknown> {
       forgetOwnedSticker(String(metadata.STKPKGID ?? ""), String(metadata.STKID ?? ""));
     }
     const uncertain = isUncertainSendError(error);
+    const failureInfo = errorInfo(error);
     const failed: OutboxRecord = {
       ...sending,
       status: uncertain ? "unknown" : "failed",
       updatedAt: Date.now(),
       nextAttemptAt: Date.now() + retryDelayMs(sending.attempts),
-      lastError: errorInfo(error).message,
+      lastError: failureInfo.message,
     };
     database.saveOutbox(ACCOUNT_ID, failed);
     database.updateMessageStatus(ACCOUNT_ID, record.chatId, record.localId, failed.status);
@@ -2987,13 +4300,16 @@ async function sendOutbox(record: OutboxRecord): Promise<unknown> {
       localId: record.localId,
       chatId: record.chatId,
       status: failed.status,
-      retryable: isRetryableError(error),
+      retryable: failureInfo.retryable,
+      errorCode: failureInfo.code,
+      errorMessage: failureInfo.message,
     });
     throw error;
   }
 }
 
 async function sendMediaOutbox(record: OutboxRecord): Promise<unknown> {
+  record = { ...record, chatId: canonicalTalkChatId(record.chatId, record.kind) };
   const sending: OutboxRecord = {
     ...record,
     status: "sending",
@@ -3029,12 +4345,13 @@ async function sendMediaOutbox(record: OutboxRecord): Promise<unknown> {
     return result;
   } catch (error) {
     const uncertain = isUncertainSendError(error);
+    const failureInfo = errorInfo(error);
     const failed: OutboxRecord = {
       ...sending,
       status: uncertain ? "unknown" : "failed",
       updatedAt: Date.now(),
       nextAttemptAt: Date.now() + retryDelayMs(sending.attempts),
-      lastError: errorInfo(error).message,
+      lastError: failureInfo.message,
     };
     database.saveOutbox(ACCOUNT_ID, failed);
     database.updateMessageStatus(ACCOUNT_ID, record.chatId, record.localId, failed.status);
@@ -3043,7 +4360,9 @@ async function sendMediaOutbox(record: OutboxRecord): Promise<unknown> {
       localId: record.localId,
       chatId: record.chatId,
       status: failed.status,
-      retryable: isRetryableError(error),
+      retryable: failureInfo.retryable,
+      errorCode: failureInfo.code,
+      errorMessage: failureInfo.message,
       contentType: record.contentType,
     });
     throw error;
@@ -3051,9 +4370,10 @@ async function sendMediaOutbox(record: OutboxRecord): Promise<unknown> {
 }
 
 async function reconcileUnknownOutbox(record: OutboxRecord): Promise<string | undefined> {
+  record = { ...record, chatId: canonicalTalkChatId(record.chatId, record.kind) };
   const list = record.kind === "openchat"
     ? await fetchOpenChatMessagesNormalized(record.chatId, 100)
-    : await fetchTalkMessagesNormalized(record.chatId, 100);
+    : await fetchTalkMessagesWithFallback(record.chatId, 100);
   const matches = list.filter((message) => echoMatches(record, {
     chatId: record.chatId,
     kind: record.kind,
@@ -3341,19 +4661,46 @@ async function fetchUiAssetDataUrl(rawUrl: string): Promise<{ dataUrl: string; m
 }
 
 function htmlMeta(html: string, prop: string): string | undefined {
-  const pattern = new RegExp(
-    `<meta[^>]+(?:property|name)=["']${prop}["'][^>]*content=["']([^"']*)["'][^>]*>|<meta[^>]+content=["']([^"']*)["'][^>]*(?:property|name)=["']${prop}["'][^>]*>`,
-    "i",
-  );
-  const match = pattern.exec(html);
-  const value = match ? (match[1] ?? match[2] ?? "") : "";
-  return value ? decodeHtmlEntities(value).trim() : undefined;
+  const expected = prop.trim().toLowerCase();
+  for (const tagMatch of html.matchAll(/<meta\b[^>]*>/gi)) {
+    const attributes = new Map<string, string>();
+    const tag = tagMatch[0].replace(/^<meta\b|\/?>$/gi, "");
+    for (const match of tag.matchAll(/([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>]+)))?/g)) {
+      const name = match[1].toLowerCase();
+      if (!attributes.has(name)) {
+        attributes.set(name, decodeHtmlEntities(match[2] ?? match[3] ?? match[4] ?? ""));
+      }
+    }
+    const name = String(attributes.get("property") ?? attributes.get("name") ?? "").trim().toLowerCase();
+    if (name !== expected) continue;
+    const value = attributes.get("content")?.trim();
+    if (value) return value;
+  }
+  return undefined;
 }
 
 function decodeHtmlEntities(value: string): string {
-  return value
-    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ");
+  const namedEntities: Record<string, string> = {
+    amp: "&", apos: "'", copy: "©", gt: ">", hellip: "…", ldquo: "“", lsquo: "‘",
+    lt: "<", mdash: "—", nbsp: " ", ndash: "–", quot: '"', rdquo: "”", reg: "®", rsquo: "’", trade: "™",
+  };
+  let decoded = value;
+  for (let pass = 0; pass < 8; pass++) {
+    const next = decoded
+      .replace(/&#(?:x([\da-f]{1,8})|(\d{1,10}));/gi, (_match, hex: string | undefined, decimal: string | undefined) => {
+        const codePoint = Number.parseInt(hex ?? decimal ?? "", hex ? 16 : 10);
+        return Number.isInteger(codePoint)
+          && codePoint > 0
+          && codePoint <= 0x10ffff
+          && !(codePoint >= 0xd800 && codePoint <= 0xdfff)
+          ? String.fromCodePoint(codePoint)
+          : "\uFFFD";
+      })
+      .replace(/&([a-z][a-z0-9]+);/gi, (match, entity: string) => namedEntities[entity.toLowerCase()] ?? match);
+    if (next === decoded) break;
+    decoded = next;
+  }
+  return decoded;
 }
 
 function ogAbsolute(value: string | undefined, base: URL): string | undefined {
@@ -3362,46 +4709,84 @@ function ogAbsolute(value: string | undefined, base: URL): string | undefined {
 }
 
 async function fetchLinkPreview(rawUrl: string): Promise<Record<string, unknown>> {
-  let url = new URL(rawUrl);
-  if (!["http:", "https:"].includes(url.protocol)) throw new Error("link must be http(s)");
-  let response: Response | undefined;
-  for (let redirect = 0; redirect <= 5; redirect++) {
-    // Validate every hop. Checking only the initial URL lets an attacker use
-    // a public redirector to reach localhost or a private service.
-    await assertPublicLinkUrl(url);
-    response = await fetch(url, {
-      redirect: "manual",
-      signal: AbortSignal.timeout(12_000),
-      headers: { accept: "text/html,application/xhtml+xml,*/*;q=0.8", "user-agent": "Liney/0.1 (+link preview)" },
-    });
-    if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get("location");
-      if (!location || redirect === 5) throw new Error("link redirect is invalid");
-      url = new URL(location, url);
-      continue;
+  const initialUrl = new URL(rawUrl);
+  if (!["http:", "https:"].includes(initialUrl.protocol)) throw new Error("link must be http(s)");
+  // The v3 key refreshes previews saved before nested entity decoding.
+  const cacheUrl = "v" + LINK_PREVIEW_CACHE_VERSION + ":" + initialUrl.toString();
+  const cached = database.getLinkPreview(ACCOUNT_ID, cacheUrl, LINK_PREVIEW_CACHE_TTL_MS);
+  if (cached) return cached;
+
+  const requestKey = `${ACCOUNT_ID}:${cacheUrl}`;
+  const failureUntil = linkPreviewFailureUntil.get(requestKey) ?? 0;
+  if (failureUntil > Date.now()) throw new Error("link preview temporarily unavailable");
+  if (failureUntil) linkPreviewFailureUntil.delete(requestKey);
+
+  const existing = linkPreviewInflight.get(requestKey);
+  if (existing) return existing;
+
+  const task = (async () => {
+    let url = initialUrl;
+    let response: Response | undefined;
+    for (let redirect = 0; redirect <= 5; redirect++) {
+      // Validate every hop. Checking only the initial URL lets an attacker use
+      // a public redirector to reach localhost or a private service.
+      await assertPublicLinkUrl(url);
+      response = await fetch(url, {
+        redirect: "manual",
+        signal: AbortSignal.timeout(12_000),
+        headers: { accept: "text/html,application/xhtml+xml,*/*;q=0.8", "user-agent": "Liney/0.1 (+link preview)" },
+      });
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get("location");
+        if (!location || redirect === 5) throw new Error("link redirect is invalid");
+        url = new URL(location, url);
+        continue;
+      }
+      break;
     }
-    break;
+    if (!response?.ok) throw new Error(`link fetch failed (${response?.status ?? "network"})`);
+    const declared = Number(response.headers.get("content-length") ?? 0);
+    if (Number.isFinite(declared) && declared > 3 * 1024 * 1024) throw new Error("link page exceeds 3 MB");
+    const text = await readResponseTextLimited(response, 3 * 1024 * 1024);
+
+    const titleText = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(text)?.[1];
+    const title = htmlMeta(text, "og:title")
+      ?? htmlMeta(text, "twitter:title")
+      ?? (titleText ? decodeHtmlEntities(titleText.replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ").trim() : undefined);
+    const description =
+      htmlMeta(text, "og:description") ??
+      htmlMeta(text, "description") ??
+      htmlMeta(text, "twitter:description");
+    const image = ogAbsolute(
+      htmlMeta(text, "og:image:secure_url")
+        ?? htmlMeta(text, "og:image")
+        ?? htmlMeta(text, "og:image:url")
+        ?? htmlMeta(text, "twitter:image"),
+      url,
+    );
+    const siteName = htmlMeta(text, "og:site_name") ?? new URL(url).hostname;
+    const preview: Record<string, unknown> = {
+      url: new URL(url).toString(),
+      title: (title ?? siteName ?? "").slice(0, 300),
+      description: (description ?? "").slice(0, 500) || undefined,
+      image,
+      siteName: siteName ?? "",
+    };
+    database.saveLinkPreview(ACCOUNT_ID, cacheUrl, preview, LINK_PREVIEW_CACHE_MAX_ENTRIES);
+    linkPreviewFailureUntil.delete(requestKey);
+    return preview;
+  })();
+
+  linkPreviewInflight.set(requestKey, task);
+  try {
+    return await task;
+  } catch (error) {
+    linkPreviewFailureUntil.set(requestKey, Date.now() + LINK_PREVIEW_FAILURE_TTL_MS);
+    trimMapOldest(linkPreviewFailureUntil, 256);
+    throw error;
+  } finally {
+    linkPreviewInflight.delete(requestKey);
   }
-  if (!response?.ok) throw new Error(`link fetch failed (${response?.status ?? "network"})`);
-  const declared = Number(response.headers.get("content-length") ?? 0);
-  if (Number.isFinite(declared) && declared > 3 * 1024 * 1024) throw new Error("link page exceeds 3 MB");
-  const text = await readResponseTextLimited(response, 3 * 1024 * 1024);
-
-  const title = htmlMeta(text, "og:title") ?? /<title[^>]*>([^<]*)<\/title>/i.exec(text)?.[1]?.trim();
-  const description =
-    htmlMeta(text, "og:description") ??
-    htmlMeta(text, "description") ??
-    htmlMeta(text, "twitter:description");
-  const image = ogAbsolute(htmlMeta(text, "og:image") ?? htmlMeta(text, "twitter:image"), url);
-  const siteName = htmlMeta(text, "og:site_name") ?? new URL(url).hostname;
-
-  return {
-    url: new URL(url).toString(),
-    title: (title ?? siteName ?? "").slice(0, 300),
-    description: (description ?? "").slice(0, 500) || undefined,
-    image,
-    siteName: siteName ?? "",
-  };
 }
 
 function isCacheReadMethod(method: string): boolean {
@@ -3429,7 +4814,7 @@ async function serveCachedRequest(id: string, method: string, request: any): Pro
       emit({ id, ok: true, result: synced });
       return true;
     }
-    const cached = database.listConversationChats(ACCOUNT_ID);
+    const cached = collapseTalkIdentityAliases(database.listConversationChats(ACCOUNT_ID));
     if (!cached.length) return false;
     emit({ id, ok: true, result: cached });
     if (client) refreshChatListInBackground("talk", loadChatsList);
@@ -3443,7 +4828,7 @@ async function serveCachedRequest(id: string, method: string, request: any): Pro
       emit({ id, ok: true, result: synced });
       return true;
     }
-    const cached = database.listChats(ACCOUNT_ID, "dm");
+    const cached = collapseTalkIdentityAliases(database.listChats(ACCOUNT_ID, "dm"));
     if (!cached.length) return false;
     emit({ id, ok: true, result: cached });
     if (client) refreshChatListInBackground("friends", loadFriendsList);
@@ -3469,37 +4854,44 @@ async function serveCachedRequest(id: string, method: string, request: any): Pro
   // a push operation was missed. Explicit refresh must bypass cache so the
   // authenticated handler can reconcile against LINE history.
   if (request?.params?.refresh === true) return false;
-  const chatId = String(request?.params?.chatId ?? "").trim();
-  if (!chatId) return false;
+  const requestedChatId = String(request?.params?.chatId ?? "").trim();
+  if (!requestedChatId) return false;
   const kind = String(request?.params?.kind ?? "talk");
+  const chatId = canonicalTalkChatId(requestedChatId, kind);
   const limit = Math.max(1, Math.min(Number(request?.params?.limit ?? 50), MESSAGE_LIST_RESULT_LIMIT));
   const openchat = kind === "openchat";
   const cacheKey = `${openchat ? "openchat" : "talk"}:${chatId}`;
   const transient = preSyncedMessages.get(cacheKey);
   if (transient) {
-    preSyncedMessages.delete(cacheKey);
     const visible = transient.filter((message: any) => !database.isMessageHidden(
       ACCOUNT_ID,
       chatId,
       openchat ? "openchat" : chatKindFor(chatId, false),
       String(message?.id ?? ""),
     ));
-    const result = client
-      ? await recoverMissingStickerMetadata(chatId, openchat, visible.slice(-limit), limit)
-      : decorateStoredMessages(visible.slice(-limit));
-    emit({ id, ok: true, result });
-    return true;
+    if (openchat || !client || historySnapshotCoversSidebar(chatId, visible)) {
+      preSyncedMessages.delete(cacheKey);
+      const result = client
+        ? await recoverMissingStickerMetadata(chatId, openchat, visible.slice(-limit), limit)
+        : decorateStoredMessages(visible.slice(-limit));
+      emit({ id, ok: true, result });
+      return true;
+    }
+    // Empty or stale transient snapshots are misses when sidebar metadata
+    // proves activity. Let the authenticated path exercise every history route.
+    preSyncedMessages.delete(cacheKey);
   }
 
   const stored = database.listMessages(ACCOUNT_ID, chatId, limit);
-  if (!stored.length) return false;
-  // Do not make the first usable cached response wait for a profile request.
-  // Authenticated refreshes can enrich the same rows on a later request/event.
-  const result = client
-    ? await recoverMissingStickerMetadata(chatId, openchat, await enrichStoredTalkSenders(stored), limit)
-    : decorateStoredMessages(stored);
+  if (!stored.length || (client && !openchat && !historySnapshotCoversSidebar(chatId, stored))) return false;
+  // SQLite is the hot path: render immediately, then repair optional sender /
+  // legacy sticker metadata in a bounded background task. A cache hit must
+  // never wait on LINE RPCs just because the session is online.
+  const result = decorateStoredMessages(stored);
   emit({ id, ok: true, result });
-  if (client) refreshChatListInBackground(openchat ? "openchat" : "talk", openchat ? loadOpenChatList : loadChatsList);
+  enrichCachedMessagesInBackground(chatId, openchat, stored, limit);
+  // Message reads must not refresh the whole sidebar. Push/delta sync owns
+  // conversation metadata; coupling the two creates a render/request loop.
   return true;
 }
 
@@ -3552,6 +4944,7 @@ async function handle(request: any) {
     const features = ["talk", "openchat", "media", "asset-proxy", "e2ee", "session-restore", "history-sqlite", "outbox", "talk-read-range", "e2ee-media"];
     if (callStatus.enabled) features.push("call-audio-1to1");
     if (callStatus.incomingAnswer) features.push("call-audio-incoming");
+    features.push("album-read");
     emit({
       id,
       ok: true,
@@ -3569,6 +4962,11 @@ async function handle(request: any) {
         call: callStatus,
       },
     });
+    return;
+  }
+
+  if (method === "auth.e2ee.qr_import") {
+    void importE2EEKeychainViaQr(id);
     return;
   }
 
@@ -3609,6 +5007,11 @@ async function handle(request: any) {
 
   if (method === "call.devices") {
     emit({ id, ok: true, result: callManager.devices });
+    return;
+  }
+
+  if (method === "call.screenTargets") {
+    emit({ id, ok: true, result: callManager.screenShareTargets });
     return;
   }
 
@@ -3661,6 +5064,29 @@ async function handle(request: any) {
   }
 
   try {
+    // Moa album operations are opt-in and read-only; they never run at startup.
+    if (method === "album.list") {
+      const cursor = String(request?.params?.cursor ?? "").trim() || undefined;
+      emit({ id, ok: true, result: await LineJsAdapter.listLineAlbums(client, cursor) });
+      return;
+    }
+
+    if (method === "album.photos") {
+      const chatId = String(request?.params?.chatId ?? "").trim();
+      const albumId = String(request?.params?.albumId ?? "").trim();
+      const cursor = String(request?.params?.cursor ?? "").trim() || undefined;
+      emit({ id, ok: true, result: await LineJsAdapter.listLineAlbumPhotos(client, { chatId, albumId, cursor }) });
+      return;
+    }
+
+    if (method === "album.photo.preview") {
+      const chatId = String(request?.params?.chatId ?? "").trim();
+      const albumId = String(request?.params?.albumId ?? "").trim();
+      const oid = String(request?.params?.oid ?? "").trim();
+      emit({ id, ok: true, result: await LineJsAdapter.previewLineAlbumPhoto(client, { chatId, albumId, oid }) });
+      return;
+    }
+
     if (method === "profile.get") {
       const profile = currentProfile ?? await LineJsAdapter.getMyProfile(client);
       currentProfile = normalize(profile);
@@ -3672,6 +5098,30 @@ async function handle(request: any) {
       return;
     }
 
+    if (method === "chat.identity.merge") {
+      const aliasInput = String(request?.params?.aliasMid ?? "").trim();
+      const canonicalInput = String(request?.params?.canonicalMid ?? "").trim();
+      if (!/^u[0-9a-f]{32}$/i.test(aliasInput) || !/^u[0-9a-f]{32}$/i.test(canonicalInput)) {
+        throw new Error("เลือกแชตส่วนตัวสองรายการที่ต้องการรวม");
+      }
+      const aliasMid = aliasInput;
+      const canonicalMid = canonicalTalkIdentityMid(canonicalInput);
+      if (canonicalTalkIdentityMid(aliasMid) === canonicalMid) throw new Error("แชตสองรายการนี้ถูกรวมไว้แล้ว");
+      if (!database.mergeTalkIdentity(ACCOUNT_ID, aliasMid, canonicalMid)) {
+        throw new Error("ไม่พบแชตส่วนตัวทั้งสองรายการในข้อมูลเครื่องนี้");
+      }
+      for (const mid of new Set([aliasInput, canonicalInput, aliasMid, canonicalMid])) {
+        talkMessageBoxCache.delete(mid);
+        preSyncedMessages.delete("talk:" + mid);
+        liveMessageOverlayKeys.delete("talk:" + mid);
+      }
+      const chats = collapseTalkIdentityAliases(database.listConversationChats(ACCOUNT_ID));
+      database.upsertChats(ACCOUNT_ID, chats as DatabaseChat[]);
+      emit({ type: "event.chats.updated", kind: "talk", chats });
+      emit({ id, ok: true, result: { merged: true, canonicalMid } });
+      return;
+    }
+
     if (method === "chat.list" || method === "chats.list") {
       if (preSyncedChats) {
         const synced = preSyncedChats;
@@ -3679,7 +5129,7 @@ async function handle(request: any) {
         emit({ id, ok: true, result: synced });
         return;
       }
-      const cached = database.listConversationChats(ACCOUNT_ID);
+      const cached = collapseTalkIdentityAliases(database.listConversationChats(ACCOUNT_ID));
       if (cached.length) {
         emit({ id, ok: true, result: cached });
         refreshChatListInBackground("talk", loadChatsList);
@@ -3702,7 +5152,7 @@ async function handle(request: any) {
         emit({ id, ok: true, result: synced });
         return;
       }
-      const cached = database.listChats(ACCOUNT_ID, "dm");
+      const cached = collapseTalkIdentityAliases(database.listChats(ACCOUNT_ID, "dm"));
       if (cached.length) {
         // Cache may contain non-friend dm as well; better to show cache than fail offline
         emit({ id, ok: true, result: cached });
@@ -3872,9 +5322,22 @@ async function handle(request: any) {
       return;
     }
 
+    if (method === "message.history_candidates") {
+      const requestedChatId = String(request?.params?.chatId ?? "");
+      const chatId = canonicalTalkIdentityMid(requestedChatId);
+      if (!chatId) throw new Error("chatId is required");
+      emit({
+        id,
+        ok: true,
+        result: database.listTalkHistoryCandidates(ACCOUNT_ID, chatId, 1000),
+      });
+      return;
+    }
+
     if (method === "message.list" || method === "messages.list") {
-      const chatId = String(request?.params?.chatId ?? "");
+      const requestedChatId = String(request?.params?.chatId ?? "");
       const kind = String(request?.params?.kind ?? "talk");
+      const chatId = kind === "openchat" ? requestedChatId : canonicalTalkIdentityMid(requestedChatId);
       const limit = Math.max(1, Math.min(Number(request?.params?.limit ?? 50), MESSAGE_LIST_RESULT_LIMIT));
       const refresh = request?.params?.refresh === true;
       if (!chatId) throw new Error("chatId is required");
@@ -3887,7 +5350,7 @@ async function handle(request: any) {
         0,
       );
       const cached = refresh ? undefined : preSyncedMessages.get(cacheKey);
-      if (cached) {
+      if (cached && (kind === "openchat" || historySnapshotCoversSidebar(chatId, cached))) {
         preSyncedMessages.delete(cacheKey);
         const visibleCached = cached.filter((message: any) => !database.isMessageHidden(
           ACCOUNT_ID,
@@ -3904,11 +5367,12 @@ async function handle(request: any) {
         emit({ id, ok: true, result: withStickers });
         return;
       }
+      if (cached) preSyncedMessages.delete(cacheKey);
 
       const stored = refresh
         ? []
         : await enrichStoredTalkSenders(database.listMessages(ACCOUNT_ID, chatId, limit));
-      if (stored.length) {
+      if (stored.length && (kind === "openchat" || !client || historySnapshotCoversSidebar(chatId, stored))) {
         for (const message of stored) {
           if (message.raw && Number(message.contentType ?? 0) === 1) {
             rememberMessageMedia(message.raw, kind === "openchat");
@@ -3931,7 +5395,7 @@ async function handle(request: any) {
       }
       const result = kind === "openchat"
         ? await fetchOpenChatMessagesNormalized(chatId, limit)
-        : await fetchTalkMessagesNormalized(chatId, limit);
+        : await fetchTalkMessagesWithFallback(chatId, limit, refresh);
       const visibleResult = result.filter((message: any) => !database.isMessageHidden(
         ACCOUNT_ID,
         chatId,
@@ -3961,13 +5425,43 @@ async function handle(request: any) {
           });
         }
       }
-      emit({ id, ok: true, result: visibleResult.slice(-limit) });
+      const localFallback = refresh
+        ? decorateStoredMessages(storedBeforeRefresh)
+        : stored;
+      const shouldMergeLocal = localFallback.length > 0 && (
+        refresh
+        || (kind !== "openchat" && !historySnapshotCoversSidebar(chatId, visibleResult))
+      );
+      const responseMessages = shouldMergeLocal
+        ? mergeHistorySnapshots(localFallback, visibleResult)
+        : visibleResult;
+      emit({ id, ok: true, result: responseMessages.slice(-limit) });
+      return;
+    }
+
+    if (method === "message.history") {
+      const requestedChatId = String(request?.params?.chatId ?? "").trim();
+      const kind = String(request?.params?.kind ?? "talk");
+      if (kind === "openchat") throw new Error("Talk history pagination does not support OpenChat");
+      const chatId = canonicalTalkIdentityMid(requestedChatId);
+      const beforeMessageId = String(request?.params?.beforeMessageId ?? "").trim();
+      const beforeCreatedTime = Number(request?.params?.beforeCreatedTime);
+      const limit = Math.max(1, Math.min(Number(request?.params?.limit ?? 50), MESSAGE_LIST_RESULT_LIMIT));
+      if (!chatId || !beforeMessageId || !Number.isFinite(beforeCreatedTime) || beforeCreatedTime <= 0) {
+        throw new Error("chatId, beforeMessageId and beforeCreatedTime are required");
+      }
+      const page = await loadTalkMessagesBefore(chatId, {
+        messageId: beforeMessageId,
+        createdTime: beforeCreatedTime,
+      }, limit);
+      emit({ id, ok: true, result: page });
       return;
     }
 
     if (method === "message.read_state") {
-      const chatId = String(request?.params?.chatId ?? "").trim();
+      const requestedChatId = String(request?.params?.chatId ?? "").trim();
       const kind = String(request?.params?.kind ?? "talk");
+      const chatId = canonicalTalkChatId(requestedChatId, kind);
       const rawMessageIds = Array.isArray(request?.params?.messageIds) ? request.params.messageIds : [];
       const messageIds = [...new Set(rawMessageIds.map((value: unknown) => String(value ?? "").trim()).filter(Boolean))].slice(0, 200);
       if (!chatId) throw new Error("chatId is required");
@@ -3983,8 +5477,9 @@ async function handle(request: any) {
     }
 
     if (method === "message.react") {
-      const chatId = String(request?.params?.chatId ?? "").trim();
-      const kind = messageKind(request?.params?.kind, chatId);
+      const requestedChatId = String(request?.params?.chatId ?? "").trim();
+      const kind = messageKind(request?.params?.kind, requestedChatId);
+      const chatId = canonicalTalkChatId(requestedChatId, kind);
       const messageId = String(request?.params?.messageId ?? "").trim();
       if (!chatId) throw new Error("chatId is required");
       const result = await reactToMessage(chatId, kind, messageId, request?.params?.reaction);
@@ -3993,8 +5488,9 @@ async function handle(request: any) {
     }
 
     if (method === "message.delete_for_me" || method === "message.deleteForMe") {
-      const chatId = String(request?.params?.chatId ?? "").trim();
-      const kind = messageKind(request?.params?.kind, chatId);
+      const requestedChatId = String(request?.params?.chatId ?? "").trim();
+      const kind = messageKind(request?.params?.kind, requestedChatId);
+      const chatId = canonicalTalkChatId(requestedChatId, kind);
       const messageId = String(request?.params?.messageId ?? "").trim();
       if (!chatId || !messageId) throw new Error("chatId and messageId are required");
       database.hideMessageForMe(ACCOUNT_ID, chatId, kind, messageId);
@@ -4007,8 +5503,9 @@ async function handle(request: any) {
     }
 
     if (method === "message.unsend" || method === "message.cancel") {
-      const chatId = String(request?.params?.chatId ?? "").trim();
-      const kind = messageKind(request?.params?.kind, chatId);
+      const requestedChatId = String(request?.params?.chatId ?? "").trim();
+      const kind = messageKind(request?.params?.kind, requestedChatId);
+      const chatId = canonicalTalkChatId(requestedChatId, kind);
       const messageId = String(request?.params?.messageId ?? "").trim();
       if (!chatId) throw new Error("chatId is required");
       const result = await unsendMessage(chatId, kind, messageId);
@@ -4019,7 +5516,8 @@ async function handle(request: any) {
     if (method === "media.preview" || method === "media.preview.get") {
       const messageId = String(request?.params?.messageId ?? "");
       const kind = String(request?.params?.kind ?? "talk");
-      const chatId = String(request?.params?.chatId ?? "").trim() || undefined;
+      const requestedChatId = String(request?.params?.chatId ?? "").trim();
+      const chatId = requestedChatId ? canonicalTalkChatId(requestedChatId, kind) : undefined;
       if (!messageId) throw new Error("messageId is required");
       const dataUrl = await getImagePreviewDataUrl(
         messageId,
@@ -4032,8 +5530,9 @@ async function handle(request: any) {
     }
 
     if (method === "chat.markRead" || method === "chat.mark_read") {
-      const chatId = String(request?.params?.chatId ?? "");
+      const requestedChatId = String(request?.params?.chatId ?? "");
       const kind = String(request?.params?.kind ?? "talk");
+      const chatId = kind === "openchat" ? requestedChatId : canonicalTalkIdentityMid(requestedChatId);
       let messageId = String(request?.params?.messageId ?? "");
       if (!chatId) throw new Error("chatId is required");
 
@@ -4083,9 +5582,10 @@ async function handle(request: any) {
     }
 
     if (method === "message.send") {
-      const chatId = String(request?.params?.chatId ?? "");
+      const requestedChatId = String(request?.params?.chatId ?? "");
+      const kind = outboxKind(request?.params?.kind, requestedChatId);
+      const chatId = canonicalTalkChatId(requestedChatId, kind);
       const text = String(request?.params?.text ?? "");
-      const kind = outboxKind(request?.params?.kind, chatId);
       const localId = String(request?.params?.localId ?? crypto.randomUUID());
       const createdAt = Number(request?.params?.createdAt ?? Date.now());
       const relatedMessageId = String(request?.params?.relatedMessageId ?? "").trim() || undefined;
@@ -4130,8 +5630,9 @@ async function handle(request: any) {
     }
 
     if (method === "message.sendSticker") {
-      const chatId = String(request?.params?.chatId ?? "");
-      const kind = outboxKind(request?.params?.kind, chatId);
+      const requestedChatId = String(request?.params?.chatId ?? "");
+      const kind = outboxKind(request?.params?.kind, requestedChatId);
+      const chatId = canonicalTalkChatId(requestedChatId, kind);
       const localId = String(request?.params?.localId ?? crypto.randomUUID());
       const createdAt = Number(request?.params?.createdAt ?? Date.now());
       const packageId = String(request?.params?.packageId ?? "").trim();
@@ -4197,8 +5698,9 @@ async function handle(request: any) {
     }
 
     if (method === "message.sendEmoji") {
-      const chatId = String(request?.params?.chatId ?? "");
-      const kind = outboxKind(request?.params?.kind, chatId);
+      const requestedChatId = String(request?.params?.chatId ?? "");
+      const kind = outboxKind(request?.params?.kind, requestedChatId);
+      const chatId = canonicalTalkChatId(requestedChatId, kind);
       const localId = String(request?.params?.localId ?? crypto.randomUUID());
       const createdAt = Number(request?.params?.createdAt ?? Date.now());
       const productId = String(request?.params?.productId ?? "").trim();
@@ -4250,8 +5752,9 @@ async function handle(request: any) {
     }
 
     if (method === "media.send" || method === "media.image.send") {
-      const chatId = String(request?.params?.chatId ?? "");
-      const kind = String(request?.params?.kind ?? "talk");
+      const requestedChatId = String(request?.params?.chatId ?? "");
+      const kind = outboxKind(request?.params?.kind ?? "talk", requestedChatId);
+      const chatId = canonicalTalkChatId(requestedChatId, kind);
       const filename = String(request?.params?.filename ?? "image.jpg");
       const mime = String(request?.params?.mime ?? "image/jpeg");
       const contentType = mediaContentType(request?.params, mime);
@@ -4263,7 +5766,7 @@ async function handle(request: any) {
       const record: OutboxRecord = {
         localId,
         chatId,
-        kind: outboxKind(kind, chatId),
+        kind,
         contentType,
         filePath,
         filename,
@@ -4271,7 +5774,7 @@ async function handle(request: any) {
         durationMs: Number(request?.params?.durationMs ?? 0) > 0 ? Number(request?.params?.durationMs) : undefined,
         fingerprint: messageFingerprint({
           chatId,
-          kind: outboxKind(kind, chatId),
+          kind,
           contentType,
           createdAt: Number(request?.params?.createdAt ?? Date.now()),
           sequence: Number(request?.params?.sequence ?? 0),
@@ -4302,13 +5805,21 @@ async function handle(request: any) {
     if (method === "call.start") {
       const peer = String(request?.params?.peer ?? request?.params?.to ?? "");
       if (!peer) throw new Error("peer is required");
-      const result = await callManager.start(peer);
+      const requestedKind = String(request?.params?.kind ?? "AUDIO").toUpperCase();
+      if (requestedKind !== "AUDIO" && requestedKind !== "VIDEO") {
+        throw new Error("call kind must be AUDIO or VIDEO");
+      }
+      const result = await callManager.start(peer, requestedKind);
       emit({ id, ok: true, result });
       return;
     }
 
     if (method === "call.accept") {
-      const result = await callManager.accept();
+      const requestedMode = String(request?.params?.mode ?? "AUDIO").toUpperCase();
+      if (requestedMode !== "AUDIO" && requestedMode !== "VIDEO") {
+        throw new Error("call accept mode must be AUDIO or VIDEO");
+      }
+      const result = await callManager.accept(requestedMode);
       emit({ id, ok: true, result: { accepted: true, ...result } });
       return;
     }
@@ -4334,6 +5845,21 @@ async function handle(request: any) {
     if (method === "call.setMuted") {
       await callManager.setMuted(Boolean(request?.params?.muted));
       emit({ id, ok: true, result: { muted: Boolean(request?.params?.muted) } });
+      return;
+    }
+
+    if (method === "call.setVideo") {
+      const result = await callManager.setVideoEnabled(Boolean(request?.params?.enabled));
+      emit({ id, ok: true, result });
+      return;
+    }
+
+    if (method === "call.setScreenShare") {
+      const result = await callManager.setScreenShareEnabled(
+        Boolean(request?.params?.enabled),
+        request?.params?.target,
+      );
+      emit({ id, ok: true, result });
       return;
     }
 

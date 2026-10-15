@@ -8,6 +8,9 @@ use tauri::{Emitter, Manager};
 #[derive(Default)]
 struct ViewerImages(Mutex<HashMap<String, PathBuf>>);
 
+#[derive(Default)]
+struct CallToneState(Mutex<Option<std::process::Child>>);
+
 #[derive(serde::Serialize)]
 struct ViewerImagePath {
     path: String,
@@ -25,6 +28,13 @@ struct ClipboardImage {
 struct NotificationTarget {
     chat_id: String,
     message_id: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CallNotificationTarget {
+    peer: String,
+    call_id: String,
 }
 
 const MAX_CLIPBOARD_IMAGE_BYTES: usize = 25 * 1024 * 1024;
@@ -199,6 +209,66 @@ fn notify_message(
 }
 
 #[tauri::command]
+fn notify_call(
+    app: tauri::AppHandle,
+    title: String,
+    body: String,
+    peer: String,
+    call_id: String,
+) -> Result<(), String> {
+    if title.is_empty()
+        || title.len() > 512
+        || body.len() > 4_096
+        || peer.is_empty()
+        || call_id.is_empty()
+    {
+        return Err("ข้อมูล notification สายโทรไม่ถูกต้อง".into());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let target = CallNotificationTarget { peer, call_id };
+        std::thread::Builder::new()
+            .name("liney-call-notification-action".to_string())
+            .spawn(move || {
+                let mut notification = notify_rust::Notification::new();
+                notification
+                    .summary(&title)
+                    .body(&body)
+                    .appname("Liney")
+                    .timeout(notify_rust::Timeout::Milliseconds(30_000))
+                    .action("default", "เปิด Liney");
+                let app_for_thread = app.clone();
+                let Ok(handle) = notification.show() else {
+                    return;
+                };
+                handle.wait_for_action(move |action| {
+                    if action == "__closed" {
+                        return;
+                    }
+                    let _ = app_for_thread.emit(
+                        "liney://call-notification-open",
+                        target.clone(),
+                    );
+                    if let Some(window) = app_for_thread.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.unminimize();
+                        let _ = window.set_focus();
+                    }
+                });
+            })
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (app, title, body, peer, call_id);
+        Err("call notification ยังไม่รองรับบนระบบนี้".into())
+    }
+}
+
+#[tauri::command]
 async fn read_clipboard_image(app: tauri::AppHandle) -> Result<Option<ClipboardImage>, String> {
     #[cfg(target_os = "linux")]
     {
@@ -257,6 +327,88 @@ fn read_linux_clipboard_image() -> Result<Option<ClipboardImage>, String> {
 #[derive(Clone)]
 struct WindowPolicy(Arc<AtomicBool>);
 
+#[cfg(target_os = "linux")]
+fn resolve_liney_audio_sidecar() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+
+    let mut candidates = Vec::new();
+    if let Some(explicit) = std::env::var_os("LINEY_AUDIO_BINARY") {
+        candidates.push(PathBuf::from(explicit));
+    }
+    if let Ok(current) = std::env::current_exe() {
+        if let Some(dir) = current.parent() {
+            candidates.push(dir.join("liney-audio"));
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        candidates.push(PathBuf::from(home).join(".local/lib/liney/liney-audio"));
+    }
+    if let Some(triple) = option_env!("TAURI_ENV_TARGET_TRIPLE") {
+        candidates.push(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("binaries")
+                .join(format!("liney-audio-{triple}")),
+        );
+    }
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target/release/liney-audio"),
+    );
+
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+}
+
+
+#[tauri::command]
+fn start_call_tone(
+    mode: String,
+    state: tauri::State<'_, CallToneState>,
+) -> Result<(), String> {
+    if mode != "incoming" && mode != "outgoing" {
+        return Err("call tone mode must be incoming or outgoing".into());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::{Command, Stdio};
+
+        let binary = resolve_liney_audio_sidecar()
+            .ok_or_else(|| "Liney audio sidecar is unavailable".to_string())?;
+        let mut slot = state.0.lock().map_err(|_| "call tone state is locked".to_string())?;
+        if let Some(mut previous) = slot.take() {
+            let _ = previous.kill();
+            let _ = previous.wait();
+        }
+        let child = Command::new(binary)
+            .args(["--liney-media-call-tone", "--mode", &mode])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| format!("cannot start Liney call tone: {error}"))?;
+        *slot = Some(child);
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (mode, state);
+        Err("native call tones are not supported on this platform".into())
+    }
+}
+
+#[tauri::command]
+fn stop_call_tone(state: tauri::State<'_, CallToneState>) {
+    if let Ok(mut slot) = state.0.lock() {
+        if let Some(mut child) = slot.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 #[tauri::command]
 fn set_autostart(enabled: bool) -> Result<(), String> {
     use std::fs;
@@ -305,13 +457,22 @@ fn open_external_url(url: String) -> Result<(), String> {
     {
         return Err("URL scheme is not allowed".into());
     }
-    // Pass the URL as one argument (never through a shell) and detach it so a
-    // slow browser launch cannot block the message UI.
-    std::process::Command::new("xdg-open")
-        .arg(value)
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("Could not open URL: {error}"))
+    #[cfg(target_os = "linux")]
+    {
+        // Ask GIO for the user's configured default handler directly. This
+        // preserves desktop defaults without requiring the xdg-open CLI.
+        return gtk::gio::AppInfo::launch_default_for_uri(
+            value,
+            None::<&gtk::gio::AppLaunchContext>,
+        )
+        .map_err(|error| format!("Could not open URL: {error}"));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = value;
+        Err("Opening external URLs is unsupported on this platform".into())
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -347,12 +508,16 @@ pub fn run() {
         }))
         .manage(WindowPolicy(Arc::new(AtomicBool::new(true))))
         .manage(ViewerImages::default())
+        .manage(CallToneState::default())
         .invoke_handler(tauri::generate_handler![
             set_autostart,
             set_close_to_tray,
             read_clipboard_image,
             open_external_url,
             notify_message,
+            notify_call,
+            start_call_tone,
+            stop_call_tone,
             stage_image_viewer,
             viewer_image_path,
             release_viewer_image

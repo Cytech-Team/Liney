@@ -10,10 +10,12 @@ import {
   ArrowLeft,
   Bell,
   ChevronDown,
+  CheckCheck,
   Ellipsis,
 
 
   KeyRound,
+  Link2,
   Image,
   Info,
   LoaderCircle,
@@ -22,7 +24,6 @@ import {
   Mail,
   MessageCircle,
   Mic,
-  Minus,
   Moon,
   Monitor,
   Paperclip,
@@ -48,24 +49,35 @@ import {
   Volume2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import "./App.css";
 import { chats as seedChats, messages as seedMessages, type Chat, type Message } from "./data/mock";
 import { FlexMessage, type FlexAction } from "./components/FlexMessage";
 import { RichMessage } from "./components/RichMessage";
 import { RemoteImage } from "./components/RemoteImage";
+import { LineAlbumsModal } from "./components/LineAlbumsModal";
+import { ImageViewerOverlay } from "./components/ImageViewerOverlay";
 import { EngineRequestError, lineyEngine } from "./lib/engine";
 import { callMessagePreview, liveMessagePreview, notificationSenderName, officialLineMessageUrl } from "./lib/message-presentation";
 import { MarketingSite, type MarketingView } from "./marketing/MarketingSite";
+import {
+  compactTimelineRooms,
+  getTimelineRooms,
+  setTimelineRooms as setMessageMap,
+  timelineStore,
+  updateTimelineRoom,
+  useTimelineRoom,
+} from "./stores/timeline-store";
 
 type Section = "messages" | "friends" | "openchat" | "calls";
-type ImageEditorTool = "view" | "draw" | "blur" | "text";
 type ThemeMode = "system" | "light" | "dark";
 type AuthMode = "qr" | "password";
 type EngineState = "browser-mock" | "starting" | "ready" | "error";
 type CallState = "idle" | "incoming" | "acquiring" | "connecting" | "ringing" | "in-call" | "ending" | "ended" | "failed";
 const LINE_SYSTEM_ACCOUNT_MID = "u085311ecd9e3e3d74ae4c9f5437cbcb5";
-type LiveChatResult = { id: string; name: string; kind: "dm" | "group" | "openchat"; avatarUrl?: string; preview?: string; unread?: number; lastMessageTime?: number; memberCount?: number; pinned?: boolean; favoriteTimestamp?: number; statusMessage?: string; isFavorite?: boolean; favoriteTime?: number; historyState?: "available" | "new" | "unavailable" };
+type LiveChatResult = { id: string; name: string; kind: "dm" | "group" | "openchat"; avatarUrl?: string; identityKey?: string; profileIdentityKey?: string; profileSnapshotTime?: number; profileFetchedAt?: number; raw?: Record<string, unknown>; preview?: string; unread?: number; lastMessageTime?: number; memberCount?: number; pinned?: boolean; favoriteTimestamp?: number; statusMessage?: string; isFavorite?: boolean; favoriteTime?: number; historyState?: "available" | "new" | "unavailable" };
+type HistoryCandidate = { id: string; name: string; messageCount: number; latestMessageTime: number };
 type LiveMessageResult = {
   id: string;
   localId?: string;
@@ -86,6 +98,7 @@ type LiveMessageResult = {
   emojiUrl?: string;
   flex?: Message["flex"];
   filename?: string;
+  sendError?: string;
   postNotification?: Message["postNotification"];
   call?: Message["call"];
   rich?: Message["rich"];
@@ -113,16 +126,75 @@ type LiveCallHistoryResult = {
   createdTime: number;
   call: NonNullable<Message["call"]>;
 };
+
+type LiveHistoryPage = {
+  messages: LiveMessageResult[];
+  hasMore: boolean;
+};
+
+function mapLiveMessageResult(item: LiveMessageResult, kind: Chat["kind"], autoMedia: boolean): Message {
+  const contentType = Number(item.contentType ?? 0);
+  return {
+    id: item.id,
+    author: item.isMine ? "me" : "them",
+    text: item.rich || contentType === 7 && item.stickerUrl || contentType === 22 && item.flex
+      ? undefined
+      : contentType === 1
+        ? (kind === "openchat" && !autoMedia ? "รูปภาพ" : "กำลังโหลดรูป…")
+        : item.text,
+    time: formatTime(item.createdTime),
+    createdTime: item.createdTime,
+    contentType,
+    readCount: Math.max(0, Number(item.readCount ?? 0)),
+    readByPeer: Number(item.readCount ?? 0) > 0,
+    edited: item.edited,
+    updatedTime: item.updatedTime,
+    filename: item.filename,
+    senderId: item.senderId,
+    senderName: item.senderName,
+    senderAvatarUrl: item.senderAvatarUrl,
+    officialClientUrl: item.officialClientUrl,
+    isOfficialAccount: item.isOfficialAccount,
+    stickerUrl: item.stickerUrl,
+    flex: item.flex,
+    rich: item.rich,
+    postNotification: item.postNotification,
+    call: item.call,
+    reactions: item.reactions,
+    replyTo: item.replyTo ?? (item.replyToId ? { id: item.replyToId, text: "ข้อความ" } : undefined),
+    replyToId: item.replyToId,
+    unsent: item.unsent,
+    status: item.status ?? "sent",
+    sendError: item.sendError ? formatSendError(item.sendError) : undefined,
+  };
+}
 type ReplyTarget = NonNullable<Message["replyTo"]>;
 type MediaPreviewResult = { dataUrl: string };
 type NativeClipboardImageResult = { base64: string; mime: string; filename: string };
 type MediaProgress = { phase: string; done: number; total: number };
 type AudioDeviceResult = { id: string; name: string; description: string; kind: "input" | "output" };
+type ScreenShareTargetResult = {
+  id: string;
+  kind: "desktop" | "monitor" | "window" | "region";
+  name: string;
+  available: boolean;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  primary?: boolean;
+};
+type CallHardwareStatus = {
+  camera?: { available?: boolean; device?: string; backend?: string };
+  microphone?: { available?: boolean; backend?: string };
+  speaker?: { available?: boolean; backend?: string };
+  screenShare?: { available?: boolean; backend?: string };
+};
 type ProfileResult = { displayName?: string; mid?: string; pictureStatus?: string; statusMessage?: string };
 type ClientIdentityResult = { displayName?: string; modelName?: string; systemName?: string; platform?: string; channel?: string; device?: string };
 type RecentSticker = { packageId: string; stickerId: string; version: string; option?: string; owned: boolean };
 type RecentEmoji = { productId: string; sticonId: string; version: string; resourceType: string; owned: boolean };
-type SyncProgressState = { visible: boolean; phase: "metadata" | "friends" | "chats" | "history" | "complete" | "error"; done: number; total: number; failed: number; summary?: { friends?: number; talkChats?: number; openChats?: number; histories?: number; failedHistories?: number; elapsedMs?: number } };
+type SyncProgressState = { visible: boolean; phase: "metadata" | "friends" | "chats" | "history" | "complete" | "error"; done: number; total: number; failed: number; error?: string; summary?: { friends?: number; talkChats?: number; openChats?: number; histories?: number; failedHistories?: number; elapsedMs?: number } };
 type ImageGalleryPayload = { title: string; index: number; loop: boolean; items: Array<{ id: string; src: string; time?: string }> };
 
 function messageIdAtOrBefore(messageId: string, boundary: string): boolean {
@@ -163,6 +235,8 @@ type AppSettings = {
   desktopNotifications: boolean;
   notificationPreview: boolean;
   notificationSound: boolean;
+  callNotifications: boolean;
+  callSound: boolean;
   openchat: boolean;
   liveTalk: boolean;
   autoMedia: boolean;
@@ -183,6 +257,8 @@ const defaultSettings: AppSettings = {
   desktopNotifications: true,
   notificationPreview: true,
   notificationSound: true,
+  callNotifications: true,
+  callSound: true,
   openchat: true,
   liveTalk: false,
   autoMedia: true,
@@ -198,31 +274,11 @@ const defaultSettings: AppSettings = {
 };
 
 
-const MAX_RENDERED_CHAT_ITEMS = 260;
-const MAX_MESSAGE_ROOMS_IN_MEMORY = 18;
-const MAX_ACTIVE_MESSAGES_IN_MEMORY = 180;
-const MAX_BACKGROUND_MESSAGES_IN_MEMORY = 48;
-const MAX_IMAGE_PREVIEWS_PER_REFRESH = 12;
-
-function compactMessageMapState(map: Record<string, Message[]>, activeChatId: string): Record<string, Message[]> {
-  const keys = Object.keys(map);
-  let changed = false;
-  const next: Record<string, Message[]> = {};
-  const keep: string[] = [];
-  if (activeChatId && map[activeChatId]) keep.push(activeChatId);
-  for (let index = keys.length - 1; index >= 0 && keep.length < MAX_MESSAGE_ROOMS_IN_MEMORY; index -= 1) {
-    const key = keys[index];
-    if (!keep.includes(key)) keep.push(key);
-  }
-  if (keep.length !== keys.length) changed = true;
-  for (const key of keep.reverse()) {
-    const messages = map[key] ?? [];
-    const max = key === activeChatId ? MAX_ACTIVE_MESSAGES_IN_MEMORY : MAX_BACKGROUND_MESSAGES_IN_MEMORY;
-    next[key] = messages.length > max ? messages.slice(-max) : messages;
-    if (next[key] !== messages) changed = true;
-  }
-  return changed ? next : map;
-}
+const MAX_RENDERED_CHAT_ITEMS = 120;
+const MAX_MESSAGE_ROOMS_IN_MEMORY = 8;
+const MAX_ACTIVE_MESSAGES_IN_MEMORY = 120;
+const MAX_BACKGROUND_MESSAGES_IN_MEMORY = 24;
+const MAX_IMAGE_PREVIEWS_PER_REFRESH = 4;
 
 function readSettings(): AppSettings {
   try {
@@ -241,15 +297,74 @@ function readSettings(): AppSettings {
   }
 }
 
-function currentTalkAvatarUrl(item: Pick<LiveChatResult, "id" | "kind" | "avatarUrl">): string | undefined {
-  if (item.kind === "dm" && /^u[0-9a-f]{32}$/i.test(item.id)) {
-    return `https://obs.line-scdn.net/r/talk/p/${encodeURIComponent(item.id)}`;
+function liveProfileMetadata(item: LiveChatResult): { profileIdentityKey?: string; profileSnapshotTime?: number; profileFetchedAt?: number } {
+  const profileIdentityKey = String(item.profileIdentityKey ?? item.identityKey ?? item.raw?.profileIdentityKey ?? "").trim();
+  const profileSnapshotTime = Number(item.profileSnapshotTime ?? item.raw?.profileSnapshotTime ?? 0);
+  const profileFetchedAt = Number(item.profileFetchedAt ?? item.raw?.profileFetchedAt ?? 0);
+  return {
+    ...(profileIdentityKey ? { profileIdentityKey } : {}),
+    ...(Number.isFinite(profileSnapshotTime) && profileSnapshotTime > 0 ? { profileSnapshotTime } : {}),
+    ...(Number.isFinite(profileFetchedAt) && profileFetchedAt > 0 ? { profileFetchedAt } : {}),
+  };
+}
+
+function appendAvatarCacheVersion(url: URL, freshness: string | number) {
+  const parts = [
+    ...(url.searchParams.get("v") ?? "").split("|"),
+    ...String(freshness ?? "").split("|"),
+  ].map((part) => part.trim()).filter(Boolean);
+  const versions = [...new Set(parts)];
+  if (!versions.length) return;
+  const combined = versions.join("|");
+  if (combined.length <= 256) {
+    url.searchParams.set("v", combined);
+    return;
   }
-  return item.avatarUrl || undefined;
+  let hash = 2166136261;
+  for (let index = 0; index < combined.length; index += 1) {
+    hash = Math.imul(hash ^ combined.charCodeAt(index), 16777619);
+  }
+  url.searchParams.set("v", "liney-" + (hash >>> 0).toString(36));
+}
+
+function currentTalkAvatarUrl(item: LiveChatResult): string | undefined {
+  const profile = liveProfileMetadata(item);
+  const version = [
+    profile.profileFetchedAt ? String(profile.profileFetchedAt) : "",
+    profile.profileSnapshotTime ? String(profile.profileSnapshotTime) : "",
+    "refresh-" + Math.floor(Date.now() / (5 * 60_000)),
+  ].filter(Boolean).join("|");
+  if (item.kind === "dm" && /^u[0-9a-f]{32}$/i.test(item.id)) {
+    try {
+      const supplied = item.avatarUrl ? new URL(item.avatarUrl) : undefined;
+      const isMidLookup = supplied?.hostname === "obs.line-scdn.net"
+        && supplied.pathname.replace(/\/$/, "") === `/r/talk/p/${item.id}`;
+      if (supplied && !isMidLookup) {
+        appendAvatarCacheVersion(supplied, version);
+        return supplied.toString();
+      }
+    } catch {
+      // Fall back to LINE's MID-keyed profile endpoint below.
+    }
+    const url = new URL("https://obs.line-scdn.net/r/talk/p/" + encodeURIComponent(item.id));
+    appendAvatarCacheVersion(url, version);
+    return url.toString();
+  }
+  if (item.avatarUrl) {
+    try {
+      const url = new URL(item.avatarUrl);
+      appendAvatarCacheVersion(url, version);
+      return url.toString();
+    } catch {
+      return item.avatarUrl;
+    }
+  }
+  return undefined;
 }
 
 function mapLiveChatResult(item: LiveChatResult, index: number): Chat {
   const lineSystemAccount = item.id === LINE_SYSTEM_ACCOUNT_MID;
+  const profile = liveProfileMetadata(item);
   return {
     id: item.id,
     name: item.name,
@@ -274,6 +389,7 @@ function mapLiveChatResult(item: LiveChatResult, index: number): Chat {
     kind: item.kind,
     avatar: initials(item.name),
     avatarUrl: currentTalkAvatarUrl(item),
+    ...profile,
     accent: avatarColor(index),
     lastMessageTime: item.historyState === "new" ? 0 : item.lastMessageTime ?? 0,
     pinned: item.pinned,
@@ -283,7 +399,33 @@ function mapLiveChatResult(item: LiveChatResult, index: number): Chat {
 }
 
 function sortLiveChats(chats: Chat[]): Chat[] {
-  return [...chats].sort((a, b) => {
+  const byId = new Map<string, Chat>();
+  for (const chat of chats) {
+    if (!chat.id) continue;
+    const current = byId.get(chat.id);
+    if (!current) {
+      byId.set(chat.id, chat);
+      continue;
+    }
+    const currentTime = Number(current.lastMessageTime ?? 0);
+    const incomingTime = Number(chat.lastMessageTime ?? 0);
+    const primary = incomingTime >= currentTime ? chat : current;
+    const secondary = primary === chat ? current : chat;
+    const primaryName = String(primary.name ?? "").trim();
+    const secondaryName = String(secondary.name ?? "").trim();
+    const hasUsefulName = (name: string) => Boolean(name) && !["LINE User", "LINE Chat"].includes(name);
+    const name = hasUsefulName(primaryName) ? primaryName : hasUsefulName(secondaryName) ? secondaryName : primaryName;
+    byId.set(chat.id, {
+      ...secondary,
+      ...primary,
+      name,
+      avatar: hasUsefulName(primaryName) ? primary.avatar : secondary.avatar || initials(name),
+      avatarUrl: primary.avatarUrl || secondary.avatarUrl,
+      subtitle: primary.subtitle || secondary.subtitle,
+      lastMessageTime: Math.max(currentTime, incomingTime),
+    });
+  }
+  return [...byId.values()].sort((a, b) => {
     if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
     if ((a.lastMessageTime ?? 0) !== (b.lastMessageTime ?? 0)) return (b.lastMessageTime ?? 0) - (a.lastMessageTime ?? 0);
     return (b.favoriteTimestamp ?? 0) - (a.favoriteTimestamp ?? 0);
@@ -291,6 +433,7 @@ function sortLiveChats(chats: Chat[]): Chat[] {
 }
 
 function mapLiveFriendResult(item: LiveChatResult, index: number): Chat {
+  const profile = liveProfileMetadata(item);
   return {
     id: item.id,
     name: item.name,
@@ -300,6 +443,7 @@ function mapLiveFriendResult(item: LiveChatResult, index: number): Chat {
     kind: "dm",
     avatar: initials(item.name),
     avatarUrl: currentTalkAvatarUrl(item),
+    ...profile,
     accent: avatarColor(index),
     isFavorite: item.isFavorite,
     favoriteTime: item.favoriteTime,
@@ -307,10 +451,137 @@ function mapLiveFriendResult(item: LiveChatResult, index: number): Chat {
 }
 
 function sortLiveFriends(chats: Chat[]): Chat[] {
-  return [...chats].sort((a, b) => {
+  const uniqueByIdentity = new Map<string, Chat>();
+  for (const chat of chats) {
+    if (!chat.id) continue;
+    const key = chat.profileIdentityKey || `mid:${chat.id}`;
+    const current = uniqueByIdentity.get(key);
+    if (!current) {
+      uniqueByIdentity.set(key, chat);
+      continue;
+    }
+    const chatFetchedAt = Number(chat.profileFetchedAt ?? 0);
+    const currentFetchedAt = Number(current.profileFetchedAt ?? 0);
+    const profile = chatFetchedAt > currentFetchedAt
+      || (chatFetchedAt === currentFetchedAt && Number(chat.profileSnapshotTime ?? 0) >= Number(current.profileSnapshotTime ?? 0))
+      ? chat
+      : current;
+    const secondary = profile === chat ? current : chat;
+    const name = profile.name.trim() && !["LINE User", "LINE Chat"].includes(profile.name.trim())
+      ? profile.name
+      : secondary.name;
+    uniqueByIdentity.set(key, {
+      ...secondary,
+      ...profile,
+      name,
+      avatar: profile.avatar || secondary.avatar || initials(name),
+      avatarUrl: profile.avatarUrl || secondary.avatarUrl,
+      profileIdentityKey: profile.profileIdentityKey || secondary.profileIdentityKey,
+      profileSnapshotTime: Math.max(profile.profileSnapshotTime ?? 0, secondary.profileSnapshotTime ?? 0) || undefined,
+      isFavorite: Boolean(profile.isFavorite || secondary.isFavorite),
+      favoriteTime: Math.max(profile.favoriteTime ?? 0, secondary.favoriteTime ?? 0) || undefined,
+    });
+  }
+  return [...uniqueByIdentity.values()].sort((a, b) => {
     if (Boolean(a.isFavorite) !== Boolean(b.isFavorite)) return a.isFavorite ? -1 : 1;
     if ((a.favoriteTime ?? 0) !== (b.favoriteTime ?? 0)) return (b.favoriteTime ?? 0) - (a.favoriteTime ?? 0);
     return a.name.localeCompare(b.name, "th");
+  });
+}
+
+function mergeLiveFriendSnapshots(previous: Chat[] | null, incoming: Chat[]): Chat[] {
+  const prior = previous ?? [];
+  const previousById = new Map(prior.map((friend) => [friend.id, friend]));
+  const previousByIdentity = new Map<string, Chat>();
+  for (const friend of prior) {
+    if (friend.profileIdentityKey && !previousByIdentity.has(friend.profileIdentityKey)) {
+      previousByIdentity.set(friend.profileIdentityKey, friend);
+    }
+  }
+
+  const refreshed = incoming.map((friend) => {
+    const known = previousById.get(friend.id)
+      ?? (friend.profileIdentityKey ? previousByIdentity.get(friend.profileIdentityKey) : undefined);
+    if (!known) return friend;
+
+    const stableId = known.id;
+    const incomingName = friend.name.trim();
+    const usefulIncomingName = incomingName && !["LINE User", "LINE Chat"].includes(incomingName);
+    const incomingSnapshot = Number(friend.profileSnapshotTime ?? 0);
+    const knownSnapshot = Number(known.profileSnapshotTime ?? 0);
+    const incomingFetchedAt = Number(friend.profileFetchedAt ?? 0);
+    const knownFetchedAt = Number(known.profileFetchedAt ?? 0);
+    // LINE server snapshot time can lag behind a successful profile fetch.
+    // Prefer fetch time when available, and use snapshot time for older cache rows.
+    const hasFetchTimes = incomingFetchedAt > 0 || knownFetchedAt > 0;
+    const incomingProfileIsOlder = hasFetchTimes
+      ? incomingFetchedAt === 0 || (knownFetchedAt > 0 && knownFetchedAt > incomingFetchedAt)
+      : incomingSnapshot > 0 && knownSnapshot > incomingSnapshot;
+    const selectedSnapshot = incomingProfileIsOlder
+      ? knownSnapshot || incomingSnapshot
+      : incomingSnapshot || knownSnapshot;
+    return {
+      ...known,
+      ...friend,
+      id: stableId,
+      name: !incomingProfileIsOlder && usefulIncomingName ? incomingName : known.name,
+      avatar: !incomingProfileIsOlder && friend.avatar ? friend.avatar : known.avatar || initials(known.name),
+      avatarUrl: !incomingProfileIsOlder && friend.avatarUrl ? friend.avatarUrl : known.avatarUrl || friend.avatarUrl,
+      profileIdentityKey: friend.profileIdentityKey || known.profileIdentityKey,
+      profileSnapshotTime: selectedSnapshot || undefined,
+      profileFetchedAt: Math.max(incomingFetchedAt, knownFetchedAt) || undefined,
+      subtitle: friend.subtitle || known.subtitle,
+      isFavorite: friend.isFavorite ?? known.isFavorite,
+      favoriteTime: friend.favoriteTime ?? known.favoriteTime,
+    };
+  });
+  const deduped = sortLiveFriends(refreshed);
+  const presentIds = new Set(deduped.map((friend) => friend.id));
+  const presentIdentities = new Set(deduped.map((friend) => friend.profileIdentityKey).filter(Boolean));
+  const preserved = prior.filter((friend) =>
+    !presentIds.has(friend.id)
+    && (!friend.profileIdentityKey || !presentIdentities.has(friend.profileIdentityKey)),
+  );
+  return sortLiveFriends([...deduped, ...preserved]);
+}
+
+function mergeFriendProfilesIntoChats(chats: Chat[], friends: Chat[]): Chat[] {
+  const friendsById = new Map(friends.map((friend) => [friend.id, friend]));
+  const friendsByIdentity = new Map<string, Chat>();
+  for (const friend of friends) {
+    if (!friend.profileIdentityKey) continue;
+    const current = friendsByIdentity.get(friend.profileIdentityKey);
+    if (!current || Number(friend.profileSnapshotTime ?? 0) >= Number(current.profileSnapshotTime ?? 0)) {
+      friendsByIdentity.set(friend.profileIdentityKey, friend);
+    }
+  }
+  return chats.map((chat) => {
+    if (chat.kind !== "dm") return chat;
+    const friend = friendsById.get(chat.id)
+      ?? (chat.profileIdentityKey ? friendsByIdentity.get(chat.profileIdentityKey) : undefined);
+    if (!friend) return chat;
+    const sameLineId = friend.id === chat.id;
+    const friendFetchedAt = Number(friend.profileFetchedAt ?? 0);
+    const chatFetchedAt = Number(chat.profileFetchedAt ?? 0);
+    const friendIsCurrent = sameLineId
+      || friendFetchedAt > chatFetchedAt
+      || (friendFetchedAt === chatFetchedAt
+        && Number(friend.profileSnapshotTime ?? 0) >= Number(chat.profileSnapshotTime ?? 0));
+    if (!friendIsCurrent) return chat;
+    const friendName = friend.name.trim();
+    const name = friendName && !["LINE User", "LINE Chat"].includes(friendName) ? friendName : chat.name;
+    const avatarUrl = friend.avatarUrl || chat.avatarUrl;
+    const profileIdentityKey = friend.profileIdentityKey || chat.profileIdentityKey;
+    const profileSnapshotTime = friend.profileSnapshotTime ?? chat.profileSnapshotTime;
+    const profileFetchedAt = Math.max(friendFetchedAt, chatFetchedAt) || undefined;
+    if (
+      name === chat.name
+      && avatarUrl === chat.avatarUrl
+      && profileIdentityKey === chat.profileIdentityKey
+      && profileSnapshotTime === chat.profileSnapshotTime
+      && profileFetchedAt === chat.profileFetchedAt
+    ) return chat;
+    return { ...chat, name, avatar: initials(name), avatarUrl, profileIdentityKey, profileSnapshotTime, profileFetchedAt };
   });
 }
 
@@ -338,6 +609,10 @@ async function notifyDesktop(
   }
 }
 
+
+type CallToneMode = "incoming" | "outgoing";
+
+
 const navItems: { id: Section; label: string; icon: typeof MessageCircle }[] = [
   { id: "messages", label: "แชต", icon: MessageCircle },
   { id: "friends", label: "เพื่อน", icon: Users },
@@ -362,7 +637,7 @@ function BrowserSite() {
   }, []);
 
   useEffect(() => {
-    document.title = path === "/login" ? "Liney — Login preview" : path === "/app" ? "Liney Web App" : path === "/chat" ? "Liney — Chat preview" : "Liney — Chat closer on Linux";
+    document.title = path === "/login" ? "Liney — Login preview" : path === "/app" ? "Liney Web App" : path === "/chat" ? "Liney — Chat preview" : "Liney — LINE, made for Linux.";
   }, [path]);
 
   const navigate = (nextPath: string) => {
@@ -394,13 +669,29 @@ function MainApp() {
   const [query, setQuery] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newChatOpen, setNewChatOpen] = useState(false);
+  const [albumsOpen, setAlbumsOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState("ทั่วไป");
   const [messageRefreshNonce, setMessageRefreshNonce] = useState(0);
   const [callOpen, setCallOpen] = useState(false);
   const [callState, setCallState] = useState<CallState>("idle");
+  const [callDirection, setCallDirection] = useState<"incoming" | "outgoing" | null>(null);
+  const [callMode, setCallMode] = useState<"AUDIO" | "VIDEO">("AUDIO");
+  const videoUpgradeInProgressRef = useRef(false);
   const [, setCallId] = useState("");
   const [callPeer, setCallPeer] = useState("");
+  const [callIdentity, setCallIdentity] = useState<{ peer: string; name: string; avatarUrl?: string } | null>(null);
   const [callMuted, setCallMuted] = useState(false);
+  const [callVideoCapable, setCallVideoCapable] = useState(false);
+  const [callRemoteVideoFrame, setCallRemoteVideoFrame] = useState("");
+  const [callVideoEnabled, setCallVideoEnabled] = useState(false);
+  const [callScreenSharing, setCallScreenSharing] = useState(false);
+  const [callCameraAvailable, setCallCameraAvailable] = useState(false);
+  const [callMicrophoneAvailable, setCallMicrophoneAvailable] = useState(false);
+  const [callSpeakerAvailable, setCallSpeakerAvailable] = useState(false);
+  const [callScreenShareAvailable, setCallScreenShareAvailable] = useState(false);
+  const [callScreenTargets, setCallScreenTargets] = useState<ScreenShareTargetResult[]>([]);
+  const [callScreenTarget, setCallScreenTarget] = useState("desktop");
+  const [callScreenManagedBySystem, setCallScreenManagedBySystem] = useState(false);
   const [callError, setCallError] = useState("");
   const [callAvailable, setCallAvailable] = useState(false);
   const [callIncomingAvailable, setCallIncomingAvailable] = useState(false);
@@ -416,12 +707,17 @@ function MainApp() {
   const [authBusy, setAuthBusy] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [keyImportMode, setKeyImportMode] = useState(false);
+  const [keyImportResult, setKeyImportResult] = useState<{ generations: number } | null>(null);
+  const keyImportDialogOpenRef = useRef(false);
   const [imageViewerSrc, setImageViewerSrc] = useState<string | null>(null);
   const [notificationJump, setNotificationJump] = useState<{ chatId: string; messageId: string; nonce: number } | null>(null);
   const [liveChats, setLiveChats] = useState<Chat[] | null>(null);
   const [liveFriends, setLiveFriends] = useState<Chat[] | null>(null);
   const [callHistory, setCallHistory] = useState<LiveCallHistoryResult[] | null>(usesEngineRuntime ? null : []);
   const [listFilter, setListFilter] = useState<"all" | "unread" | "pinned" | "favorites">("all");
+  const [markAllReadBusy, setMarkAllReadBusy] = useState(false);
+  const [markAllReadProgress, setMarkAllReadProgress] = useState<{ done: number; total: number } | null>(null);
   const [localPins, setLocalPins] = useState<Record<string, number>>(() => {
     try {
       const raw = localStorage.getItem("liney.localPins");
@@ -434,7 +730,6 @@ function MainApp() {
   const [clientIdentity, setClientIdentity] = useState<ClientIdentityResult | null>(null);
   const [composer, setComposer] = useState("");
   const [replyTarget, setReplyTarget] = useState<ReplyTarget | null>(null);
-  const [messageMap, setMessageMap] = useState<Record<string, Message[]>>(usesEngineRuntime ? {} : seedMessages);
   const [mediaProgress, setMediaProgress] = useState<Record<string, MediaProgress>>({});
   const recentSentRef = useRef(new Map<string, Array<{ at: number; localId: string }>>());
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
@@ -454,7 +749,7 @@ function MainApp() {
   const [engineVersion, setEngineVersion] = useState("3.3.2");
   const [syncStatus, setSyncStatus] = useState("");
   const [syncProgress, setSyncProgress] = useState<SyncProgressState>({ visible: false, phase: "metadata", done: 0, total: 0, failed: 0 });
-  const [storageMode, setStorageMode] = useState<"wallet" | "session-only">("session-only");
+  const [storageMode, setStorageMode] = useState<"wallet" | "encrypted-file" | "session-only">("session-only");
   const [settings, setSettings] = useState<AppSettings>(readSettings);
   const [windowActive, setWindowActive] = useState(() =>
     document.visibilityState === "visible" && document.hasFocus()
@@ -468,16 +763,20 @@ function MainApp() {
   const liveFriendsLoadGenerationRef = useRef(0);
   const callHistoryLoadGenerationRef = useRef(0);
   const messageLoadGenerationRef = useRef(new Map<string, number>());
+  const activeMessageLoadEpochRef = useRef(0);
   const readMarkedRef = useRef(new Set<string>());
   const sessionReadReadersRef = useRef(new Map<string, Map<string, Set<string>>>());
   const imageGalleryPayloadRef = useRef<ImageGalleryPayload | null>(null);
   const notificationDedupRef = useRef(new Map<string, number>());
+  const callNotificationDedupRef = useRef(new Set<string>());
+  const nativeCallToneModeRef = useRef<CallToneMode | null>(null);
   const liveEventDedupRef = useRef(new Map<string, number>());
   const liveChatEventGenerationRef = useRef(new Map<string, number>());
-  const messageMapRef = useRef(messageMap);
+  const messageMapRef = useRef(getTimelineRooms());
   const localReadThroughTimeRef = useRef(new Map<string, number>());
   const historyDiscoveredMessageIdsRef = useRef(new Set<string>());
   const sidebarCatchupRef = useRef(new Map<string, { target: number; attempts: number }>());
+  const forcedHistoryRefreshRef = useRef(new Set<string>());
 
   const clearReadMarks = (chatId: string) => {
     const prefix = `${chatId}:`;
@@ -486,7 +785,7 @@ function MainApp() {
     }
   };
 
-  // Being the selected chat is not enough to acknowledge a message.  KDE can
+  // Being the selected chat is not enough to acknowledge a message. A desktop
   // leave the webview selected while the window is minimized or behind another
   // app, so only send read receipts while the user can actually see it.
   const isChatActuallyVisible = (chatId: string) =>
@@ -494,8 +793,11 @@ function MainApp() {
     && document.visibilityState === "visible"
     && document.hasFocus();
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     activeChatRef.current = activeChatId;
+    // Invalidate async work from the previous room before the browser paints
+    // the newly selected conversation. This keeps rapid room switching cheap.
+    activeMessageLoadEpochRef.current += 1;
   }, [activeChatId]);
 
   useEffect(() => {
@@ -525,13 +827,23 @@ function MainApp() {
     liveFriendsRef.current = liveFriends;
   }, [liveFriends]);
 
+  useEffect(() => timelineStore.subscribe((state) => {
+    messageMapRef.current = state.rooms;
+  }), []);
+
   useEffect(() => {
-    const compacted = usesEngineRuntime ? compactMessageMapState(messageMap, activeChatId) : messageMap;
-    messageMapRef.current = compacted;
-    if (compacted === messageMap) return;
-    const timer = window.setTimeout(() => setMessageMap(compacted), 0);
-    return () => window.clearTimeout(timer);
-  }, [messageMap, activeChatId, usesEngineRuntime]);
+    if (!usesEngineRuntime && Object.keys(getTimelineRooms()).length === 0) {
+      setMessageMap(seedMessages);
+      return;
+    }
+    if (!usesEngineRuntime) return;
+    compactTimelineRooms(
+      activeChatId,
+      MAX_MESSAGE_ROOMS_IN_MEMORY,
+      MAX_ACTIVE_MESSAGES_IN_MEMORY,
+      MAX_BACKGROUND_MESSAGES_IN_MEMORY,
+    );
+  }, [activeChatId, usesEngineRuntime]);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -553,9 +865,33 @@ function MainApp() {
     document.documentElement.dataset.radius = settings.radius.toLowerCase();
   }, [settings.density, settings.radius]);
 
+
+  useEffect(() => {
+    const desiredTone: CallToneMode | null = !settings.callSound || !callOpen
+      ? null
+      : callDirection === "incoming" && callState === "incoming"
+        ? "incoming"
+        : callDirection === "outgoing" && ["acquiring", "connecting", "ringing"].includes(callState)
+          ? "outgoing"
+          : null;
+
+    if (nativeCallToneModeRef.current === desiredTone) return;
+    nativeCallToneModeRef.current = desiredTone;
+    if (!lineyEngine.isNative) return;
+    if (desiredTone) {
+      void invoke("start_call_tone", { mode: desiredTone }).catch(() => undefined);
+    } else {
+      void invoke("stop_call_tone").catch(() => undefined);
+    }
+  }, [callDirection, callOpen, callState, settings.callSound]);
+
+  useEffect(() => () => {
+    if (lineyEngine.isNative) void invoke("stop_call_tone").catch(() => undefined);
+  }, []);
+
   useEffect(() => {
     if (!syncProgress.visible || syncProgress.phase !== "complete") return;
-    const timer = window.setTimeout(() => setSyncProgress((current) => ({ ...current, visible: false })), 750);
+    const timer = window.setTimeout(() => setSyncProgress((current) => ({ ...current, visible: false })), 1_800);
     return () => window.clearTimeout(timer);
   }, [syncProgress.visible, syncProgress.phase]);
 
@@ -618,13 +954,33 @@ function MainApp() {
       }, 1_500);
     };
     const refreshCapabilities = async () => {
-      const caps = await lineyEngine.request<{ linejsVersion?: string; authenticated?: boolean; features?: string[]; clientIdentity?: ClientIdentityResult; storage?: { mode?: "wallet" | "session-only" }; call?: { enabled?: boolean; incomingAnswer?: boolean; reason?: string } }>("capabilities", {}, 120_000);
+      const caps = await lineyEngine.request<{
+        linejsVersion?: string;
+        authenticated?: boolean;
+        features?: string[];
+        clientIdentity?: ClientIdentityResult;
+        storage?: { mode?: "wallet" | "encrypted-file" | "session-only" };
+        call?: {
+          enabled?: boolean;
+          incomingAnswer?: boolean;
+          reason?: string;
+          hardware?: CallHardwareStatus;
+        };
+      }>("capabilities", {}, 120_000);
       if (caps?.linejsVersion) setEngineVersion(caps.linejsVersion);
       if (caps?.clientIdentity) setClientIdentity(caps.clientIdentity);
       setCallAvailable(Boolean(caps?.call?.enabled || caps?.features?.includes("call-audio-1to1")));
       setCallIncomingAvailable(Boolean(caps?.call?.incomingAnswer));
+      setCallCameraAvailable(Boolean(caps?.call?.hardware?.camera?.available));
+      setCallMicrophoneAvailable(Boolean(caps?.call?.hardware?.microphone?.available));
+      setCallSpeakerAvailable(Boolean(caps?.call?.hardware?.speaker?.available));
+      setCallScreenShareAvailable(Boolean(caps?.call?.hardware?.screenShare?.available));
       setCallReason(String(caps?.call?.reason ?? ""));
-      if (caps?.storage?.mode === "wallet" || caps?.storage?.mode === "session-only") setStorageMode(caps.storage.mode);
+      if (
+        caps?.storage?.mode === "wallet"
+        || caps?.storage?.mode === "encrypted-file"
+        || caps?.storage?.mode === "session-only"
+      ) setStorageMode(caps.storage.mode);
       setEngineState("ready");
       if (caps?.authenticated) {
         authenticatedRef.current = true;
@@ -650,6 +1006,13 @@ function MainApp() {
       connectInFlight = true;
       try {
         await lineyEngine.start();
+        // Warm-start from durable SQLite immediately. The engine serves these
+        // read methods before session restore, so the previous desktop state
+        // can appear while LINE authentication/network refresh continues in
+        // parallel instead of leaving the sidebar empty.
+        void loadLiveChats();
+        void loadLiveFriends(false);
+        void loadCallHistory();
         await refreshCapabilities();
       } catch (error) {
         setEngineState("error");
@@ -671,7 +1034,12 @@ function MainApp() {
         liveChatEventGenerationRef.current.clear();
         scheduleReconnect();
       }
-      if (event.type === "auth.persistence") setStorageMode("session-only");
+      if (event.type === "auth.persistence") {
+        const mode = String(event.mode ?? "");
+        if (mode === "wallet" || mode === "encrypted-file" || mode === "session-only") {
+          setStorageMode(mode);
+        }
+      }
       if (event.type === "event.chats.updated" && authenticatedRef.current && Array.isArray(event.chats)) {
         const kind = event.kind === "friends" ? "friends" : event.kind === "openchat" ? "openchat" : "talk";
         const refreshGeneration = Number(event.refreshGeneration ?? 0);
@@ -682,10 +1050,17 @@ function MainApp() {
         }
         const results = event.chats as LiveChatResult[];
         if (kind === "friends") {
-          const mappedFriends = sortLiveFriends(results.map(mapLiveFriendResult));
-          const nextFriends = mappedFriends.length || !liveFriendsRef.current ? mappedFriends : liveFriendsRef.current;
+          const mappedFriends = results.map(mapLiveFriendResult);
+          const nextFriends = mergeLiveFriendSnapshots(liveFriendsRef.current, mappedFriends);
           liveFriendsRef.current = nextFriends;
           setLiveFriends(nextFriends);
+          const previousChats = liveChatsRef.current ?? [];
+          const nextChats = mergeFriendProfilesIntoChats(previousChats, nextFriends);
+          const refreshedDirectChats = nextChats.some((chat, index) => chat !== previousChats[index]);
+          if (refreshedDirectChats) {
+            liveChatsRef.current = nextChats;
+            setLiveChats(nextChats);
+          }
         } else if (kind !== "openchat" || settingsRef.current.openchat) {
           const previous = liveChatsRef.current ?? [];
           const previousById = new Map(previous.map((chat) => [chat.id, chat]));
@@ -700,10 +1075,14 @@ function MainApp() {
                 : Math.max(mapped.unread ?? 0, prior?.unread ?? 0) || undefined;
               return { ...mapped, unread };
             });
+          const remoteIds = new Set(mappedRemote.map((chat) => chat.id));
           const next = sortLiveChats([
             ...mappedRemote,
-            ...previous.filter((chat) => kind === "openchat" ? chat.kind !== "openchat" : chat.kind === "openchat"),
-          ].filter((chat, index, list) => list.findIndex((item) => item.id === chat.id) === index));
+            ...previous.filter((chat) =>
+              !remoteIds.has(chat.id)
+              && (settingsRef.current.openchat || chat.kind !== "openchat"),
+            ),
+          ]);
           liveChatsRef.current = next;
           setLiveChats(next);
           setActiveChatId((current) => next.some((chat) => chat.id === current)
@@ -735,7 +1114,12 @@ function MainApp() {
       }
       if (event.type === "sync.error") {
         setSyncStatus("ซิงก์บางส่วนไม่สำเร็จ");
-        setSyncProgress((current) => ({ ...current, visible: true, phase: "error" }));
+        setSyncProgress((current) => ({
+          ...current,
+          visible: true,
+          phase: "error",
+          error: String(event.error ?? "ไม่ทราบสาเหตุ"),
+        }));
       }
       if (event.type === "media.progress" && typeof event.jobId === "string") {
         const jobId = event.jobId;
@@ -773,7 +1157,11 @@ function MainApp() {
         setPin("");
         setAuthError("");
         setAuthOpen(false);
-        if (event.storage === "wallet" || event.storage === "session-only") setStorageMode(event.storage);
+        if (
+          event.storage === "wallet"
+          || event.storage === "encrypted-file"
+          || event.storage === "session-only"
+        ) setStorageMode(event.storage);
         if (event.clientIdentity && typeof event.clientIdentity === "object") setClientIdentity(event.clientIdentity as ClientIdentityResult);
         if (event.profile && typeof event.profile === "object") setProfile(event.profile as ProfileResult);
         if (event.accountChanged === true) {
@@ -836,15 +1224,17 @@ function MainApp() {
             ...current,
             [chatId]: (current[chatId] ?? []).map((item) => {
               if (item.id !== localId) return item;
-              if (event.type === "message.sending") return { ...item, status: "sending" };
+              if (event.type === "message.sending") return { ...item, status: "sending", sendError: undefined };
               if (event.type === "message.failed") return {
                 ...item,
                 status: event.status === "unknown" ? "unknown" : "error",
+                sendError: typeof event.errorMessage === "string" ? formatSendError(event.errorMessage) : item.sendError,
               };
               return {
                 ...item,
                 id: serverId && serverId !== localId ? serverId : item.id,
                 status: "sent",
+                sendError: undefined,
               };
             }),
           }));
@@ -973,6 +1363,13 @@ function MainApp() {
           const chatKind = knownChat?.kind ?? (event.source === "openchat"
             ? "openchat"
             : chatId.startsWith("u") ? "dm" : "group");
+
+          // A live delivery owns its unread increment. Mark it immediately so
+          // an overlapping history reconciliation cannot discover the same
+          // incoming message again and increment unread twice.
+          if (!raw.isMine && eventMessageId) {
+            historyDiscoveredMessageIdsRef.current.add(`${chatId}:${eventMessageId}`);
+          }
 
           if (eventSource === "talk" && contentType === 6 && raw.call) {
             const callEntry: LiveCallHistoryResult = {
@@ -1173,28 +1570,82 @@ function MainApp() {
         const incomingId = String(incoming.callId ?? incoming.callMid ?? crypto.randomUUID());
         setCallId(incomingId);
         setCallPeer(peer);
+        setCallMode("AUDIO");
+        setCallRemoteVideoFrame("");
+        setCallVideoCapable(false);
+        setCallVideoEnabled(false);
+        setCallScreenSharing(false);
+        setCallDirection("incoming");
+        setCallIdentity((current) => current?.peer === peer ? current : null);
         setCallState("incoming");
         setCallError("");
         setCallOpen(true);
+
+        if (!callNotificationDedupRef.current.has(incomingId)) {
+          callNotificationDedupRef.current.add(incomingId);
+          if (callNotificationDedupRef.current.size > 32) {
+            const oldest = callNotificationDedupRef.current.values().next().value;
+            if (oldest) callNotificationDedupRef.current.delete(oldest);
+          }
+          const knownChat = (liveChatsRef.current ?? []).find((chat) => chat.id === peer)
+            ?? (liveFriendsRef.current ?? []).find((chat) => chat.id === peer);
+          const callerName = knownChat?.name?.trim() || "LINE User";
+          if (settingsRef.current.callNotifications && lineyEngine.isNative) {
+            void invoke("notify_call", {
+              title: "สายเรียกเข้าจาก " + callerName,
+              body: "แตะเพื่อเปิด Liney และรับสาย",
+              peer,
+              callId: incomingId,
+            }).catch(() => undefined);
+          }
+        }
+      }
+      if (event.type === "event.call.identity") {
+        const peer = String(event.peer ?? "");
+        const name = String(event.name ?? "").trim();
+        const avatarUrl = String(event.avatarUrl ?? "").trim() || undefined;
+        if (peer && name) setCallIdentity({ peer, name, avatarUrl });
       }
       if (event.type === "event.call.state") {
         const next = String(event.state ?? "idle") as CallState;
+        if (videoUpgradeInProgressRef.current && (next === "ended" || next === "idle")) return;
         setCallState(next);
+        if (event.reason === "video-failed") {
+          setCallVideoEnabled(false);
+          setCallScreenSharing(false);
+          setCallError("ส่งภาพวิดีโอไม่สำเร็จ · ตรวจกล้องหรือการแชร์หน้าจอแล้วลองอีกครั้ง");
+        }
+      }
+      if (event.type === "event.call.videoFrame") {
+        const frame = String(event.frame ?? "");
+        if (frame.startsWith("data:image/png;base64,")) setCallRemoteVideoFrame(frame);
       }
       if (event.type === "event.call.ready") {
         setCallId((current) => String(event.callId ?? current));
         setCallPeer((current) => String(event.peer ?? current));
+        setCallVideoCapable(Boolean(event.videoCapable));
+        if (event.videoCapable) setCallMode("VIDEO");
         setCallState("in-call");
         setCallOpen(true);
       }
-      if (event.type === "event.call.error") setCallError(String(event.error ?? "สายเสียงขัดข้อง"));
-      if (event.type === "event.call.cancel") {
-        setCallState("ended");
-        setCallOpen(false);
+      if (event.type === "event.call.error") {
+        const message = String(event.error ?? "สายเสียงขัดข้อง");
+        if (message.startsWith("remote-video:")) {
+          setCallError("รับภาพวิดีโอจากอีกฝั่งไม่สำเร็จ · " + message.slice("remote-video:".length).trim());
+        } else if (message.startsWith("media-capture:")) {
+          setCallVideoEnabled(false);
+          setCallScreenSharing(false);
+          setCallError("สื่อภาพหยุดทำงาน · " + message.slice("media-capture:".length).trim());
+        } else {
+          setCallError(message);
+        }
       }
-      if (event.type === "event.call.ended") {
+      if (event.type === "event.call.cancel" || event.type === "event.call.ended") {
+        if (videoUpgradeInProgressRef.current) return;
         setCallState("ended");
+        setCallRemoteVideoFrame("");
         setCallOpen(false);
+        setCallDirection(null);
       }
     });
     void connect();
@@ -1209,13 +1660,35 @@ function MainApp() {
   useEffect(() => {
     if (!lineyEngine.isNative || !callOpen || !authenticated) return;
     let active = true;
-    void lineyEngine.request<{ outputs?: AudioDeviceResult[] }>("call.devices", {}, 8_000)
-      .then((result) => {
-        if (active) setCallOutputs((result?.outputs ?? []).filter((device) => device.kind === "output"));
-      })
-      .catch(() => {
-        if (active) setCallOutputs([]);
+    void Promise.all([
+      lineyEngine.request<{ outputs?: AudioDeviceResult[] }>("call.devices", {}, 8_000)
+        .catch(() => ({ outputs: [] as AudioDeviceResult[] })),
+      lineyEngine.request<{ hardware?: CallHardwareStatus }>("call.status", {}, 8_000)
+        .catch(() => ({ hardware: undefined })),
+      lineyEngine.request<{
+        backend?: string;
+        managedBySystem?: boolean;
+        targets?: ScreenShareTargetResult[];
+      }>("call.screenTargets", {}, 8_000)
+        .catch(() => ({ targets: [] as ScreenShareTargetResult[], managedBySystem: false })),
+    ]).then(([devices, status, screen]) => {
+      if (!active) return;
+      setCallOutputs((devices?.outputs ?? []).filter((device) => device.kind === "output"));
+      setCallCameraAvailable(Boolean(status?.hardware?.camera?.available));
+      setCallMicrophoneAvailable(Boolean(status?.hardware?.microphone?.available));
+      setCallSpeakerAvailable(Boolean(status?.hardware?.speaker?.available));
+      setCallScreenShareAvailable(Boolean(status?.hardware?.screenShare?.available));
+      const targets = (screen?.targets ?? []).filter((target) => target.available);
+      setCallScreenTargets(targets);
+      setCallScreenManagedBySystem(Boolean(screen?.managedBySystem));
+      setCallScreenTarget((current) => {
+        if (targets.some((target) => target.id === current)) return current;
+        return targets.find((target) => target.id === "desktop")?.id
+          ?? targets.find((target) => target.primary)?.id
+          ?? targets[0]?.id
+          ?? "desktop";
       });
+    });
     return () => { active = false; };
   }, [callOpen, authenticated]);
 
@@ -1255,13 +1728,14 @@ function MainApp() {
     const base = usesEngineRuntime
       ? (settings.openchat ? (liveChats ?? []) : (liveChats ?? []).filter((chat) => chat.kind !== "openchat"))
       : seedChats;
-    return base
+    return mergeFriendProfilesIntoChats(base, allFriends)
       .map((chat) => {
         const localPinTimestamp = localPins[chat.id] ?? 0;
         const remotePinTimestamp = chat.favoriteTimestamp ?? 0;
         const favorite = chat.kind === "dm" ? favoriteFriendMap.get(chat.id) : undefined;
         return {
           ...chat,
+          avatarUrl: chat.kind === "dm" ? currentTalkAvatarUrl(chat) : chat.avatarUrl,
           ...(favorite ? { isFavorite: true, favoriteTime: favorite.favoriteTime } : {}),
           pinned: Boolean(chat.pinned || localPinTimestamp),
           favoriteTimestamp: Math.max(remotePinTimestamp, localPinTimestamp),
@@ -1272,9 +1746,13 @@ function MainApp() {
         if ((a.lastMessageTime ?? 0) !== (b.lastMessageTime ?? 0)) return (b.lastMessageTime ?? 0) - (a.lastMessageTime ?? 0);
         return (b.favoriteTimestamp ?? 0) - (a.favoriteTimestamp ?? 0);
       });
-  }, [liveChats, favoriteFriendMap, localPins, settings.openchat, usesEngineRuntime]);
+  }, [liveChats, allFriends, favoriteFriendMap, localPins, settings.openchat, usesEngineRuntime]);
   const totalUnread = useMemo(
     () => allChats.reduce((sum, chat) => sum + Math.max(0, chat.unread ?? 0), 0),
+    [allChats],
+  );
+  const unreadChatCount = useMemo(
+    () => allChats.filter((chat) => (chat.unread ?? 0) > 0 && chat.id !== "__liney__").length,
     [allChats],
   );
   const callChats = useMemo(() => {
@@ -1348,47 +1826,90 @@ function MainApp() {
   };
   const activePool = [...allChats, ...allFriends, ...callChats];
   const activeChat = activePool.find((chat) => chat.id === activeChatId) ?? visibleChats[0] ?? activePool[0] ?? placeholderChat;
-  const activeMessages = activeChat.id === "__liney__"
-    ? []
-    : messageMap[activeChat.id] ?? (activeChat.kind === "dm" && liveChats && !liveChats.some((item) => item.id === activeChat.id) ? [] : undefined);
-  const activeMessagesLoaded = activeMessages !== undefined;
-  const renderedActiveMessages = activeMessages?.slice(-MAX_ACTIVE_MESSAGES_IN_MEMORY);
-  const activeMessageLatestTime = activeMessages?.reduce(
-    (latest, message) => Math.max(latest, Number(message.createdTime ?? 0)),
-    0,
-  ) ?? 0;
+  const callBaseChat = activePool.find((chat) => chat.id === callPeer);
+  const callResolvedIdentity = callIdentity?.peer === callPeer ? callIdentity : null;
+  const callDisplayName = (
+    callResolvedIdentity?.name && callResolvedIdentity.name !== "LINE User"
+      ? callResolvedIdentity.name
+      : callBaseChat?.name
+  ) || (callPeer && !callPeer.startsWith("u") ? callPeer : "LINE User");
+  const callChat: Chat = {
+    ...(callBaseChat ?? {
+      id: callPeer || "__call__",
+      name: callDisplayName,
+      subtitle: "การโทร",
+      time: "",
+      kind: "dm",
+      avatar: initials(callDisplayName),
+      accent: senderAccent(callPeer || callDisplayName),
+    }),
+    id: callPeer || callBaseChat?.id || "__call__",
+    name: callDisplayName,
+    avatar: initials(callDisplayName),
+    avatarUrl: callResolvedIdentity?.avatarUrl || callBaseChat?.avatarUrl,
+    accent: callBaseChat?.accent ?? senderAccent(callPeer || callDisplayName),
+  };
+  const activeTimelineEmptyFallback = activeChat.kind === "dm"
+    && Boolean(liveChats)
+    && !liveChats?.some((item) => item.id === activeChat.id);
 
   // The sidebar can learn about a message from Talk metadata before the push
-  // operation reaches the renderer. If its timestamp is newer than the loaded
-  // conversation, actively catch the room up instead of leaving two panes out
-  // of sync. Bounded retries avoid hammering LINE when history is delayed.
+  // operation reaches the renderer. Observe only the active room in the external
+  // timeline store so incoming messages do not rerender MainApp/sidebar.
   useEffect(() => {
-    if (!usesEngineRuntime || !authenticated || activeChat.id === "__liney__" || !activeMessagesLoaded) return;
+    if (!usesEngineRuntime || !authenticated || activeChat.id === "__liney__") return;
+    const chatId = activeChat.id;
     const target = Number(activeChat.lastMessageTime ?? 0);
-    if (!target || activeMessageLatestTime >= target) {
-      sidebarCatchupRef.current.delete(activeChat.id);
-      return;
-    }
-    const previous = sidebarCatchupRef.current.get(activeChat.id);
-    const attempts = previous?.target === target ? previous.attempts : 0;
-    if (attempts >= 6) return;
-    const timer = window.setTimeout(() => {
-      sidebarCatchupRef.current.set(activeChat.id, { target, attempts: attempts + 1 });
-      setMessageRefreshNonce((value) => value + 1);
-    }, attempts === 0 ? 250 : Math.min(2_000, 500 + attempts * 300));
-    return () => window.clearTimeout(timer);
-  }, [authenticated, activeChat.id, activeChat.lastMessageTime, activeMessagesLoaded, activeMessageLatestTime, messageRefreshNonce, usesEngineRuntime]);
+    let timer: number | undefined;
 
-  async function markChatReadAtBottom(chat: Chat, lastMessageId?: string) {
+    const evaluate = () => {
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+        timer = undefined;
+      }
+      const messages = getTimelineRooms()[chatId];
+      if (!messages) return;
+      const latest = messages.reduce(
+        (value, message) => Math.max(value, Number(message.createdTime ?? 0)),
+        0,
+      );
+      if (!target || latest >= target) {
+        sidebarCatchupRef.current.delete(chatId);
+        return;
+      }
+      const previous = sidebarCatchupRef.current.get(chatId);
+      const attempts = previous?.target === target ? previous.attempts : 0;
+      if (attempts >= 6) return;
+      timer = window.setTimeout(() => {
+        sidebarCatchupRef.current.set(chatId, { target, attempts: attempts + 1 });
+        setMessageRefreshNonce((value) => value + 1);
+      }, attempts === 0 ? 250 : Math.min(2_000, 500 + attempts * 300));
+    };
+
+    evaluate();
+    const unsubscribe = timelineStore.subscribe((state, previous) => {
+      if (state.rooms[chatId] !== previous.rooms[chatId]) evaluate();
+    });
+    return () => {
+      unsubscribe();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [authenticated, activeChat.id, activeChat.lastMessageTime, messageRefreshNonce, usesEngineRuntime]);
+
+  async function markChatReadAtBottom(chat: Chat, lastMessageId?: string, lastMessageTime?: number) {
     const unread = chat.unread ?? 0;
     if (!authenticated || !windowActive || !unread || chat.id === "__liney__") return;
     const readKey = `${chat.id}:${lastMessageId || unread}`;
     if (readMarkedRef.current.has(readKey)) return;
-    readMarkedRef.current.add(readKey);
     clearReadMarks(chat.id);
     readMarkedRef.current.add(readKey);
     const previousReadThrough = localReadThroughTimeRef.current.get(chat.id);
-    localReadThroughTimeRef.current.set(chat.id, Math.max(previousReadThrough ?? 0, chat.lastMessageTime ?? Date.now()));
+    const readThrough = Math.max(
+      previousReadThrough ?? 0,
+      Number(chat.lastMessageTime ?? 0),
+      Number(lastMessageTime ?? 0),
+    );
+    if (readThrough > 0) localReadThroughTimeRef.current.set(chat.id, readThrough);
     setLiveChats((current) => {
       if (!current) return current;
       const next = current.map((item) => item.id === chat.id ? { ...item, unread: undefined } : item);
@@ -1411,7 +1932,55 @@ function MainApp() {
     }
   }
 
+  async function markAllUnreadChats(): Promise<{ total: number; marked: number; failed: number }> {
+    const unreadChats = allChats.filter((chat) => (chat.unread ?? 0) > 0 && chat.id !== "__liney__");
+    if (!authenticated || unreadChats.length === 0 || markAllReadBusy) return { total: 0, marked: 0, failed: 0 };
+
+    setMarkAllReadBusy(true);
+    setMarkAllReadProgress({ done: 0, total: unreadChats.length });
+    let nextIndex = 0;
+    let done = 0;
+    let marked = 0;
+    let failed = 0;
+    const worker = async () => {
+      while (nextIndex < unreadChats.length) {
+        const chat = unreadChats[nextIndex++];
+        try {
+          await lineyEngine.request("chat.mark_read", {
+            chatId: chat.id,
+            kind: chat.kind === "openchat" ? "openchat" : "talk",
+          }, 20_000);
+          marked += 1;
+          const readThrough = Math.max(localReadThroughTimeRef.current.get(chat.id) ?? 0, Number(chat.lastMessageTime ?? 0));
+          if (readThrough > 0) localReadThroughTimeRef.current.set(chat.id, readThrough);
+          setLiveChats((current) => {
+            if (!current) return current;
+            const next = current.map((item) => {
+              if (item.id !== chat.id) return item;
+              const remainingUnread = Math.max(0, (item.unread ?? 0) - (chat.unread ?? 0));
+              return { ...item, unread: remainingUnread || undefined };
+            });
+            liveChatsRef.current = next;
+            return next;
+          });
+        } catch {
+          failed += 1;
+        }
+        done += 1;
+        setMarkAllReadProgress({ done, total: unreadChats.length });
+      }
+    };
+    try {
+      await Promise.all(Array.from({ length: Math.min(2, unreadChats.length) }, () => worker()));
+      return { total: unreadChats.length, marked, failed };
+    } finally {
+      setMarkAllReadBusy(false);
+      setMarkAllReadProgress(null);
+    }
+  }
+
   async function refreshTalkReadState(chatId: string, messages: Message[], requestGeneration: number) {
+    if (activeChatRef.current !== chatId) return;
     const messageIds = [...new Set(messages
       .filter((message) => message.author === "me" && /^\d+$/.test(message.id))
       .map((message) => message.id)
@@ -1423,12 +1992,14 @@ function MainApp() {
         kind: "talk",
         messageIds,
       }, 20_000);
-      if (messageLoadGenerationRef.current.get(chatId) !== requestGeneration) return;
+      if (activeChatRef.current !== chatId
+        || messageLoadGenerationRef.current.get(chatId) !== requestGeneration) return;
       const byId = new Map(states.map((state) => [state.messageId, state]));
       const roomReaders = sessionReadReadersRef.current.get(chatId) ?? new Map<string, Set<string>>();
       sessionReadReadersRef.current.set(chatId, roomReaders);
       setMessageMap((current) => {
-        if (messageLoadGenerationRef.current.get(chatId) !== requestGeneration) return current;
+        if (activeChatRef.current !== chatId
+          || messageLoadGenerationRef.current.get(chatId) !== requestGeneration) return current;
         const existing = current[chatId];
         if (!existing) return current;
         let changed = false;
@@ -1457,29 +2028,64 @@ function MainApp() {
     }
   }
 
+  // LINE push + polling fallback live in the engine. The renderer only
+  // reconciles occasionally for membership metadata or a rare missed edge;
+  // aggressive 4s/12s polling here used to race the live stream and duplicate
+  // unread/list work.
   useEffect(() => {
     if (!usesEngineRuntime || !authenticated || !settings.openchat || !settings.openchatRealtimeRefresh) return;
-    const listTimer = window.setInterval(() => { void loadLiveChats(); }, 12_000);
+    const listTimer = window.setInterval(() => { void loadLiveChats(); }, 60_000);
     return () => window.clearInterval(listTimer);
   }, [authenticated, settings.openchat, settings.openchatRealtimeRefresh, usesEngineRuntime]);
 
   useEffect(() => {
+    if (!usesEngineRuntime || !authenticated) return;
+    let lastRefreshAt = 0;
+    const refreshFriends = () => {
+      if (document.visibilityState !== "visible") return;
+      const now = Date.now();
+      if (now - lastRefreshAt < 30_000) return;
+      lastRefreshAt = now;
+      void loadLiveFriends();
+    };
+    refreshFriends();
+    const refreshTimer = window.setInterval(refreshFriends, 5 * 60_000);
+    window.addEventListener("focus", refreshFriends);
+    document.addEventListener("visibilitychange", refreshFriends);
+    return () => {
+      window.clearInterval(refreshTimer);
+      window.removeEventListener("focus", refreshFriends);
+      document.removeEventListener("visibilitychange", refreshFriends);
+    };
+  }, [authenticated, usesEngineRuntime]);
+
+  useEffect(() => {
     if (!usesEngineRuntime || !authenticated || activeChat.kind !== "openchat" || !settings.openchatRealtimeRefresh) return;
-    const messageTimer = window.setInterval(() => setMessageRefreshNonce((value) => value + 1), 4_000);
+    const messageTimer = window.setInterval(() => setMessageRefreshNonce((value) => value + 1), 30_000);
     return () => window.clearInterval(messageTimer);
   }, [authenticated, activeChat.id, activeChat.kind, settings.openchatRealtimeRefresh, usesEngineRuntime]);
 
   useEffect(() => {
-    if (!usesEngineRuntime || !liveChats || !activeChatId) return;
-    const chat = [...liveChats, ...(liveFriends ?? [])].find((item) => item.id === activeChatId);
+    if (!usesEngineRuntime || !authenticated || !activeChatId) return;
+    const chat = [...(liveChatsRef.current ?? []), ...(liveFriendsRef.current ?? []), ...callChats]
+      .find((item) => item.id === activeChatId);
     if (!chat) return;
+    const activeLoadEpoch = activeMessageLoadEpochRef.current;
     const requestGeneration = (messageLoadGenerationRef.current.get(chat.id) ?? 0) + 1;
     messageLoadGenerationRef.current.set(chat.id, requestGeneration);
+    const isCurrentLoad = () => activeMessageLoadEpochRef.current === activeLoadEpoch
+      && activeChatRef.current === chat.id
+      && messageLoadGenerationRef.current.get(chat.id) === requestGeneration;
 
     const catchup = sidebarCatchupRef.current.get(chat.id);
     const forceRefresh = Boolean(catchup)
+      || forcedHistoryRefreshRef.current.has(chat.id)
       || (chat.kind === "openchat" && settingsRef.current.openchatRealtimeRefresh && messageRefreshNonce > 0);
-    void lineyEngine
+    // A short network-only debounce collapses A→B→C rapid clicks into one
+    // history request while cached UI selection still changes immediately.
+    const timer = window.setTimeout(() => {
+      if (!isCurrentLoad()) return;
+      void lineyEngine
       .request<LiveMessageResult[]>("message.list", {
         chatId: chat.id,
         kind: chat.kind === "openchat" ? "openchat" : "talk",
@@ -1487,10 +2093,22 @@ function MainApp() {
         ...(forceRefresh ? { refresh: true } : {}),
       }, chat.kind === "openchat" ? 45_000 : 30_000)
       .then((list) => {
-        if (messageLoadGenerationRef.current.get(chat.id) !== requestGeneration) return;
+        if (!isCurrentLoad()) return;
         const sorted = [...list]
           .sort((a, b) => Number(a.createdTime) - Number(b.createdTime))
           .filter((item) => item.text || Number(item.contentType ?? 0) > 0);
+        forcedHistoryRefreshRef.current.delete(chat.id);
+        if (sorted.length) {
+          sidebarCatchupRef.current.delete(chat.id);
+        } else if (chat.kind !== "openchat" && Number(chat.lastMessageTime ?? 0) > 0) {
+          // The engine already tried cursor, recent, box payload, and one
+          // metadata refresh. Avoid a six-request loop over the same empty
+          // remote result; the user can still request a fresh pass manually.
+          sidebarCatchupRef.current.set(chat.id, {
+            target: Number(chat.lastMessageTime),
+            attempts: 6,
+          });
+        }
         const baseMapped = sorted.map<Message>((item) => ({
           id: item.id,
           author: item.isMine ? "me" : "them",
@@ -1522,6 +2140,7 @@ function MainApp() {
           replyToId: item.replyToId,
           unsent: item.unsent,
           status: item.status ?? "sent",
+          sendError: item.sendError ? formatSendError(item.sendError) : undefined,
         }));
         const existingSnapshot = messageMapRef.current[chat.id] ?? [];
         const existingIds = new Set(existingSnapshot.map((item) => item.id));
@@ -1554,7 +2173,7 @@ function MainApp() {
           });
         }
         setMessageMap((current) => {
-          if (messageLoadGenerationRef.current.get(chat.id) !== requestGeneration) return current;
+          if (!isCurrentLoad()) return current;
           const existing = current[chat.id] ?? [];
           const previousById = new Map(existing.map((item) => [item.id, item]));
           // A history refresh recreates Message objects. Carry an already
@@ -1591,12 +2210,15 @@ function MainApp() {
         void hydrateImagePreviews(chat.id, sorted, chat.kind === "openchat" ? "openchat" : "talk", requestGeneration);
       })
       .catch((error) => {
-        if (messageLoadGenerationRef.current.get(chat.id) !== requestGeneration) return;
+        if (!isCurrentLoad()) return;
+        forcedHistoryRefreshRef.current.delete(chat.id);
         // Keep the last good SQLite history visible when a refresh fails.
         setMessageMap((current) => current[chat.id] ? current : ({ ...current, [chat.id]: [] }));
         setAuthError(error instanceof Error ? error.message : String(error));
       });
-  }, [activeChatId, authenticated, liveChats, liveFriends, settings.autoMedia, messageRefreshNonce, usesEngineRuntime]);
+    }, 90);
+    return () => window.clearTimeout(timer);
+  }, [activeChatId, authenticated, callChats, settings.autoMedia, messageRefreshNonce, usesEngineRuntime]);
 
   async function hydrateImagePreview(
     chatId: string,
@@ -1604,8 +2226,12 @@ function MainApp() {
     kind: "talk" | "openchat",
     requestGeneration?: number,
   ) {
+    const stale = () => requestGeneration !== undefined
+      && (activeChatRef.current !== chatId
+        || messageLoadGenerationRef.current.get(chatId) !== requestGeneration);
     let lastError: unknown = null;
     for (let attempt = 0; attempt < 2; attempt++) {
+      if (stale()) return;
       try {
         const preview = await lineyEngine.request<MediaPreviewResult>(
           "media.preview",
@@ -1614,8 +2240,7 @@ function MainApp() {
         );
         if (!preview?.dataUrl) throw new Error("empty image preview");
         setMessageMap((current) => {
-          if (requestGeneration !== undefined
-            && messageLoadGenerationRef.current.get(chatId) !== requestGeneration) return current;
+          if (stale()) return current;
           return {
             ...current,
             [chatId]: (current[chatId] ?? []).map((item) =>
@@ -1626,14 +2251,14 @@ function MainApp() {
         return;
       } catch (error) {
         lastError = error;
+        if (stale()) return;
         if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 650));
       }
     }
 
     // Keep a usable fallback only after both the preview and retry path fail.
     setMessageMap((current) => {
-      if (requestGeneration !== undefined
-        && messageLoadGenerationRef.current.get(chatId) !== requestGeneration) return current;
+      if (stale()) return current;
       return {
         ...current,
         [chatId]: (current[chatId] ?? []).map((item) =>
@@ -1650,10 +2275,13 @@ function MainApp() {
     kind: "talk" | "openchat",
     requestGeneration?: number,
   ) {
+    const stale = () => requestGeneration !== undefined
+      && (activeChatRef.current !== chatId
+        || messageLoadGenerationRef.current.get(chatId) !== requestGeneration);
+    if (stale()) return;
     if (kind === "openchat" && !settingsRef.current.autoMedia) {
       setMessageMap((current) => {
-        if (requestGeneration !== undefined
-          && messageLoadGenerationRef.current.get(chatId) !== requestGeneration) return current;
+        if (stale()) return current;
         return {
           ...current,
           [chatId]: (current[chatId] ?? []).map((item) =>
@@ -1664,13 +2292,55 @@ function MainApp() {
       return;
     }
     const images = list.filter((item) => Number(item.contentType ?? 0) === 1).slice(-MAX_IMAGE_PREVIEWS_PER_REFRESH);
-    const concurrency = Math.min(2, images.length);
-    const workers = Array.from({ length: concurrency }, async (_, workerIndex) => {
-      for (let index = workerIndex; index < images.length; index += concurrency) {
-        await hydrateImagePreview(chatId, images[index].id, kind, requestGeneration);
+    // One preview at a time keeps the UI/network responsive on low-power Linux
+    // machines; the next request is skipped immediately if the room changed.
+    for (const image of images) {
+      if (stale()) return;
+      await hydrateImagePreview(chatId, image.id, kind, requestGeneration);
+    }
+  }
+
+  async function loadOlderTimelineMessages(
+    chat: Chat,
+    before: Message,
+  ): Promise<{ added: number; hasMore: boolean }> {
+    if (chat.kind === "openchat") return { added: 0, hasMore: false };
+    const page = await lineyEngine.request<LiveHistoryPage>("message.history", {
+      chatId: chat.id,
+      kind: "talk",
+      beforeMessageId: before.id,
+      beforeCreatedTime: Number(before.createdTime ?? 0),
+      limit: 50,
+    }, 30_000);
+    const sorted = [...(Array.isArray(page?.messages) ? page.messages : [])]
+      .sort((left, right) => Number(left.createdTime ?? 0) - Number(right.createdTime ?? 0))
+      .filter((item) => item.text || Number(item.contentType ?? 0) > 0);
+    const mapped = sorted.map((item) => mapLiveMessageResult(item, chat.kind, settingsRef.current.autoMedia));
+    let added = 0;
+
+    updateTimelineRoom(chat.id, (current) => {
+      const byId = new Map(current.map((message) => [message.id, message]));
+      for (const message of mapped) {
+        const previous = byId.get(message.id);
+        if (!previous) {
+          byId.set(message.id, message);
+          added += 1;
+          continue;
+        }
+        byId.set(message.id, {
+          ...message,
+          ...previous,
+          readCount: Math.max(message.readCount ?? 0, previous.readCount ?? 0),
+          readByPeer: Boolean(message.readByPeer || previous.readByPeer),
+        });
       }
+      return [...byId.values()].sort((left, right) => Number(left.createdTime ?? 0) - Number(right.createdTime ?? 0));
     });
-    await Promise.all(workers);
+
+    const requestGeneration = messageLoadGenerationRef.current.get(chat.id);
+    if (requestGeneration !== undefined) void refreshTalkReadState(chat.id, mapped, requestGeneration);
+    void hydrateImagePreviews(chat.id, sorted, "talk", requestGeneration);
+    return { added, hasMore: Boolean(page?.hasMore) && added > 0 };
   }
 
   async function loadLiveChats() {
@@ -1688,18 +2358,11 @@ function MainApp() {
     const talk = talkSucceeded ? talkResult.value : [];
     const square = squareSucceeded ? squareResult.value : [];
     const previous = liveChatsRef.current ?? [];
-    const previousTalkCount = previous.filter((chat) => chat.kind !== "openchat").length;
-    const previousSquareCount = previous.filter((chat) => chat.kind === "openchat").length;
     const remoteIds = new Set([...talk, ...square].map((item) => item.id));
-    const preserved = previous.filter((chat) => {
-      if (remoteIds.has(chat.id)) return false;
-      const isOpenChat = chat.kind === "openchat";
-      if (isOpenChat && !includeOpenchat) return false;
-      const keepCategory = isOpenChat
-        ? !squareSucceeded || square.length === 0 || square.length < previousSquareCount
-        : !talkSucceeded || talk.length === 0 || talk.length < previousTalkCount;
-      return keepCategory;
-    });
+    const preserved = previous.filter((chat) =>
+      !remoteIds.has(chat.id)
+      && (includeOpenchat || chat.kind !== "openchat"),
+    );
     const previousById = new Map(previous.map((chat) => [chat.id, chat]));
     const mappedRemote = [...talk, ...square].map((item, index) => {
       const mapped = mapLiveChatResult(item, index);
@@ -1752,10 +2415,16 @@ function MainApp() {
     try {
       const result = await lineyEngine.request<LiveChatResult[]>("friends.list", {}, 60_000);
       if (liveFriendsLoadGenerationRef.current !== requestGeneration) return;
-      const mapped = sortLiveFriends(result.map(mapLiveFriendResult));
-      const next = mapped.length || !liveFriendsRef.current ? mapped : liveFriendsRef.current;
+      const mapped = result.map(mapLiveFriendResult);
+      const next = mergeLiveFriendSnapshots(liveFriendsRef.current, mapped);
       liveFriendsRef.current = next;
       setLiveFriends(next);
+      const previousChats = liveChatsRef.current ?? [];
+      const nextChats = mergeFriendProfilesIntoChats(previousChats, next);
+      if (nextChats.some((chat, index) => chat !== previousChats[index])) {
+        liveChatsRef.current = nextChats;
+        setLiveChats(nextChats);
+      }
     } catch (error) {
       if (liveFriendsLoadGenerationRef.current !== requestGeneration) return;
       const message = error instanceof Error ? error.message : String(error);
@@ -1779,8 +2448,39 @@ function MainApp() {
     });
   }
 
+  async function mergeDuplicateChats(aliasMid: string, canonicalMid: string) {
+    const result = await lineyEngine.request<{ canonicalMid?: string }>(
+      "chat.identity.merge",
+      { aliasMid, canonicalMid },
+      30_000,
+    );
+    const selectedMid = String(result?.canonicalMid || canonicalMid);
+    setReplyTarget(null);
+    setSection("messages");
+    setListFilter("all");
+    setActiveChatId(selectedMid);
+    setMobileConversationOpen(true);
+    setMessageMap((current) => {
+      const next = { ...current };
+      delete next[aliasMid];
+      next[selectedMid] = [];
+      return next;
+    });
+    setMessageRefreshNonce((current) => current + 1);
+    setLocalPins((current) => {
+      const next = { ...current };
+      const sourcePin = next[aliasMid] ?? 0;
+      const targetPin = next[selectedMid] ?? 0;
+      if (sourcePin || targetPin) next[selectedMid] = Math.max(sourcePin, targetPin);
+      delete next[aliasMid];
+      return next;
+    });
+    await Promise.all([loadLiveChats(), loadLiveFriends()]);
+    setActiveChatId(selectedMid);
+  }
+
   function selectChat(chatId: string) {
-    const chat = [...(liveChats ?? []), ...(liveFriends ?? [])].find((item) => item.id === chatId);
+    const chat = [...(liveChats ?? []), ...(liveFriends ?? []), ...callChats].find((item) => item.id === chatId);
     setReplyTarget(null);
     setActiveChatId(chatId);
     setMobileConversationOpen(true);
@@ -1875,6 +2575,41 @@ function MainApp() {
     setAuthError("");
     setAuthBusy(true);
     void lineyEngine.request("auth.qr.start", {}, 180_000)
+      .catch((error) => {
+        setQrUrl("");
+        setPin("");
+        setAuthError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => setAuthBusy(false));
+  }
+
+  function beginKeyImport() {
+    keyImportDialogOpenRef.current = true;
+    setKeyImportMode(true);
+    setKeyImportResult(null);
+    setQrUrl("");
+    setPin("");
+    setAuthError("");
+  }
+
+  function startKeychainImport() {
+    if (engineState !== "ready" || authBusy || !authenticated) return;
+    keyImportDialogOpenRef.current = true;
+    setAuthOpen(true);
+    setKeyImportMode(true);
+    setKeyImportResult(null);
+    setQrUrl("");
+    setPin("");
+    setAuthError("");
+    setAuthBusy(true);
+    void lineyEngine.request<{ keychainImported?: boolean; generations?: number }>("auth.e2ee.qr_import", {}, 180_000)
+      .then((result) => {
+        if (!result?.keychainImported) throw new Error("LINE ไม่ได้ยืนยันการนำเข้า keychain");
+        setKeyImportResult({ generations: Math.max(1, Number(result.generations ?? 1)) });
+        setQrUrl("");
+        setPin("");
+        if (keyImportDialogOpenRef.current) setAuthOpen(true);
+      })
       .catch((error) => {
         setQrUrl("");
         setPin("");
@@ -2114,7 +2849,7 @@ function MainApp() {
   async function retryMessage(localId: string, chatId: string) {
     setMessageMap((current) => ({
       ...current,
-      [chatId]: (current[chatId] ?? []).map((item) => item.id === localId ? { ...item, status: "sending" } : item),
+      [chatId]: (current[chatId] ?? []).map((item) => item.id === localId ? { ...item, status: "sending", sendError: undefined } : item),
     }));
     try {
       await lineyEngine.request("message.retry", { localId }, 60_000);
@@ -2124,11 +2859,14 @@ function MainApp() {
       }));
     } catch (error) {
       const uncertain = error instanceof EngineRequestError && error.code === "TIMEOUT";
+      const sendError = formatSendError(error instanceof Error ? error.message : String(error));
       setMessageMap((current) => ({
         ...current,
-        [chatId]: (current[chatId] ?? []).map((item) => item.id === localId ? { ...item, status: uncertain ? "unknown" : "error" } : item),
+        [chatId]: (current[chatId] ?? []).map((item) => item.id === localId
+          ? { ...item, status: uncertain ? "unknown" : "error", sendError }
+          : item),
       }));
-      setAuthError(error instanceof Error ? error.message : String(error));
+      setAuthError(sendError);
     }
   }
 
@@ -2276,11 +3014,14 @@ function MainApp() {
       window.setTimeout(() => void loadLiveChats(), 700);
     } catch (error) {
       const uncertain = error instanceof EngineRequestError && error.code === "TIMEOUT";
+      const sendError = formatSendError(error instanceof Error ? error.message : String(error));
       setMessageMap((current) => ({
         ...current,
-        [chatId]: (current[chatId] ?? []).map((item) => item.id === id ? { ...item, status: uncertain ? "unknown" : "error" } : item),
+        [chatId]: (current[chatId] ?? []).map((item) => item.id === id
+          ? { ...item, status: uncertain ? "unknown" : "error", sendError }
+          : item),
       }));
-      setAuthError(error instanceof Error ? error.message : String(error));
+      setAuthError(sendError);
     }
   }
 
@@ -2353,43 +3094,193 @@ function MainApp() {
     }
   }
 
-  async function startCall() {
+  async function startCall(kind: "AUDIO" | "VIDEO" = "AUDIO") {
     if (!authenticated || activeChat.id === "__liney__") {
       setAuthOpen(true);
       return;
     }
     if (!callAvailable || activeChat.kind !== "dm") {
-      setCallPeer(activeChat.name);
+      setCallPeer(activeChat.id);
       setCallState("failed");
       setCallError(callReason || "สายเสียง 1:1 ยังไม่พร้อมบนระบบนี้");
       setCallOpen(true);
       return;
     }
-    setCallPeer(activeChat.name);
+    setCallPeer(activeChat.id);
+    setCallMode(kind);
+    setCallDirection("outgoing");
     setCallState("acquiring");
     setCallError("");
     setCallMuted(false);
+    setCallVideoCapable(false);
+    setCallVideoEnabled(false);
+    setCallScreenSharing(false);
+    setCallRemoteVideoFrame("");
     setCallOpen(true);
     try {
-      const result = await lineyEngine.request<{ callId?: string; state?: CallState }>("call.start", { peer: activeChat.id }, 80_000);
+      const result = await lineyEngine.request<{ callId?: string; state?: CallState; videoCapable?: boolean }>(
+        "call.start",
+        { peer: activeChat.id, kind },
+        80_000,
+      );
       setCallId(String(result?.callId ?? ""));
+      setCallVideoCapable(Boolean(result?.videoCapable));
       setCallState(result?.state ?? "in-call");
+      if (kind === "VIDEO" && !result?.videoCapable) {
+        setCallError("LINE ยังไม่ได้เปิดช่องวิดีโอสำหรับสายนี้ · ใช้เสียงได้ แต่เปิดกล้องหรือแชร์จอไม่ได้");
+      }
     } catch (error) {
       setCallState("failed");
       setCallError(error instanceof Error ? error.message : String(error));
     }
   }
 
-  async function acceptCall() {
+  async function acceptCall(mode: "AUDIO" | "VIDEO" = "AUDIO") {
+    setCallMode(mode);
     setCallError("");
     setCallState("connecting");
+    setCallRemoteVideoFrame("");
     try {
-      const result = await lineyEngine.request<{ callId?: string; state?: CallState }>("call.accept", {}, 60_000);
+      const result = await lineyEngine.request<{ callId?: string; state?: CallState; videoCapable?: boolean }>(
+        "call.accept",
+        { mode },
+        60_000,
+      );
       if (result?.callId) setCallId(result.callId);
+      setCallVideoCapable(Boolean(result?.videoCapable));
+      setCallVideoEnabled(false);
+      setCallScreenSharing(false);
       setCallState(result?.state ?? "in-call");
+      if (mode === "VIDEO" && !result?.videoCapable) {
+        setCallError("LINE ยังไม่ได้เปิดช่องวิดีโอสำหรับสายนี้ · ใช้เสียงได้ แต่เปิดกล้องหรือแชร์จอไม่ได้");
+      }
     } catch (error) {
       setCallState("failed");
       setCallError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function toggleCallVideo() {
+    const next = !callVideoEnabled;
+    try {
+      const result = await lineyEngine.request<{
+        enabled?: boolean;
+        videoCapable?: boolean;
+        cameraAvailable?: boolean;
+        reason?: string;
+        message?: string;
+      }>(
+        "call.setVideo",
+        { enabled: next },
+        15_000,
+      );
+      setCallVideoCapable(Boolean(result?.videoCapable));
+      setCallCameraAvailable(Boolean(result?.cameraAvailable));
+      setCallVideoEnabled(Boolean(result?.enabled));
+      if (result?.enabled) {
+        setCallScreenSharing(false);
+        setCallError("");
+      } else if (next && result?.reason === "no-camera") {
+        setCallError("ไม่พบกล้อง · วิดีโอคอลยังใช้งานได้ แต่เปิดกล้องไม่ได้");
+      } else if (next && result?.reason === "camera-capture-failed") {
+        setCallError("เปิดกล้องไม่สำเร็จ · " + (result.message || "ตรวจสิทธิ์ใช้งานกล้องหรือปิดแอปอื่นที่กำลังใช้กล้อง"));
+      } else if (next && result?.reason === "native-backend-missing") {
+        setCallError("ไม่พบตัวจับภาพกล้องของ Liney · ติดตั้ง build ล่าสุดแล้วเปิดใหม่");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setCallError(/video was not negotiated/i.test(message)
+        ? "สายเสียงยังไม่มีช่องวิดีโอ · เปลี่ยนเป็นวิดีโอคอลก่อนแล้วลองอีกครั้ง"
+        : "เปิดกล้องไม่สำเร็จ · " + message);
+    }
+  }
+
+  async function toggleScreenShare() {
+    const next = !callScreenSharing;
+    try {
+      const result = await lineyEngine.request<{
+        enabled?: boolean;
+        videoCapable?: boolean;
+        screenShareAvailable?: boolean;
+        target?: string;
+        reason?: string;
+      }>(
+        "call.setScreenShare",
+        {
+          enabled: next,
+          ...(next && callScreenTargets.length ? { target: callScreenTarget } : {}),
+        },
+        130_000,
+      );
+      setCallVideoCapable(Boolean(result?.videoCapable));
+      setCallScreenShareAvailable(Boolean(result?.screenShareAvailable));
+      setCallScreenSharing(Boolean(result?.enabled));
+      if (result?.target) setCallScreenTarget(result.target);
+      if (result?.enabled) {
+        setCallVideoEnabled(false);
+        setCallError("");
+      } else if (next && result?.reason === "screen-share-backend") {
+        setCallError("ระบบจับภาพหน้าจอไม่พร้อม · ตรวจสิทธิ์ Screen Capture ของเดสก์ท็อปแล้วลองใหม่");
+      } else if (next && result?.reason === "screen-share-target") {
+        setCallError("เป้าหมายที่เลือกใช้ไม่ได้แล้ว · เลือกหน้าจอหรือหน้าต่างใหม่แล้วลองอีกครั้ง");
+      } else if (next && result?.reason === "screen-share-cancelled") {
+        setCallError("ยกเลิกการเลือกหน้าจอแล้ว");
+      } else if (next && result?.reason === "screen-share-failed") {
+        setCallError("เริ่มแชร์หน้าจอไม่สำเร็จ · อนุญาตการจับภาพในหน้าต่างระบบแล้วลองอีกครั้ง");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setCallError(/video was not negotiated/i.test(message)
+        ? "สายเสียงยังไม่มีช่องวิดีโอ · เปลี่ยนเป็นวิดีโอคอลก่อนแล้วลองอีกครั้ง"
+        : "แชร์หน้าจอไม่สำเร็จ · " + message);
+    }
+  }
+
+  async function upgradeCallToVideo() {
+    if (!callPeer || callState !== "in-call" || callMode === "VIDEO") return;
+    const confirmed = window.confirm(
+      "การเปิดกล้องหรือแชร์จอต้องเริ่มเป็นวิดีโอคอล สายเสียงปัจจุบันจะถูกวางและโทรหาอีกครั้ง ต้องการดำเนินการต่อไหม?",
+    );
+    if (!confirmed) return;
+
+    const peer = callPeer;
+    const previousDirection = callDirection;
+    videoUpgradeInProgressRef.current = true;
+    setCallMode("VIDEO");
+    setCallState("connecting");
+    setCallDirection("outgoing");
+    setCallError("");
+    setCallVideoCapable(false);
+    setCallVideoEnabled(false);
+    setCallScreenSharing(false);
+    try {
+      await lineyEngine.request("call.end", {}, 20_000);
+    } catch (error) {
+      videoUpgradeInProgressRef.current = false;
+      setCallMode("AUDIO");
+      setCallState("in-call");
+      setCallDirection(previousDirection);
+      setCallError("วางสายเสียงเพื่อเริ่มวิดีโอคอลไม่สำเร็จ · " + (error instanceof Error ? error.message : String(error)));
+      return;
+    }
+
+    try {
+      const result = await lineyEngine.request<{ callId?: string; state?: CallState; videoCapable?: boolean }>(
+        "call.start",
+        { peer, kind: "VIDEO" },
+        80_000,
+      );
+      if (result?.callId) setCallId(result.callId);
+      setCallVideoCapable(Boolean(result?.videoCapable));
+      setCallState(result?.state ?? "in-call");
+      if (!result?.videoCapable) {
+        setCallError("LINE ยังไม่ได้เปิดช่องวิดีโอสำหรับสายนี้ · ใช้เสียงได้ แต่เปิดกล้องหรือแชร์จอไม่ได้");
+      }
+    } catch (error) {
+      setCallState("failed");
+      setCallError(error instanceof Error ? error.message : String(error));
+    } finally {
+      videoUpgradeInProgressRef.current = false;
     }
   }
 
@@ -2398,6 +3289,7 @@ function MainApp() {
     catch (error) { setCallError(error instanceof Error ? error.message : String(error)); }
     setCallOpen(false);
     setCallState("ended");
+    setCallDirection(null);
   }
 
   async function changeCallOutput(target: string) {
@@ -2417,9 +3309,14 @@ function MainApp() {
     await lineyEngine.request("call.end", {}, 20_000).catch(() => undefined);
     setCallOpen(false);
     setCallState("ended");
+    setCallDirection(null);
   }
 
   async function toggleCallMute() {
+    if (!callMicrophoneAvailable) {
+      setCallError("ไม่พบไมโครโฟน · ยังอยู่ในสายและฟังอีกฝั่งได้");
+      return;
+    }
     const muted = !callMuted;
     setCallMuted(muted);
     await lineyEngine.request("call.setMuted", { muted }, 10_000).catch((error) => {
@@ -2489,7 +3386,7 @@ function MainApp() {
 
   async function openImageViewer(dataUrl: string) {
     if (!dataUrl || dataUrl === "food") return;
-    const loadedImages = (activeMessages ?? [])
+    const loadedImages = (getTimelineRooms()[activeChat.id] ?? [])
       .filter((message) => Boolean(message.image && message.image !== "food"))
       .map((message) => ({ id: message.id, src: message.image!, time: message.time }));
     const currentIndex = Math.max(0, loadedImages.findIndex((item) => item.src === dataUrl));
@@ -2560,6 +3457,10 @@ function MainApp() {
       clientIdentity={clientIdentity}
       storageMode={storageMode}
       required={required}
+      keyImportMode={keyImportMode}
+      keyImportResult={keyImportResult}
+      onBeginKeyImport={beginKeyImport}
+      onImportKeys={startKeychainImport}
       onModeChange={(mode) => {
         if (authBusy) return;
         setAuthMode(mode);
@@ -2573,16 +3474,17 @@ function MainApp() {
       onStart={startQrLogin}
       onPasswordLogin={startPasswordLogin}
       onLogout={logout}
-      onClose={() => setAuthOpen(false)}
+      onClose={() => {
+        keyImportDialogOpenRef.current = false;
+        setAuthOpen(false);
+        setKeyImportMode(false);
+        setKeyImportResult(null);
+      }}
     />
   );
 
   if (usesEngineRuntime && !authenticated) {
     return <div className="auth-gate-shell">{renderAuthDialog(true)}</div>;
-  }
-
-  if (usesEngineRuntime && authenticated && syncProgress.visible && syncProgress.phase !== "error") {
-    return <FullSyncGate progress={syncProgress} onCancel={() => void cancelFullSync()} />;
   }
 
   return (
@@ -2598,12 +3500,23 @@ function MainApp() {
         filter={listFilter}
         onFilter={setListFilter}
         onTogglePin={toggleLocalPin}
+        mergeCandidates={allChats.filter((chat) => chat.kind === "dm")}
+        onMerge={mergeDuplicateChats}
         onCreate={() => setNewChatOpen(true)}
+        unreadChatCount={unreadChatCount}
+        canMarkAllRead={authenticated}
+        markAllReadBusy={markAllReadBusy}
+        markAllReadProgress={markAllReadProgress}
+        onMarkAllRead={markAllUnreadChats}
       />
-      <Conversation
-        key={activeChat.id}
+      <TimelineConversation
         chat={activeChat}
-        messages={renderedActiveMessages}
+        emptyFallback={activeTimelineEmptyFallback}
+        onRetryHistory={() => {
+          forcedHistoryRefreshRef.current.add(activeChat.id);
+          setMessageRefreshNonce((value) => value + 1);
+        }}
+        onMergeHistory={(sourceMid, targetMid) => mergeDuplicateChats(sourceMid, targetMid)}
         composer={composer}
         onComposer={setComposer}
         onSend={sendMessage}
@@ -2627,13 +3540,17 @@ function MainApp() {
         onBack={() => { setMobileConversationOpen(false); setReplyTarget(null); }}
          canSend={authenticated && activeChat.id !== "__liney__"}
         callAvailable={callAvailable && activeChat.kind === "dm"}
-          onCall={() => void startCall()}
+          onCall={() => void startCall("AUDIO")}
+          onVideoCall={() => void startCall("VIDEO")}
+        albumsAvailable={lineyEngine.isNative && authenticated && activeChat.kind !== "openchat"}
+        onAlbums={() => setAlbumsOpen(true)}
         windowActive={windowActive}
         markReadOnBottom={settings.markReadOnBottom}
         showUnreadDivider={settings.showUnreadDivider}
         autoScrollNewMessages={settings.autoScrollNewMessages}
         showReadCount={settings.showReadCount}
-        onReadLatest={(lastMessageId) => void markChatReadAtBottom(activeChat, lastMessageId)}
+        onReadLatest={(lastMessageId, lastMessageTime) => void markChatReadAtBottom(activeChat, lastMessageId, lastMessageTime)}
+        onLoadOlder={(before) => loadOlderTimelineMessages(activeChat, before)}
         jumpToMessageId={notificationJump?.chatId === activeChat.id ? notificationJump.messageId : undefined}
         jumpNonce={notificationJump?.chatId === activeChat.id ? notificationJump.nonce : 0}
       />
@@ -2651,8 +3568,20 @@ function MainApp() {
           />
         )}
         {imageViewerSrc && <ImageViewerOverlay src={imageViewerSrc} onClose={() => setImageViewerSrc(null)} />}
+        {albumsOpen && <LineAlbumsModal onClose={() => setAlbumsOpen(false)} />}
         {settingsOpen && <SettingsModal initialTab={settingsInitialTab} themeMode={themeMode} dark={dark} settings={settings} callAvailable={callAvailable} onThemeMode={setThemeMode} onSetting={updateAppSettings} onDensity={(value) => updateSetting("density", value)} onRadius={(value) => updateSetting("radius", value)} onClearHistory={() => void clearLocalHistory()} onClearStickerCache={() => void clearStickerCache()} onFullSync={() => void startFullSync()} onClose={() => setSettingsOpen(false)} />}
-        {callOpen && <CallModal chat={activeChat} peer={callPeer} state={callState} muted={callMuted} error={callError} incomingSupported={callIncomingAvailable} outputDevices={callOutputs} outputTarget={callOutputTarget} onAccept={() => void acceptCall()} onReject={() => void rejectCall()} onMute={() => void toggleCallMute()} onOutput={(target) => void changeCallOutput(target)} onClose={() => void endCall()} />}
+        {callOpen && <CallModal chat={callChat} peer={callPeer} remoteVideoFrame={callRemoteVideoFrame} state={callState} muted={callMuted} microphoneAvailable={callMicrophoneAvailable} speakerAvailable={callSpeakerAvailable} videoCapable={callVideoCapable} videoEnabled={callVideoEnabled} cameraAvailable={callCameraAvailable} screenSharing={callScreenSharing} screenShareAvailable={callScreenShareAvailable} screenTargets={callScreenTargets} screenTarget={callScreenTarget} screenManagedBySystem={callScreenManagedBySystem} error={callError} incomingSupported={callIncomingAvailable} outputDevices={callOutputs} outputTarget={callOutputTarget} onAccept={() => void acceptCall("AUDIO")} onAcceptVideo={() => void acceptCall("VIDEO")} onReject={() => void rejectCall()} onMute={() => void toggleCallMute()} onVideo={() => void toggleCallVideo()} onScreenShare={() => void toggleScreenShare()} onUpgradeVideo={() => void upgradeCallToVideo()} mode={callMode} onScreenTarget={setCallScreenTarget} onOutput={(target) => void changeCallOutput(target)} onClose={() => void endCall()} />}
+        {usesEngineRuntime && authenticated && syncProgress.visible && (
+          <FullSyncPopup
+            progress={syncProgress}
+            onCancel={() => void cancelFullSync()}
+            onRetry={() => {
+              setSyncProgress({ visible: true, phase: "metadata", done: 0, total: 0, failed: 0 });
+              void startFullSync();
+            }}
+            onClose={() => setSyncProgress((current) => ({ ...current, visible: false }))}
+          />
+        )}
         {authOpen && renderAuthDialog(false)}
       </AnimatePresence>
     </div>
@@ -2662,6 +3591,7 @@ function MainApp() {
 function DetachedImageViewer() {
   const [gallery, setGallery] = useState<ImageGalleryPayload | null>(null);
   const [index, setIndex] = useState(0);
+  const [imageState, setImageState] = useState<"loading" | "ready" | "error">("loading");
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -2680,6 +3610,7 @@ function DetachedImageViewer() {
 
   const move = useCallback((delta: number) => {
     if (!gallery?.items.length) return;
+    setImageState("loading");
     setIndex((current) => {
       const next = current + delta;
       if (gallery.loop) return (next + gallery.items.length) % gallery.items.length;
@@ -2711,203 +3642,28 @@ function DetachedImageViewer() {
       </header>
       <section className="detached-image-stage">
         <button className="gallery-nav previous" type="button" aria-label="รูปก่อนหน้า" disabled={!hasPrevious} onClick={() => move(-1)}><ArrowLeft size={24} /></button>
-        <motion.img key={item.id} src={item.src} alt="รูปภาพ" initial={{ opacity: 0, scale: .985 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: .16 }} />
+        <img
+          key={item.id}
+          className="detached-image-main"
+          src={item.src}
+          alt="รูปภาพ"
+          draggable={false}
+          onLoad={() => setImageState("ready")}
+          onError={() => setImageState("error")}
+        />
+        {imageState === "loading" ? <span className="detached-image-status">กำลังโหลดรูปภาพ…</span> : null}
+        {imageState === "error" ? <span className="detached-image-status error">โหลดรูปภาพหลักไม่สำเร็จ</span> : null}
         <button className="gallery-nav next" type="button" aria-label="รูปถัดไป" disabled={!hasNext} onClick={() => move(1)}><ArrowLeft size={24} /></button>
       </section>
       <footer className="detached-image-strip">
         {gallery.items.map((thumb, thumbIndex) => (
-          <button key={thumb.id} className={thumbIndex === index ? "active" : ""} type="button" onClick={() => setIndex(thumbIndex)}><img src={thumb.src} alt="" loading="lazy" /></button>
+          <button key={thumb.id} className={thumbIndex === index ? "active" : ""} type="button" onClick={() => { setImageState("loading"); setIndex(thumbIndex); }}><img src={thumb.src} alt="" loading="lazy" /></button>
         ))}
       </footer>
     </main>
   );
 }
 
-function ImageViewerOverlay({ src, onClose }: { src: string; onClose: () => void }) {
-  const [error, setError] = useState("");
-  const [zoom, setZoom] = useState(1);
-  const [tool, setTool] = useState<ImageEditorTool>("view");
-  const [ready, setReady] = useState(false);
-  const [undoCount, setUndoCount] = useState(0);
-  const sourceRef = useRef<HTMLImageElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const drawingRef = useRef(false);
-  const lastPointRef = useRef<{ x: number; y: number } | null>(null);
-  const undoRef = useRef<ImageData[]>([]);
-
-  function context() {
-    const canvas = canvasRef.current;
-    return canvas ? canvas.getContext("2d") : null;
-  }
-
-  function snapshot() {
-    const canvas = canvasRef.current;
-    const ctx = context();
-    if (!canvas || !ctx) return;
-    undoRef.current = [...undoRef.current, ctx.getImageData(0, 0, canvas.width, canvas.height)].slice(-20);
-    setUndoCount(undoRef.current.length);
-  }
-
-  function pointFor(event: ReactPointerEvent<HTMLCanvasElement>) {
-    const canvas = canvasRef.current!;
-    const bounds = canvas.getBoundingClientRect();
-    return {
-      x: (event.clientX - bounds.left) * (canvas.width / bounds.width),
-      y: (event.clientY - bounds.top) * (canvas.height / bounds.height),
-    };
-  }
-
-  function initialiseCanvas() {
-    const image = sourceRef.current;
-    const canvas = canvasRef.current;
-    if (!image || !canvas || !image.naturalWidth || !image.naturalHeight) return;
-    canvas.width = image.naturalWidth;
-    canvas.height = image.naturalHeight;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.drawImage(image, 0, 0);
-    undoRef.current = [];
-    setUndoCount(0);
-    setReady(true);
-  }
-
-  function draw(from: { x: number; y: number }, to: { x: number; y: number }) {
-    const canvas = canvasRef.current;
-    const ctx = context();
-    if (!canvas || !ctx) return;
-    const size = Math.max(5, Math.round(canvas.width / 180));
-    if (tool === "draw") {
-      ctx.save();
-      ctx.strokeStyle = "#22c55e";
-      ctx.lineWidth = size;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.beginPath();
-      ctx.moveTo(from.x, from.y);
-      ctx.lineTo(to.x, to.y);
-      ctx.stroke();
-      ctx.restore();
-      return;
-    }
-    if (tool === "blur") {
-      const radius = size * 3;
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(to.x, to.y, radius, 0, Math.PI * 2);
-      ctx.clip();
-      ctx.filter = "blur(12px)";
-      ctx.drawImage(canvas, to.x - radius, to.y - radius, radius * 2, radius * 2, to.x - radius, to.y - radius, radius * 2, radius * 2);
-      ctx.restore();
-    }
-  }
-
-  function onPointerDown(event: ReactPointerEvent<HTMLCanvasElement>) {
-    if (!ready || tool === "view") return;
-    const point = pointFor(event);
-    if (tool === "text") {
-      const text = window.prompt("ใส่ข้อความ");
-      if (!text?.trim()) return;
-      const canvas = canvasRef.current;
-      const ctx = context();
-      if (!canvas || !ctx) return;
-      snapshot();
-      ctx.save();
-      ctx.fillStyle = "#ffffff";
-      ctx.strokeStyle = "rgba(0,0,0,.75)";
-      ctx.lineWidth = Math.max(3, canvas.width / 380);
-      ctx.font = `700 ${Math.max(22, Math.round(canvas.width / 24))}px sans-serif`;
-      ctx.textBaseline = "top";
-      ctx.strokeText(text.trim(), point.x, point.y);
-      ctx.fillText(text.trim(), point.x, point.y);
-      ctx.restore();
-      return;
-    }
-    snapshot();
-    drawingRef.current = true;
-    lastPointRef.current = point;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    draw(point, point);
-  }
-
-  function onPointerMove(event: ReactPointerEvent<HTMLCanvasElement>) {
-    if (!drawingRef.current || !lastPointRef.current) return;
-    const point = pointFor(event);
-    draw(lastPointRef.current, point);
-    lastPointRef.current = point;
-  }
-
-  function stopDrawing() {
-    drawingRef.current = false;
-    lastPointRef.current = null;
-  }
-
-  function undo() {
-    const canvas = canvasRef.current;
-    const ctx = context();
-    const previous = undoRef.current.pop();
-    if (!canvas || !ctx || !previous) return;
-    ctx.putImageData(previous, 0, 0);
-    setUndoCount(undoRef.current.length);
-  }
-
-  function clearEdits() {
-    initialiseCanvas();
-  }
-
-  function saveImage() {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    canvas.toBlob((blob) => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `liney-edited-${Date.now()}.png`;
-      anchor.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
-    }, "image/png");
-  }
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-      if (event.key === "+" || event.key === "=") setZoom((value) => Math.min(3, Number((value + 0.2).toFixed(1))));
-      if (event.key === "-") setZoom((value) => Math.max(0.4, Number((value - 0.2).toFixed(1))));
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
-
-  return (
-    <motion.div className="image-viewer-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <button className="image-viewer-backdrop" type="button" aria-label="ปิดหน้าดูรูปภาพ" onClick={onClose} />
-      <main className="image-viewer-window" role="dialog" aria-modal="true" aria-label="ดูรูปภาพ">
-      <header className="image-viewer-toolbar">
-        <strong>ดูรูปภาพ</strong>
-        <div>
-          <button className={tool === "view" ? "active" : ""} type="button" title="เลื่อนดูรูป" onClick={() => setTool("view")}>ดู</button>
-          <button className={tool === "draw" ? "active" : ""} type="button" title="วาดรูป" onClick={() => setTool("draw")}>วาด</button>
-          <button className={tool === "blur" ? "active" : ""} type="button" title="เบลอ" onClick={() => setTool("blur")}>เบลอ</button>
-          <button className={tool === "text" ? "active" : ""} type="button" title="ใส่ข้อความ" onClick={() => setTool("text")}>Text</button>
-          <button type="button" title="ย้อนกลับ" disabled={!undoCount} onClick={undo}><Undo2 size={17} /></button>
-          <button type="button" title="ล้างการแก้ไข" disabled={!ready} onClick={clearEdits}><Trash size={17} /></button>
-          <button type="button" title="บันทึกรูปที่แก้ไข" disabled={!ready} onClick={saveImage}>บันทึก</button>
-          <button type="button" title="ย่อ" onClick={() => setZoom((value) => Math.max(0.4, Number((value - 0.2).toFixed(1))))}><Minus size={17} /></button>
-          <button type="button" title="ขนาดจริง" onClick={() => setZoom(1)}>{Math.round(zoom * 100)}%</button>
-          <button type="button" title="ขยาย" onClick={() => setZoom((value) => Math.min(3, Number((value + 0.2).toFixed(1))))}><Plus size={17} /></button>
-          <button type="button" title="ปิด" onClick={onClose}><X size={17} /></button>
-        </div>
-      </header>
-      <section className="image-viewer-canvas">
-        <img ref={sourceRef} className="image-viewer-source" src={src} alt="" onLoad={initialiseCanvas} onError={() => setError("ไม่สามารถโหลดไฟล์รูปภาพนี้ได้")} />
-        <canvas ref={canvasRef} className={`image-editor-canvas ${tool === "draw" || tool === "blur" ? "editing" : ""}`} style={{ transform: `scale(${zoom})` }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={stopDrawing} onPointerCancel={stopDrawing} />
-        {!ready && !error ? <span>กำลังเปิดรูปภาพ…</span> : null}
-        {error ? <span className="image-viewer-error">{error}</span> : null}
-      </section>
-      </main>
-    </motion.div>
-  );
-}
 
 function NavRail({ section, onSection, onNotifications, onSettings, onProfile, authenticated, openchatEnabled, unreadCount }: { section: Section; onSection: (s: Section) => void; onNotifications: () => void; onSettings: () => void; onProfile: () => void; authenticated: boolean; openchatEnabled: boolean; unreadCount: number }) {
   return (
@@ -2955,7 +3711,14 @@ function ChatList({
   filter,
   onFilter,
   onTogglePin,
+  mergeCandidates,
+  onMerge,
   onCreate,
+  unreadChatCount,
+  canMarkAllRead,
+  markAllReadBusy,
+  markAllReadProgress,
+  onMarkAllRead,
 }: {
   section: Section;
   chats: Chat[];
@@ -2966,9 +3729,29 @@ function ChatList({
   filter: "all" | "unread" | "pinned" | "favorites";
   onFilter: (filter: "all" | "unread" | "pinned" | "favorites") => void;
   onTogglePin: (id: string) => void;
+  mergeCandidates: Chat[];
+  onMerge: (aliasMid: string, canonicalMid: string) => Promise<void>;
   onCreate: () => void;
+  unreadChatCount: number;
+  canMarkAllRead: boolean;
+  markAllReadBusy: boolean;
+  markAllReadProgress: { done: number; total: number } | null;
+  onMarkAllRead: () => Promise<{ total: number; marked: number; failed: number }>;
 }) {
   const [contextMenu, setContextMenu] = useState<{ chat: Chat; x: number; y: number } | null>(null);
+  const [mergeDialogChat, setMergeDialogChat] = useState<Chat | null>(null);
+  const [mergeTargetId, setMergeTargetId] = useState("");
+  const [mergeBusy, setMergeBusy] = useState(false);
+  const [mergeError, setMergeError] = useState("");
+  const [readAllFeedback, setReadAllFeedback] = useState("");
+  async function handleMarkAllRead() {
+    setReadAllFeedback("");
+    const result = await onMarkAllRead();
+    if (!result.total) return;
+    setReadAllFeedback(result.failed
+      ? "อ่านแล้ว " + result.marked + " ห้อง · ค้าง " + result.failed + " ห้อง"
+      : "อ่านแล้ว " + result.marked + " ห้อง");
+  }
   useEffect(() => {
     if (!contextMenu) return;
     const close = () => setContextMenu(null);
@@ -3010,6 +3793,26 @@ function ChatList({
           </>
         )}
       </div>
+      {(section === "messages" || section === "openchat") ? (
+        <div className="list-filter-actions">
+          {readAllFeedback && !markAllReadBusy ? <span className="mark-all-read-status" role="status" aria-live="polite">{readAllFeedback}</span> : null}
+          <button
+            className="mark-all-read-button"
+            type="button"
+            disabled={!canMarkAllRead || markAllReadBusy || unreadChatCount === 0}
+            onClick={() => void handleMarkAllRead()}
+            title={unreadChatCount > 0
+              ? "ทำเครื่องหมายว่าอ่านแล้วทั้งหมด (" + unreadChatCount + " ห้อง)"
+              : "ไม่มีแชตที่ยังไม่อ่าน"}
+            aria-label="ทำเครื่องหมายว่าอ่านแล้วทั้งหมด"
+          >
+            {markAllReadBusy ? <LoaderCircle size={13} className="spin" /> : <CheckCheck size={14} />}
+            <span>{markAllReadBusy && markAllReadProgress
+              ? "กำลังอ่าน " + markAllReadProgress.done + "/" + markAllReadProgress.total
+              : "อ่านแล้วทั้งหมด"}</span>
+          </button>
+        </div>
+      ) : null}
       <div className="chat-items">
         {renderedChats.map((chat) => (
           <button
@@ -3057,6 +3860,73 @@ function ChatList({
             <PinIcon size={15} fill={contextMenu.chat.pinned ? "currentColor" : "none"} />
             {contextMenu.chat.pinned ? "เลิกปักหมุด" : "ปักหมุด"}
           </button>
+          {section === "messages" && contextMenu.chat.kind === "dm" ? (
+            <button
+              onClick={() => {
+                const firstTarget = mergeCandidates.find((chat) => chat.id !== contextMenu.chat.id);
+                setMergeTargetId(firstTarget?.id ?? "");
+                setMergeError("");
+                setMergeDialogChat(contextMenu.chat);
+                setContextMenu(null);
+              }}
+            >
+              <Link2 size={15} />
+              รวมแชตที่ซ้ำ…
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {mergeDialogChat ? (
+        <div className="modal-backdrop identity-merge-backdrop" onMouseDown={() => { if (!mergeBusy) setMergeDialogChat(null); }}>
+          <section
+            className="identity-merge-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="identity-merge-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="identity-merge-icon"><Link2 size={19} /></div>
+            <h2 id="identity-merge-title">รวมแชตของบัญชีเดียวกัน</h2>
+            <p className="identity-merge-description">
+              เลือกแชตปลายทางที่จะเก็บชื่อและรูปโปรไฟล์ไว้ ประวัติข้อความจาก “{mergeDialogChat.name}” จะถูกรวมเข้าไปด้วย
+            </p>
+            <label className="identity-merge-label" htmlFor="identity-merge-target">เก็บข้อมูลไว้ที่</label>
+            <select
+              id="identity-merge-target"
+              className="identity-merge-select"
+              value={mergeTargetId}
+              onChange={(event) => setMergeTargetId(event.target.value)}
+              disabled={mergeBusy}
+            >
+              <option value="">เลือกแชตปลายทาง</option>
+              {mergeCandidates.filter((chat) => chat.id !== mergeDialogChat.id).map((chat) => (
+                <option key={chat.id} value={chat.id}>{chat.name}</option>
+              ))}
+            </select>
+            <p className="identity-merge-note">
+              Liney จะจำการเชื่อมนี้ในเครื่องนี้ เก็บชื่อและรูปของแชตปลายทาง รวมประวัติที่มีในเครื่อง และส่งข้อความครั้งต่อไปไปยังแชตปลายทางที่คุณเลือก
+            </p>
+            {mergeError ? <p className="identity-merge-error" role="alert">{mergeError}</p> : null}
+            <div className="identity-merge-actions">
+              <button type="button" className="secondary-button" disabled={mergeBusy} onClick={() => setMergeDialogChat(null)}>ยกเลิก</button>
+              <button
+                type="button"
+                className="identity-merge-confirm"
+                disabled={!mergeTargetId || mergeBusy || mergeCandidates.length < 2}
+                onClick={() => {
+                  if (!mergeDialogChat || !mergeTargetId) return;
+                  setMergeBusy(true);
+                  setMergeError("");
+                  void onMerge(mergeDialogChat.id, mergeTargetId)
+                    .then(() => setMergeDialogChat(null))
+                    .catch((error) => setMergeError(error instanceof Error ? error.message : String(error)))
+                    .finally(() => setMergeBusy(false));
+                }}
+              >
+                {mergeBusy ? "กำลังรวม…" : "รวมแชต"}
+              </button>
+            </div>
+          </section>
         </div>
       ) : null}
     </section>
@@ -3065,6 +3935,7 @@ function ChatList({
 
 function Avatar({ chat, size = "normal" }: { chat: Chat; size?: "normal" | "large" }) {
   const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [chat.avatarUrl]);
   return (
     <span className={`avatar ${size === "large" ? "avatar-large" : ""}`} style={{ "--avatar-color": chat.accent } as React.CSSProperties}>
       {chat.avatarUrl && !failed ? (
@@ -3256,6 +4127,8 @@ function Conversation({
   onNativeImage,
   onPickImage,
   onRetry,
+  onRetryHistory,
+  onMergeHistory,
   mediaProgress,
   onCancelMedia,
   onReact,
@@ -3269,12 +4142,16 @@ function Conversation({
   canSend,
   callAvailable,
   onCall,
+  onVideoCall,
+  albumsAvailable,
+  onAlbums,
   windowActive,
   markReadOnBottom,
   showUnreadDivider,
   autoScrollNewMessages,
   showReadCount,
   onReadLatest,
+  onLoadOlder,
   jumpToMessageId,
   jumpNonce,
 }: {
@@ -3291,6 +4168,8 @@ function Conversation({
   onNativeImage: (showError?: boolean) => void | Promise<void>;
   onPickImage: () => void | Promise<void>;
   onRetry: (id: string) => void;
+  onRetryHistory: () => void;
+  onMergeHistory: (sourceMid: string, targetMid: string) => Promise<void>;
   mediaProgress: Record<string, MediaProgress>;
   onCancelMedia: (id: string) => void;
   onReact: (message: Message, type: number) => void | Promise<void>;
@@ -3304,12 +4183,16 @@ function Conversation({
   canSend: boolean;
   callAvailable: boolean;
   onCall: () => void;
+  onVideoCall: () => void;
+  albumsAvailable: boolean;
+  onAlbums: () => void;
   windowActive: boolean;
   markReadOnBottom: boolean;
   showUnreadDivider: boolean;
   autoScrollNewMessages: boolean;
   showReadCount: boolean;
-  onReadLatest: (lastMessageId?: string) => void;
+  onReadLatest: (lastMessageId?: string, lastMessageTime?: number) => void;
+  onLoadOlder: (before: Message) => Promise<{ added: number; hasMore: boolean }>;
   jumpToMessageId?: string;
   jumpNonce: number;
 }) {
@@ -3340,10 +4223,77 @@ function Conversation({
   const empty = chat.id === "__liney__";
   const historyState = chat.historyState ?? "available";
   const lineSystemAccount = chat.id === LINE_SYSTEM_ACCOUNT_MID;
-  const historyUnavailable = historyState === "unavailable";
-  const neverChatted = historyState === "new" && !lineSystemAccount;
+  const sidebarHasRecentActivity = Number(chat.lastMessageTime ?? 0) > 0;
+  const missingRecentHistory = chat.kind !== "openchat"
+    && !lineSystemAccount
+    && messages?.length === 0
+    && sidebarHasRecentActivity;
+  const historyUnavailable = historyState === "unavailable" || missingRecentHistory;
+  const neverChatted = historyState === "new" && !lineSystemAccount && !sidebarHasRecentActivity;
+  const canLoadOlderHistory = chat.kind !== "openchat" && !lineSystemAccount && !empty;
+  const [historyLoadState, setHistoryLoadState] = useState<"idle" | "loading" | "error">("idle");
+  const [historyCandidates, setHistoryCandidates] = useState<HistoryCandidate[] | null>(null);
+  const [historyCandidateId, setHistoryCandidateId] = useState("");
+  const [historyCandidateQuery, setHistoryCandidateQuery] = useState("");
+  const [historyRecoveryBusy, setHistoryRecoveryBusy] = useState(false);
+  const [historyRecoveryError, setHistoryRecoveryError] = useState("");
+  const historyHasMoreRef = useRef(canLoadOlderHistory);
+  const historyRequestTokenRef = useRef(0);
+  const historyRequestChatRef = useRef<string | null>(null);
+  const pendingHistoryAnchorRef = useRef<{
+    chatId: string;
+    firstMessageId: string;
+    scrollTop: number;
+    scrollHeight: number;
+  } | null>(null);
   const lastMessage = messages?.at(-1);
   const lastMessageId = lastMessage?.id;
+
+  useEffect(() => {
+    setHistoryCandidates(null);
+    setHistoryCandidateId("");
+    setHistoryCandidateQuery("");
+    setHistoryRecoveryError("");
+  }, [chat.id]);
+
+  async function searchSavedHistoryCandidates() {
+    if (historyRecoveryBusy || !lineyEngine.isNative) return;
+    setHistoryRecoveryBusy(true);
+    setHistoryRecoveryError("");
+    try {
+      const candidates = await lineyEngine.request<HistoryCandidate[]>("message.history_candidates", { chatId: chat.id }, 10_000);
+      setHistoryCandidates(candidates);
+      setHistoryCandidateId("");
+      setHistoryCandidateQuery("");
+    } catch (error) {
+      setHistoryRecoveryError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setHistoryRecoveryBusy(false);
+    }
+  }
+
+  async function mergeSavedHistoryCandidate() {
+    if (!historyCandidateId || historyRecoveryBusy) return;
+    setHistoryRecoveryBusy(true);
+    setHistoryRecoveryError("");
+    try {
+      await onMergeHistory(historyCandidateId, chat.id);
+      setHistoryCandidates(null);
+      setHistoryCandidateId("");
+      setHistoryCandidateQuery("");
+    } catch (error) {
+      setHistoryRecoveryError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setHistoryRecoveryBusy(false);
+    }
+  }
+
+  const normalizedHistoryCandidateQuery = historyCandidateQuery.trim().toLocaleLowerCase();
+  const filteredHistoryCandidates = (historyCandidates ?? []).filter((candidate) =>
+    candidate.name.toLocaleLowerCase().includes(normalizedHistoryCandidateQuery)
+      || candidate.id.toLocaleLowerCase().includes(normalizedHistoryCandidateQuery),
+  );
+  const lastMessageTime = Number(lastMessage?.createdTime ?? 0);
   const lastMessageImage = lastMessage?.image;
   const activeMenuMessage = messages?.find((item) => item.id === messageMenuId);
   const activeMenuMessageId = activeMenuMessage?.id;
@@ -3359,13 +4309,29 @@ function Conversation({
     return 0;
   }, [chat.unread, messages]);
 
+  // oxlint-disable-next-line react/incompatible-library -- virtualization is intentional here; React Compiler may skip this component.
+  const messageVirtualizer = useVirtualizer({
+    count: messages?.length ?? 0,
+    getScrollElement: () => messageStageRef.current,
+    estimateSize: () => 92,
+    getItemKey: (index) => messages?.[index]?.id ?? index,
+    overscan: 8,
+    anchorTo: "end",
+    followOnAppend: true,
+    scrollEndThreshold: 80,
+    // WebKitGTK can deliver ResizeObserver callbacks while a Wayland surface is
+    // being reconfigured during move/resize. Defer measurement work to the next
+    // animation frame to avoid synchronous layout/scroll feedback into wlroots.
+    useAnimationFrameWithResizeObserver: true,
+  });
+
   useEffect(() => {
-    if (!jumpToMessageId || !jumpNonce || chat.id === "__liney__") return;
+    if (!jumpToMessageId || !jumpNonce || chat.id === "__liney__" || !messages?.length) return;
+    const index = messages.findIndex((item) => item.id === jumpToMessageId);
+    if (index < 0) return;
     let clearTimer: number | undefined;
+    messageVirtualizer.scrollToIndex(index, { align: "center" });
     const frame = requestAnimationFrame(() => {
-      const target = messageRowRefs.current.get(jumpToMessageId);
-      if (!target) return;
-      target.scrollIntoView({ block: "center", behavior: "smooth" });
       setHighlightedMessageId(jumpToMessageId);
       clearTimer = window.setTimeout(() => setHighlightedMessageId((current) => current === jumpToMessageId ? null : current), 2_600);
     });
@@ -3373,7 +4339,7 @@ function Conversation({
       cancelAnimationFrame(frame);
       if (clearTimer !== undefined) window.clearTimeout(clearTimer);
     };
-  }, [chat.id, jumpToMessageId, jumpNonce, messages?.length]);
+  }, [chat.id, jumpToMessageId, jumpNonce, messages, messageVirtualizer]);
 
   useEffect(() => {
     if (!messageMenuId && !reactionMenuId) return;
@@ -3497,16 +4463,72 @@ function Conversation({
     if (programmaticScrollTimerRef.current !== null) {
       window.clearTimeout(programmaticScrollTimerRef.current);
     }
-    stage.scrollTo({ top: stage.scrollHeight, behavior });
+    if (messages?.length) messageVirtualizer.scrollToIndex(messages.length - 1, { align: "end", behavior });
+    else stage.scrollTo({ top: stage.scrollHeight, behavior });
     setShowScrollBottom(false);
     if (markReadOnBottom && windowActive && (chat.unread ?? 0) > 0) {
-      window.setTimeout(() => onReadLatestRef.current(lastMessageId), behavior === "smooth" ? 620 : 0);
+      window.setTimeout(() => onReadLatestRef.current(lastMessageId, lastMessageTime), behavior === "smooth" ? 620 : 0);
     }
     programmaticScrollTimerRef.current = window.setTimeout(() => {
       programmaticScrollRef.current = false;
       programmaticScrollTimerRef.current = null;
     }, behavior === "smooth" ? 650 : 80);
-  }, [chat.unread, lastMessageId, markReadOnBottom, windowActive]);
+  }, [chat.unread, lastMessageId, lastMessageTime, markReadOnBottom, messageVirtualizer, messages?.length, windowActive]);
+
+  const requestOlderMessages = useCallback(async () => {
+    const before = messages?.[0];
+    const stage = messageStageRef.current;
+    if (!canLoadOlderHistory || !historyHasMoreRef.current || !before || !stage
+      || historyRequestChatRef.current === chat.id) return;
+
+    const requestToken = ++historyRequestTokenRef.current;
+    historyRequestChatRef.current = chat.id;
+    pendingHistoryAnchorRef.current = stage.scrollHeight > stage.clientHeight + 40
+      ? {
+        chatId: chat.id,
+        firstMessageId: before.id,
+        scrollTop: stage.scrollTop,
+        scrollHeight: stage.scrollHeight,
+      }
+      : null;
+    setHistoryLoadState("loading");
+
+    try {
+      const result = await onLoadOlder(before);
+      if (requestToken !== historyRequestTokenRef.current || previousChatRef.current !== chat.id) return;
+      const progressed = Number(result?.added ?? 0) > 0;
+      historyHasMoreRef.current = progressed && Boolean(result?.hasMore);
+      if (!progressed) pendingHistoryAnchorRef.current = null;
+      setHistoryLoadState("idle");
+    } catch {
+      if (requestToken !== historyRequestTokenRef.current || previousChatRef.current !== chat.id) return;
+      pendingHistoryAnchorRef.current = null;
+      setHistoryLoadState("error");
+    } finally {
+      if (requestToken === historyRequestTokenRef.current && historyRequestChatRef.current === chat.id) {
+        historyRequestChatRef.current = null;
+      }
+    }
+  }, [canLoadOlderHistory, chat.id, messages, onLoadOlder]);
+
+  useLayoutEffect(() => {
+    const anchor = pendingHistoryAnchorRef.current;
+    if (!anchor || anchor.chatId !== chat.id || !messages?.length || messages[0]?.id === anchor.firstMessageId) return;
+    const stage = messageStageRef.current;
+    pendingHistoryAnchorRef.current = null;
+    if (!stage) return;
+    const heightDelta = stage.scrollHeight - anchor.scrollHeight;
+    stage.scrollTop = Math.max(0, anchor.scrollTop + heightDelta);
+  }, [chat.id, messages, messages?.length, messages?.[0]?.id]);
+
+  useEffect(() => {
+    if (!canLoadOlderHistory || !historyHasMoreRef.current || historyLoadState !== "idle" || !messages?.length) return;
+    const frame = requestAnimationFrame(() => {
+      const stage = messageStageRef.current;
+      if (stage && stage.scrollHeight <= stage.clientHeight + 40) void requestOlderMessages();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [canLoadOlderHistory, chat.id, historyLoadState, messages?.length, requestOlderMessages]);
 
   useEffect(() => () => {
     if (programmaticScrollTimerRef.current !== null) {
@@ -3520,10 +4542,28 @@ function Conversation({
     const changedChat = previousChatRef.current !== chat.id;
     if (changedChat) {
       previousChatRef.current = chat.id;
-      if ((chat.unread ?? 0) > 0 && showUnreadDivider) {
+      historyRequestTokenRef.current += 1;
+      historyRequestChatRef.current = null;
+      historyHasMoreRef.current = canLoadOlderHistory;
+      pendingHistoryAnchorRef.current = null;
+      setHistoryLoadState("idle");
+      setMessageMenuId(null);
+      setReactionMenuId(null);
+      setStickerPickerOpen(false);
+      setHighlightedMessageId(null);
+      setMessageMenuPosition({ left: 8, top: 8, ready: false });
+      messageActionAnchorRefs.current.clear();
+      messageActionTriggerRefs.current.clear();
+      messageRowRefs.current.clear();
+      if (programmaticScrollTimerRef.current !== null) {
+        window.clearTimeout(programmaticScrollTimerRef.current);
+        programmaticScrollTimerRef.current = null;
+        programmaticScrollRef.current = false;
+      }
+      if ((chat.unread ?? 0) > 0 && showUnreadDivider && unreadStartIndex >= 0) {
         stickToBottomRef.current = false;
         const frame = requestAnimationFrame(() => {
-          unreadDividerRef.current?.scrollIntoView({ block: "start", behavior: "auto" });
+          messageVirtualizer.scrollToIndex(unreadStartIndex, { align: "start" });
           setShowScrollBottom(true);
         });
         return () => cancelAnimationFrame(frame);
@@ -3533,25 +4573,22 @@ function Conversation({
     if (!stickToBottomRef.current || !autoScrollNewMessages) return;
     const frame = requestAnimationFrame(() => scrollToBottom("auto"));
     return () => cancelAnimationFrame(frame);
-  }, [chat.id, chat.unread, messages?.length, lastMessageId, lastMessageImage, showUnreadDivider, autoScrollNewMessages, scrollToBottom]);
-
-  // Images/activity cards can change height after render. Keep the viewport pinned
-  // only while the user is already following the newest messages.
-  useEffect(() => {
-    const stage = messageStageRef.current;
-    if (!stage || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
-      if (stickToBottomRef.current) scrollToBottom("auto");
-    });
-    for (const child of Array.from(stage.children)) observer.observe(child);
-    return () => observer.disconnect();
-  }, [chat.id, messages?.length, scrollToBottom]);
+  }, [chat.id, chat.unread, messages?.length, lastMessageId, lastMessageImage, showUnreadDivider, autoScrollNewMessages, scrollToBottom, unreadStartIndex, messageVirtualizer]);
 
   const handleMessageScroll = () => {
     const stage = messageStageRef.current;
     if (!stage) return;
     const distanceFromBottom = stage.scrollHeight - stage.scrollTop - stage.clientHeight;
     const nearBottom = distanceFromBottom < 72;
+    const nearTopWithHistory = stage.scrollTop <= 80
+      && stage.scrollHeight - stage.clientHeight > 40
+      && canLoadOlderHistory
+      && historyHasMoreRef.current
+      && historyLoadState === "idle";
+    if (nearTopWithHistory && !programmaticScrollRef.current) {
+      stickToBottomRef.current = false;
+      void requestOlderMessages();
+    }
     if (programmaticScrollRef.current) {
       if (nearBottom) {
         stickToBottomRef.current = true;
@@ -3562,7 +4599,7 @@ function Conversation({
     if (nearBottom) {
       stickToBottomRef.current = true;
       setShowScrollBottom(false);
-      if (markReadOnBottom && windowActive && (chat.unread ?? 0) > 0) onReadLatestRef.current(lastMessageId);
+      if (markReadOnBottom && windowActive && (chat.unread ?? 0) > 0) onReadLatestRef.current(lastMessageId, lastMessageTime);
       return;
     }
 
@@ -3578,10 +4615,10 @@ function Conversation({
       const stage = messageStageRef.current;
       if (!stage) return;
       const distanceFromBottom = stage.scrollHeight - stage.scrollTop - stage.clientHeight;
-      if (distanceFromBottom < 72) onReadLatestRef.current(lastMessageId);
+      if (distanceFromBottom < 72) onReadLatestRef.current(lastMessageId, lastMessageTime);
     });
     return () => cancelAnimationFrame(frame);
-  }, [chat.id, chat.unread, lastMessageId, markReadOnBottom, windowActive]);
+  }, [chat.id, chat.unread, lastMessageId, lastMessageTime, markReadOnBottom, windowActive]);
 
   const stopFollowingBottom = () => {
     stickToBottomRef.current = false;
@@ -3612,7 +4649,8 @@ function Conversation({
         </div>
         <div className="header-actions">
           <button className="icon-button" onClick={onCall} title={callAvailable ? "โทรเสียง" : "สายเสียงยังไม่พร้อม"} disabled={!canSend || !callAvailable}><Phone size={18} /></button>
-          <button className="icon-button" title="วิดีโอคอลยังไม่รองรับ" disabled><Video size={19} /></button>
+          <button className="icon-button" onClick={onVideoCall} title={callAvailable ? "วิดีโอคอล (ทดลอง)" : "ระบบโทรยังไม่พร้อม"} disabled={!canSend || !callAvailable}><Video size={19} /></button>
+          {albumsAvailable && <button className="icon-button" onClick={onAlbums} title="ดูอัลบั้ม LINE (ทดลอง)" aria-label="ดูอัลบั้ม LINE"><Image size={18} /></button>}
             <button className="icon-button" disabled={empty}><Search size={18} /></button>
             <button className="icon-button" disabled={empty}><Info size={19} /></button>
         </div>
@@ -3639,6 +4677,15 @@ function Conversation({
         }}
         tabIndex={-1}
       >
+        {historyLoadState !== "idle" ? (
+          <div className={`history-page-status ${historyLoadState}`} role={historyLoadState === "error" ? "alert" : "status"} aria-live="polite">
+            {historyLoadState === "loading" ? (
+              <><LoaderCircle size={14} className="spin" /><span>กำลังโหลดข้อความเก่า…</span></>
+            ) : (
+              <><span>โหลดข้อความเก่าไม่สำเร็จ</span><button type="button" onClick={() => void requestOlderMessages()}>ลองอีกครั้ง</button></>
+            )}
+          </div>
+        ) : null}
         {empty ? (
           <div className="conversation-empty-state">
             <div className="empty-logo"><img src="/liney-logo.png" alt="" /></div>
@@ -3651,16 +4698,73 @@ function Conversation({
           lineSystemAccount ? (
             <div className="official-client-only-state" role="status">
               <div className="official-client-icon"><ShieldCheck size={25} /></div>
-              <h3>บัญชีระบบของ LINE</h3>
-              <p>บัญชีนี้ใช้ส่งการแจ้งเตือนระบบและความปลอดภัย โดย Talk API ที่ Liney ใช้เห็น cursor/เวลา แต่ไม่คืน payload ของข้อความ</p>
-              <span>Liney จึงตรวจได้ว่ามี activity แต่ต้องเปิด LINE ทางการเพื่อดูเนื้อหาการแจ้งเตือน</span>
+              <h3>ยังโหลดประวัติจาก LINE ไม่ได้</h3>
+              <p>LINE ส่งข้อมูลห้องและเวลาให้ แต่รอบนี้ไม่ส่งข้อความเก่าผ่าน history API ที่ Liney ใช้อยู่</p>
+              <span>ข้อความใหม่ที่ LINE ส่งให้ Liney ขณะออนไลน์จะแสดงและบันทึกได้</span>
             </div>
           ) : historyUnavailable ? (
             <div className="official-client-only-state" role="status">
               <div className="official-client-icon"><ShieldCheck size={25} /></div>
-              <h3>อ่านประวัติเก่าไม่ได้</h3>
-              <p>ห้องนี้มีหลักฐานว่าเคยมีข้อความ แต่ LINE ไม่ส่งประวัติเดิมกลับมาทาง Talk history endpoint ที่ Liney ใช้อยู่</p>
+              <h3>{missingRecentHistory ? "แถบแชตมีรายการล่าสุด แต่ timeline ยังว่าง" : "อ่านประวัติเก่าไม่ได้"}</h3>
+              <p>{missingRecentHistory
+                ? "Liney ลองอ่านจาก cursor, recent window และ MessageBox แล้ว แต่ LINE ไม่ส่งข้อความกลับมา ถ้าเคยคุยผ่าน MID เก่า ให้ค้นหาประวัติในเครื่องด้านล่าง"
+                : "ห้องนี้มีหลักฐานว่าเคยมีข้อความ แต่ LINE ไม่ส่งประวัติเดิมกลับมาทาง Talk history endpoint ที่ Liney ใช้อยู่"}</p>
               <span>ยังส่งข้อความได้ และข้อความใหม่ที่ Liney รับแบบ realtime จะถูกแสดงและเก็บไว้ในเครื่อง</span>
+              {missingRecentHistory ? (
+                <>
+                  <button className="history-retry-button" type="button" onClick={onRetryHistory}>ลองดึงประวัติอีกครั้ง</button>
+                  {chat.kind === "dm" ? (
+                    <button className="history-retry-button" type="button" onClick={() => void searchSavedHistoryCandidates()} disabled={historyRecoveryBusy}>
+                      {historyRecoveryBusy && historyCandidates === null ? "กำลังค้นหาประวัติในเครื่อง…" : "ค้นหาประวัติจาก MID เก่า"}
+                    </button>
+                  ) : null}
+                  {historyCandidates?.length ? (
+                    <>
+                      <span>ผลค้นหาเป็นแชตที่มีสำเนาในเครื่อง ยังไม่ได้ยืนยันว่าเป็นคนเดียวกัน พิมพ์ชื่อเดิมหรือ MID แล้วเลือกแชตที่จำได้</span>
+                      <input
+                        className="identity-merge-search"
+                        type="search"
+                        value={historyCandidateQuery}
+                        onChange={(event) => {
+                          setHistoryCandidateQuery(event.target.value);
+                          setHistoryCandidateId("");
+                        }}
+                        placeholder="ค้นหาชื่อแชตเดิมหรือ MID"
+                        aria-label="ค้นหาชื่อแชตเดิมหรือ MID"
+                        disabled={historyRecoveryBusy}
+                      />
+                      {normalizedHistoryCandidateQuery ? filteredHistoryCandidates.length ? (
+                        <>
+                          <select
+                            className="identity-merge-select"
+                            value={historyCandidateId}
+                            onChange={(event) => setHistoryCandidateId(event.target.value)}
+                            disabled={historyRecoveryBusy}
+                            aria-label="เลือกแชตเก่าที่มีประวัติ"
+                          >
+                            <option value="">เลือกแชตเก่าที่ตรงกับคำค้น</option>
+                            {filteredHistoryCandidates.map((candidate) => (
+                              <option key={candidate.id} value={candidate.id}>
+                                {candidate.name} · {candidate.messageCount} ข้อความ
+                              </option>
+                            ))}
+                          </select>
+                          <button className="history-retry-button" type="button" onClick={() => void mergeSavedHistoryCandidate()} disabled={!historyCandidateId || historyRecoveryBusy}>
+                            {historyRecoveryBusy ? "กำลังรวมประวัติ…" : "รวมประวัติจากแชตนี้"}
+                          </button>
+                        </>
+                      ) : (
+                        <span>ไม่พบแชตที่ตรงกับคำค้นในสำเนาที่เก็บไว้</span>
+                      ) : (
+                        <span>พิมพ์ชื่อแชตเดิมเพื่อกรองรายการก่อนเลือก</span>
+                      )}
+                    </>
+                  ) : historyCandidates ? (
+                    <span>ไม่พบประวัติข้อความจาก MID อื่นในเครื่อง</span>
+                  ) : null}
+                  {historyRecoveryError ? <span role="alert">{historyRecoveryError}</span> : null}
+                </>
+              ) : null}
             </div>
           ) : (
             <div className="message-list-empty-state">
@@ -3678,21 +4782,38 @@ function Conversation({
               </div>
             ) : null}
             <div className="date-divider"><span>ล่าสุด</span></div>
-            {messages.map((message, index) => (
-              <div key={`message-wrap-${message.id}`} className="message-wrap">
+            <div
+              className="virtual-message-list"
+              style={{ height: `${messageVirtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}
+            >
+            {messageVirtualizer.getVirtualItems().map((virtualItem) => {
+              const index = virtualItem.index;
+              const message = messages[index];
+              const showMessageText = hasUserVisibleMessageText(message);
+              return (
+              <div
+                key={`message-wrap-${message.id}`}
+                ref={messageVirtualizer.measureElement}
+                data-index={virtualItem.index}
+                className="message-wrap"
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  transform: `translateY(${virtualItem.start}px)`,
+                }}
+              >
                 {showUnreadDivider && index === unreadStartIndex ? (
                   <div ref={unreadDividerRef} className="unread-divider"><span>ข้อความใหม่</span></div>
                 ) : null}
-              <motion.div
+              <div
                 key={message.id}
                 ref={(element) => {
                   if (element) messageRowRefs.current.set(message.id, element);
                   else messageRowRefs.current.delete(message.id);
                 }}
                 className={`message-row ${message.author === "me" ? "mine" : "theirs"} ${highlightedMessageId === message.id ? "notification-target" : ""}`}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.18, delay: Math.min(index * 0.015, 0.08) }}
               >
                 {message.author === "them" ? <MessageAvatar message={message} chat={chat} /> : null}
                 <div className="message-cluster">
@@ -3728,10 +4849,25 @@ function Conversation({
                             <CallHistoryCard data={message.call ?? { durationMs: 0, result: "", cause: "", status: "unknown" }} />
                           ) : !message.rich && message.postNotification ? (
                             <PostNotificationCard data={message.postNotification} />
-                         ) : !message.rich && message.text ? (
-                           <div className={`bubble ${message.status === "error" ? "bubble-error" : ""}`}><MessageTextWithLinks text={message.text} /></div>
+                         ) : !message.rich && showMessageText ? (
+                           <div className={`bubble ${message.status === "error" ? "bubble-error" : ""}`}><MessageTextWithLinks text={message.text!} /></div>
                          ) : null}
-                          {message.text && message.status !== "sending" ? <LinkPreviewFor text={message.text} /> : null}
+                          {showMessageText && message.status !== "sending" ? <LinkPreviewFor text={message.text!} /> : null}
+                          {!message.rich && !message.flex && !message.stickerUrl && !message.emojiUrl
+                            && !message.image && !message.postNotification && !message.call && !showMessageText
+                            && (Boolean(message.filename)
+                              || [1, 2, 3, 14].includes(Number(message.contentType ?? 0))
+                              || (message.author === "me" && (message.status === "error" || message.status === "unknown"))) ? (
+                              <div className="bubble bubble-media-fallback">
+                                {message.filename
+                                  ? mediaLabel(Number(message.contentType || 14), message.filename)
+                                  : [1, 2, 3, 14].includes(Number(message.contentType ?? 0))
+                                    ? mediaLabel(Number(message.contentType), "")
+                                    : Number(message.contentType) === 7
+                                      ? "สติกเกอร์"
+                                      : "ไม่มีรายละเอียดข้อความที่บันทึกไว้"}
+                              </div>
+                            ) : null}
                           <OfficialMessageFallback message={message} chat={chat} onOpenOfficialMessage={onOpenOfficialMessage} />
                       </>
                     )}
@@ -3791,7 +4927,10 @@ function Conversation({
                     {message.status === "error" || message.status === "unknown" ? (
                       <>
                         <span className="send-state send-error">{message.status === "unknown" ? "ตรวจสอบสถานะการส่ง" : "ส่งไม่สำเร็จ"}</span>
-                        <button className="message-retry" type="button" onClick={() => onRetry(message.id)}>ลองใหม่</button>
+                        {message.sendError ? <span className="send-error-detail" title={message.sendError}>{message.sendError}</span> : null}
+                        {message.sendError?.includes("ต้องเชื่อมบัญชี LINE ใหม่")
+                          ? <span className="send-error-detail">เชื่อมบัญชีใหม่ก่อน แล้วค่อยลองส่งอีกครั้ง</span>
+                          : <button className="message-retry" type="button" onClick={() => onRetry(message.id)}>ลองใหม่</button>}
                       </>
                     ) : null}
                     {message.edited && !message.unsent ? <span className="message-edited">แก้ไขแล้ว</span> : null}
@@ -3803,9 +4942,11 @@ function Conversation({
                     <time>{message.time}</time>
                   </div>
                 </div>
-              </motion.div>
               </div>
-            ))}
+              </div>
+            );
+            })}
+            </div>
           </>
         )}
       </div>
@@ -3965,6 +5106,17 @@ function Conversation({
   );
 }
 
+function TimelineConversation({
+  emptyFallback = false,
+  ...props
+}: Omit<Parameters<typeof Conversation>[0], "messages"> & { emptyFallback?: boolean }) {
+  const timeline = useTimelineRoom(props.chat.id);
+  const messages = props.chat.id === "__liney__"
+    ? []
+    : timeline ?? (emptyFallback ? [] : undefined);
+  return <Conversation {...props} messages={messages} />;
+}
+
 function PostNotificationCard({ data }: { data: NonNullable<Message["postNotification"]> }) {
   const isAlbum = data.kind === "album";
   const label = isAlbum ? "อัลบั้ม" : "โน้ต";
@@ -4058,24 +5210,46 @@ function LinkPreviewFor({ text }: { text: string }) {
   const match = LINK_URL_RE.exec(String(text || ""));
   const url = match?.[1]?.replace(/[.,;:!?]+$/, "");
   if (!url) return null;
-  return <LinkPreview url={url} />;
+  return <LinkPreview key={url} url={url} />;
 }
 
 function LinkPreview({ url }: { url: string }) {
-  const [state, setState] = useState<{ title: string; description?: string; image?: string; siteName?: string } | "loading" | "error">(
-    () => lineyEngine.isNative ? "loading" : "error",
+  const deferredRef = useRef<HTMLDivElement | null>(null);
+  const [shouldLoad, setShouldLoad] = useState(() => !lineyEngine.isNative);
+  const [state, setState] = useState<{ title: string; description?: string; image?: string; siteName?: string } | "error" | null>(
+    () => lineyEngine.isNative ? null : "error",
   );
+
   useEffect(() => {
-    if (!lineyEngine.isNative) return;
+    if (!lineyEngine.isNative || shouldLoad) return;
+    const target = deferredRef.current;
+    if (!target || typeof IntersectionObserver === "undefined") {
+      queueMicrotask(() => setShouldLoad(true));
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      observer.disconnect();
+      setShouldLoad(true);
+    }, { rootMargin: "320px 0px" });
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [shouldLoad]);
+
+  useEffect(() => {
+    if (!lineyEngine.isNative || !shouldLoad) return;
     let alive = true;
     lineyEngine
       .request<{ title?: string; description?: string; image?: string; siteName?: string }>("link.preview", { url }, 12_000)
       .then((r) => { if (alive) setState(r?.title ? { title: r.title, description: r.description, image: r.image, siteName: r.siteName } : "error"); })
       .catch(() => { if (alive) setState("error"); });
     return () => { alive = false; };
-  }, [url]);
+  }, [url, shouldLoad]);
 
-  if (state === "loading") {
+  if (!shouldLoad) {
+    return <div ref={deferredRef} className="link-preview-deferred" aria-hidden="true" />;
+  }
+  if (state === null) {
     return <div className="link-preview link-preview-loading"><span className="link-preview-skeleton" /></div>;
   }
   if (state === "error") {
@@ -4084,7 +5258,19 @@ function LinkPreview({ url }: { url: string }) {
   const s = state;
   return (
     <a className="link-preview" href={url} target="_blank" rel="noreferrer noopener">
-      {s.image ? <div className="link-preview-thumb"><img src={s.image} alt="" loading="lazy" referrerPolicy="no-referrer" /></div> : null}
+      {s.image ? (
+        <div className="link-preview-thumb">
+          <RemoteImage
+            className="link-preview-image"
+            src={s.image}
+            alt={s.title || s.siteName || "Link preview image"}
+            loading="lazy"
+            maxAspectRatio={4.5}
+            preferProxy
+            fallback={<span className="link-preview-thumb-fallback" aria-hidden="true"><Link2 size={20} /></span>}
+          />
+        </div>
+      ) : null}
       <div className="link-preview-copy">
         {s.siteName ? <span className="link-preview-site">{s.siteName}</span> : null}
         <strong className="link-preview-title">{s.title}</strong>
@@ -4117,33 +5303,98 @@ function EnginePill({ state, version, authenticated, syncStatus, onClick }: { st
   );
 }
 
-function FullSyncGate({ progress, onCancel }: { progress: SyncProgressState; onCancel: () => void }) {
+function FullSyncPopup({
+  progress,
+  onCancel,
+  onRetry,
+  onClose,
+}: {
+  progress: SyncProgressState;
+  onCancel: () => void;
+  onRetry: () => void;
+  onClose: () => void;
+}) {
+  const formatCount = (value: number) => value.toLocaleString("th-TH");
   const copy = progress.phase === "metadata"
     ? { title: "กำลังเตรียม Full Sync", detail: "กำลังเชื่อมข้อมูลบัญชี LINE" }
     : progress.phase === "friends"
-      ? { title: "กำลังซิงก์เพื่อน", detail: `${progress.done.toLocaleString("th-TH")} คน` }
+      ? { title: "กำลังซิงก์เพื่อน", detail: formatCount(progress.done) + " / " + formatCount(progress.total) + " คน" }
       : progress.phase === "chats"
-        ? { title: "กำลังซิงก์รายการแชต", detail: `${progress.done.toLocaleString("th-TH")} ห้อง` }
+        ? { title: "กำลังซิงก์รายการแชต", detail: formatCount(progress.done) + " / " + formatCount(progress.total) + " ห้อง" }
         : progress.phase === "history"
-          ? { title: "กำลังซิงก์ประวัติข้อความ", detail: `ห้อง ${progress.done} จาก ${progress.total}${progress.failed ? ` · ข้ามแล้ว ${progress.failed}` : ""}` }
+          ? { title: "กำลังซิงก์ประวัติข้อความ", detail: "ห้อง " + formatCount(progress.done) + " จาก " + formatCount(progress.total) + (progress.failed ? " · ข้ามแล้ว " + formatCount(progress.failed) : "") }
           : progress.phase === "complete"
-            ? { title: "Full Sync เสร็จแล้ว", detail: `${Number(progress.summary?.friends ?? 0).toLocaleString("th-TH")} เพื่อน · ${Number(progress.summary?.talkChats ?? 0) + Number(progress.summary?.openChats ?? 0)} ห้อง${progress.failed ? ` · ${progress.failed} ห้องมีปัญหา` : ""}` }
-            : { title: "Full Sync มีบางส่วนไม่สำเร็จ", detail: "แชตที่มีอยู่ในเครื่องยังไม่ถูกลบ" };
-  const percent = progress.total > 0 ? Math.min(100, Math.round((progress.done / progress.total) * 100)) : 0;
+            ? { title: "Full Sync เสร็จแล้ว", detail: formatCount(Number(progress.summary?.friends ?? 0)) + " เพื่อน · " + formatCount(Number(progress.summary?.talkChats ?? 0) + Number(progress.summary?.openChats ?? 0)) + " ห้อง" + (progress.failed ? " · " + formatCount(progress.failed) + " ห้องมีปัญหา" : "") }
+            : { title: "Full Sync มีบางส่วนไม่สำเร็จ", detail: "เกิดปัญหาระหว่างซิงก์ ลองใหม่ได้อีกครั้ง" };
+  const hasMeasuredProgress = progress.total > 0 && progress.phase !== "metadata";
+  const isIndeterminate = progress.phase !== "complete" && progress.phase !== "error" && !hasMeasuredProgress;
+  const percent = hasMeasuredProgress ? Math.min(100, Math.round((progress.done / progress.total) * 100)) : null;
+  const fill = progress.phase === "complete" ? 100 : isIndeterminate ? 32 : (percent ?? 0);
+
   return (
-    <main className={`full-sync-gate sync-progress-${progress.phase}`} aria-live="polite">
-      <section className="full-sync-card">
+    <motion.div
+      className="full-sync-popup-backdrop"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      role="presentation"
+    >
+      <motion.section
+        className={"full-sync-card sync-progress-" + progress.phase}
+        initial={{ scale: 0.96, y: 10 }}
+        animate={{ scale: 1, y: 0 }}
+        exit={{ scale: 0.98, y: 6 }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="full-sync-title"
+        aria-describedby="full-sync-detail"
+        aria-live="polite"
+      >
         <img src="/liney-logo.png" alt="Liney" className="full-sync-logo" />
-        <div className="full-sync-icon">{progress.phase === "complete" ? <ShieldCheck size={25} /> : <LoaderCircle size={25} className="spin" />}</div>
+        <div className="full-sync-icon">
+          {progress.phase === "complete"
+            ? <ShieldCheck size={25} />
+            : progress.phase === "error"
+              ? <TriangleAlert size={25} />
+              : <LoaderCircle size={25} className="spin" />}
+        </div>
         <span className="full-sync-eyebrow">LINEY · FULL SYNC</span>
-        <h1>{copy.title}</h1>
-        <p>{copy.detail}</p>
-        <div className="full-sync-track" aria-label={`ความคืบหน้า ${percent}%`}><i style={{ width: `${progress.phase === "complete" ? 100 : percent}%` }} /></div>
-        <strong className="full-sync-percent">{progress.phase === "complete" ? "100" : percent}%</strong>
-        <small>กำลังเตรียมข้อมูลให้ครบก่อนเปิดหน้าแชต คุณจะเข้าใช้งานได้ทันทีเมื่อเสร็จ</small>
-        {progress.phase !== "complete" ? <button className="secondary-button full-sync-cancel" type="button" onClick={onCancel}>ยกเลิก Full sync</button> : null}
-      </section>
-    </main>
+        <h1 id="full-sync-title">{copy.title}</h1>
+        <p id="full-sync-detail">{copy.detail}</p>
+        {progress.phase === "error" && progress.error
+          ? <p className="full-sync-error">{progress.error}</p>
+          : null}
+        <div
+          className={"full-sync-track" + (isIndeterminate ? " sync-progress-indeterminate" : "")}
+          role="progressbar"
+          aria-label="ความคืบหน้าในขั้นตอนปัจจุบัน"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={percent ?? (progress.phase === "complete" ? 100 : undefined)}
+          aria-valuetext={percent === null ? "กำลังเตรียมข้อมูล" : formatCount(progress.done) + " จาก " + formatCount(progress.total)}
+        >
+          <i style={{ width: fill + "%" }} />
+        </div>
+        {percent !== null || progress.phase === "complete"
+          ? <strong className="full-sync-percent">{progress.phase === "complete" ? "100" : String(percent)}%</strong>
+          : null}
+        <small>
+          {progress.phase === "complete"
+            ? "ซิงก์ข้อมูลที่มีให้เสร็จแล้ว"
+            : progress.phase === "error"
+              ? "แชตที่บันทึกไว้ในเครื่องยังคงอยู่"
+              : "กำลังซิงก์ข้อมูลจริงจากบัญชี LINE"}
+        </small>
+        {progress.phase === "error" ? (
+          <div className="full-sync-actions">
+            <button className="secondary-button" type="button" onClick={onClose}>ปิด</button>
+            <button className="primary-button" type="button" onClick={onRetry}>ลองใหม่</button>
+          </div>
+        ) : progress.phase !== "complete" ? (
+          <button className="secondary-button full-sync-cancel" type="button" onClick={onCancel}>ยกเลิก Full Sync</button>
+        ) : null}
+      </motion.section>
+    </motion.div>
   );
 }
 
@@ -4161,6 +5412,10 @@ function AuthModal({
   clientIdentity,
   storageMode,
   required,
+  keyImportMode,
+  keyImportResult,
+  onBeginKeyImport,
+  onImportKeys,
   onModeChange,
   onEmailChange,
   onPasswordChange,
@@ -4180,8 +5435,12 @@ function AuthModal({
   error: string;
   profileName: string;
   clientIdentity: ClientIdentityResult | null;
-  storageMode: "wallet" | "session-only";
+  storageMode: "wallet" | "encrypted-file" | "session-only";
   required: boolean;
+  keyImportMode: boolean;
+  keyImportResult: { generations: number } | null;
+  onBeginKeyImport: () => void;
+  onImportKeys: () => void;
   onModeChange: (mode: AuthMode) => void;
   onEmailChange: (value: string) => void;
   onPasswordChange: (value: string) => void;
@@ -4200,15 +5459,52 @@ function AuthModal({
         {!required ? <button className="auth-close icon-button" onClick={onClose} aria-label="ปิด"><X size={18}/></button> : null}
         <div className="auth-brand"><img src="/liney-logo.png" alt="" /></div>
         <p className="eyebrow">LINEJS · {clientIdentity?.displayName || clientIdentity?.device || "DESKTOPWIN"}</p>
-        <h2>{authenticated ? (profileName || "เชื่อม LINE แล้ว") : "เชื่อมบัญชี LINE"}</h2>
-        <p className="auth-copy">{authenticated ? "บัญชีนี้เชื่อมต่อกับ Liney แล้ว" : isWebRuntime ? "Liney Web ใช้ Public Home Runner แยก session ต่อ browser และรองรับการเข้าสู่ระบบด้วย QR Code" : "ต้องเข้าสู่ระบบก่อนจึงจะใช้แชตและฟีเจอร์ของ Liney ได้"}</p>
+        <h2>{keyImportMode ? "รับคีย์ E2EE จากมือถือ" : authenticated ? (profileName || "เชื่อม LINE แล้ว") : "เชื่อมบัญชี LINE"}</h2>
+        <p className="auth-copy">{keyImportMode
+          ? "สแกนด้วยมือถือที่มีคีย์เดิม โดยใช้บัญชีเดียวกับ Desktop"
+          : authenticated ? "บัญชีนี้เชื่อมต่อกับ Liney แล้ว" : isWebRuntime ? "Liney Web ใช้ Public Home Runner แยก session ต่อ browser และรองรับการเข้าสู่ระบบด้วย QR Code" : "ต้องเข้าสู่ระบบก่อนจึงจะใช้แชตและฟีเจอร์ของ Liney ได้"}</p>
 
         {authenticated ? (
-          <div className="auth-success">
-            <ShieldCheck size={34}/>
-            <strong>พร้อมใช้งานจริง</strong>
-            <span>แชตปกติ, OpenChat และการส่งข้อความเชื่อมผ่าน {clientIdentity?.displayName || "Liney"}</span>
-          </div>
+          keyImportMode ? (
+            <>
+              {keyImportResult ? (
+                <div className="auth-success">
+                  <ShieldCheck size={34}/>
+                  <strong>นำเข้า keychain สำเร็จ</strong>
+                  <span>เปิดใช้คีย์ที่มือถือเลือกแล้ว และเก็บคีย์เดิมไว้ {keyImportResult.generations} รุ่น</span>
+                  <button className="auth-primary" onClick={onClose}>เรียบร้อย</button>
+                </div>
+              ) : qrUrl ? (
+                <div className="qr-zone">
+                  <div className="qr-card"><QRCodeSVG value={qrUrl} size={188} level="M" /></div>
+                  <div className="qr-instruction"><QrCode size={18}/><div><strong>สแกนด้วย LINE บนมือถือเครื่องเดิม</strong><span>เปิด LINE → สแกน QR Code → อนุญาตการเข้าสู่ระบบบัญชีเดียวกัน</span></div></div>
+                  {pin ? <div className="pin-card"><span>รหัสยืนยัน</span><strong>{pin}</strong></div> : null}
+                </div>
+              ) : (
+                <>
+                  <div className="auth-idle">
+                    <div className="auth-engine-icon">{authBusy ? <LoaderCircle className="spin" size={26}/> : <QrCode size={27}/>}</div>
+                    <strong>{authBusy ? "กำลังสร้าง QR Code" : "พร้อมนำเข้าคีย์จากมือถือ"}</strong>
+                    <span>{authBusy ? "รอการยืนยันจาก LINE…" : "คีย์จะถูกเก็บในเครื่องนี้โดยไม่ล้างประวัติแชต"}</span>
+                  </div>
+                  <button className="auth-primary" disabled={engineState !== "ready" || authBusy} onClick={onImportKeys}>
+                    {authBusy ? <LoaderCircle className="spin" size={17}/> : <QrCode size={17}/>} {authBusy ? "กำลังรอมือถือ…" : "สร้าง QR สำหรับนำเข้าคีย์"}
+                  </button>
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="auth-success">
+                <ShieldCheck size={34}/>
+                <strong>พร้อมใช้งานจริง</strong>
+                <span>แชตปกติ, OpenChat และการส่งข้อความเชื่อมผ่าน {clientIdentity?.displayName || "Liney"}</span>
+              </div>
+              <button className="auth-primary" disabled={engineState !== "ready" || authBusy} onClick={onBeginKeyImport}>
+                <QrCode size={17}/> รับคีย์เข้ารหัสจาก LINE มือถือ
+              </button>
+            </>
+          )
         ) : (
           <>
             <div className="auth-mode-switch" role="tablist" aria-label="วิธีเข้าสู่ระบบ">
@@ -4270,13 +5566,13 @@ function AuthModal({
         )}
 
         {error ? <div className="auth-error">{error}</div> : null}
-        {authenticated ? (
+        {authenticated && !keyImportMode ? (
           <button className="auth-secondary-danger" onClick={() => void onLogout()}>ออกจากระบบบนเครื่องนี้</button>
         ) : null}
         <div className="auth-footnote">
           {isWebRuntime
             ? <>Client: {clientIdentity?.displayName || "Liney-Website"} · Public Home Runner session แยกต่อ browser · Credential: {storageMode === "wallet" ? "Wallet / Secret Service" : "session-only"} · session/E2EE/cache ถูกเก็บชั่วคราวในพื้นที่แยกบน Home Server และลบเมื่อ session หมดอายุหรือถูกปิด · ไม่ใช้ Chrome Extension หรือ Cloudflare Worker</>
-            : <>Client: {clientIdentity?.displayName || "Liney-Linux"} · Credential: {storageMode === "wallet" ? "Wallet / Secret Service" : "session-only (ไม่เขียน token ลงไฟล์)"} · E2EE storage อยู่ที่ ~/.local/share/liney · ไม่มี Liney server กลาง</>}
+            : <>Client: {clientIdentity?.displayName || "Liney-Linux"} · Credential: {storageMode === "wallet" ? "Wallet / Secret Service" : storageMode === "encrypted-file" ? "Encrypted local fallback (AES-256-GCM · ย้ายเข้า Wallet อัตโนมัติเมื่อพร้อม)" : "session-only (ไม่ persist credential)"} · E2EE storage อยู่ที่ ~/.local/share/liney · ไม่มี Liney server กลาง</>}
         </div>
       </motion.section>
     </motion.div>
@@ -4546,7 +5842,7 @@ function GeneralSettings({ settings, themeMode, dark, onThemeMode, onSetting }: 
       <SettingRow title="ย่อไว้ใน System Tray" subtitle="ปิดหน้าต่างโดยไม่ออกจากระบบ"><Toggle checked={settings.tray} onChange={(checked) => onSetting("tray", checked)} /></SettingRow>
     </SettingsGroup>
     <SettingsGroup title="Appearance">
-      <SettingRow title="ปรับตามธีมระบบ" subtitle="ติดตาม Light / Dark ของ KDE แบบอัตโนมัติ"><Toggle checked={themeMode === "system"} onChange={(checked) => onThemeMode(checked ? "system" : (dark ? "dark" : "light"))} /></SettingRow>
+      <SettingRow title="ปรับตามธีมระบบ" subtitle="ติดตาม Light / Dark ของเดสก์ท็อประบบแบบอัตโนมัติ"><Toggle checked={themeMode === "system"} onChange={(checked) => onThemeMode(checked ? "system" : (dark ? "dark" : "light"))} /></SettingRow>
       <ThemeCards themeMode={themeMode} dark={dark} onThemeMode={onThemeMode} />
     </SettingsGroup>
   </div>;
@@ -4565,12 +5861,14 @@ function AppearanceSettings({ settings, themeMode, dark, onThemeMode, onDensity,
 function NotificationSettings({ settings, onSetting }: { settings: AppSettings; onSetting: (key: keyof AppSettings, value: boolean) => void }) {
   return <div className="settings-scroll">
     <SettingsGroup title="วิธีการแจ้งเตือน">
-      <SettingRow title="แจ้งเตือนบนเดสก์ท็อป" subtitle="ใช้ระบบแจ้งเตือนของ KDE"><Toggle checked={settings.desktopNotifications} onChange={(checked) => onSetting("desktopNotifications", checked)} /></SettingRow>
+      <SettingRow title="แจ้งเตือนบนเดสก์ท็อป" subtitle="ใช้ระบบแจ้งเตือนของเดสก์ท็อปที่กำลังใช้งาน"><Toggle checked={settings.desktopNotifications} onChange={(checked) => onSetting("desktopNotifications", checked)} /></SettingRow>
       <SettingRow title="แสดงตัวอย่างข้อความ" subtitle="แสดงเนื้อหาใน notification"><Toggle checked={settings.notificationPreview} onChange={(checked) => onSetting("notificationPreview", checked)} /></SettingRow>
-      <SettingRow title="เสียงแจ้งเตือน" subtitle="เล่นเสียงเมื่อมีข้อความใหม่"><Toggle checked={settings.notificationSound} onChange={(checked) => onSetting("notificationSound", checked)} /></SettingRow>
+      <SettingRow title="เสียงแจ้งเตือนข้อความ" subtitle="เล่นเสียงเมื่อมีข้อความใหม่"><Toggle checked={settings.notificationSound} onChange={(checked) => onSetting("notificationSound", checked)} /></SettingRow>
+      <SettingRow title="แจ้งเตือนสายเข้า" subtitle="แสดงการแจ้งเตือนของเดสก์ท็อปเมื่อมีคนโทรเข้า"><Toggle checked={settings.callNotifications} onChange={(checked) => onSetting("callNotifications", checked)} /></SettingRow>
+      <SettingRow title="เสียงสายโทร" subtitle="เล่น ringtone ตอนสายเข้า และ ringback ตอนโทรออก"><Toggle checked={settings.callSound} onChange={(checked) => onSetting("callSound", checked)} /></SettingRow>
     </SettingsGroup>
     <SettingsGroup title="เสียง">
-      <SettingRow title="เสียงเริ่มต้น" subtitle="Liney Soft"><span className="settings-status status-good">ใช้กับ notification ที่เปิดเสียง</span></SettingRow>
+      <SettingRow title="เสียงเริ่มต้น" subtitle="Liney Soft + Liney Call"><span className="settings-status status-good">เสียงข้อความและเสียงโทรตั้งค่าแยกกัน</span></SettingRow>
     </SettingsGroup>
   </div>;
 }
@@ -4750,9 +6048,33 @@ function mediaContentTypeForMime(mime: string): number {
   return 14;
 }
 
+function formatSendError(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  const normalized = raw.toLowerCase();
+  if (normalized.includes("still rejects") || normalized.includes("reconnect this line account")) {
+    return "LINE ยังปฏิเสธคีย์เข้ารหัสหลังต่ออายุแล้ว ต้องเชื่อมบัญชี LINE ใหม่ด้วย QR";
+  }
+  if (raw.includes("E2EE_UPDATE_SENDER_KEY") || normalized.includes("invalid sender key")) {
+    return "LINE ปฏิเสธคีย์เข้ารหัสเดิม กดลองใหม่เพื่อให้ Liney ต่ออายุคีย์ก่อนส่ง";
+  }
+  return raw.length > 180 ? raw.slice(0, 177) + "…" : raw;
+}
+
 function mediaLabel(contentType: number, filename: string): string {
   const label = contentType === 2 ? "วิดีโอ" : contentType === 3 ? "เสียง" : contentType === 14 ? "ไฟล์" : "รูปภาพ";
   return filename ? `${label}: ${filename}` : label;
+}
+
+function hasUserVisibleMessageText(message: Message): boolean {
+  const text = String(message.text ?? "").trim();
+  if (!text) return false;
+  const placeholders: Record<number, string[]> = {
+    1: ["รูปภาพ", "image", "photo"],
+    2: ["วิดีโอ", "video"],
+    3: ["ข้อความเสียง", "เสียง", "audio"],
+    14: ["ไฟล์", "file"],
+  };
+  return !(placeholders[Number(message.contentType ?? 0)] ?? []).includes(text.toLowerCase());
 }
 
 function formatListTime(value: number) {
@@ -4788,29 +6110,63 @@ function avatarColor(index: number) {
 function CallModal({
   chat,
   peer,
+  remoteVideoFrame,
   state,
   muted,
+  microphoneAvailable,
+  speakerAvailable,
+  videoCapable,
+  videoEnabled,
+  mode,
+  cameraAvailable,
+  screenSharing,
+  screenShareAvailable,
+  screenTargets,
+  screenTarget,
+  screenManagedBySystem,
   error,
   incomingSupported,
   outputDevices,
   outputTarget,
   onAccept,
+  onAcceptVideo,
   onReject,
   onMute,
+  onVideo,
+  onScreenShare,
+  onUpgradeVideo,
+  onScreenTarget,
   onOutput,
   onClose,
 }: {
   chat: Chat;
   peer: string;
+  remoteVideoFrame: string;
   state: CallState;
   muted: boolean;
+  microphoneAvailable: boolean;
+  speakerAvailable: boolean;
+  videoCapable: boolean;
+  videoEnabled: boolean;
+  mode: "AUDIO" | "VIDEO";
+  cameraAvailable: boolean;
+  screenSharing: boolean;
+  screenShareAvailable: boolean;
+  screenTargets: ScreenShareTargetResult[];
+  screenTarget: string;
+  screenManagedBySystem: boolean;
   error: string;
   incomingSupported: boolean;
   outputDevices: AudioDeviceResult[];
   outputTarget: string;
   onAccept: () => void;
+  onAcceptVideo: () => void;
   onReject: () => void;
   onMute: () => void;
+  onVideo: () => void;
+  onScreenShare: () => void;
+  onUpgradeVideo: () => void;
+  onScreenTarget: (target: string) => void;
   onOutput: (target: string) => void;
   onClose: () => void;
 }) {
@@ -4830,28 +6186,69 @@ function CallModal({
                 ? "สิ้นสุดการโทร"
                 : "สายเสียง";
   return <motion.div className="call-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-    <motion.div className="call-card" initial={{ scale: .94, y: 16 }} animate={{ scale: 1, y: 0 }} exit={{ scale: .96, y: 10 }}>
+    <motion.div className={"call-card" + (remoteVideoFrame ? " has-video" : "")} initial={{ scale: .94, y: 16 }} animate={{ scale: 1, y: 0 }} exit={{ scale: .96, y: 10 }}>
       <button className="call-expand" type="button" aria-label="ปิดหน้าต่าง" onClick={onClose}><Maximize2 size={16}/></button>
-      <Avatar chat={chat} size="large" />
-      <h2>{peer || chat.name}</h2>
+      {remoteVideoFrame
+        ? <img className="call-remote-video" src={remoteVideoFrame} alt={"วิดีโอจาก " + (chat.name || peer)} />
+        : <Avatar chat={chat} size="large" />}
+      <h2>{chat.name || peer}</h2>
       <p>{status}</p>
-      {error ? <div className="call-note call-error">{error}</div> : null}
-      {state === "in-call" ? <div className="call-wave"><i/><i/><i/><i/><i/></div> : null}
+      {error ? <div className="call-note call-error" role="status" aria-live="polite">{error}</div> : null}
+      {state === "in-call" ? <div className="call-wave" aria-label={muted ? "ปิดไมโครโฟน" : "กำลังสนทนา"}><i/><i/><i/><i/><i/></div> : null}
+      {state === "in-call" && videoCapable && !remoteVideoFrame
+        ? <div className="call-remote-wait">รอภาพจากอีกฝั่ง · ภาพจะแสดงเมื่อเขาเปิดกล้อง</div>
+        : null}
       {state === "incoming" ? (
         <div className="call-actions">
           <button className="hangup" type="button" onClick={onReject}><Phone size={20}/><span>ปฏิเสธ</span></button>
-          <button type="button" disabled={!incomingSupported} title={incomingSupported ? "รับสายเสียงผ่าน LINEJS Andromeda" : "ระบบรับสายยังไม่พร้อมบนเครื่องนี้"} onClick={onAccept}><Phone size={20}/><span>{incomingSupported ? "รับสาย" : "รับสายยังไม่พร้อม"}</span></button>
+          <button type="button" disabled={!incomingSupported} title={incomingSupported ? "รับเป็นสายเสียง" : "ระบบรับสายยังไม่พร้อมบนเครื่องนี้"} onClick={onAccept}><Phone size={20}/><span>{incomingSupported ? "รับเสียง" : "รับสายยังไม่พร้อม"}</span></button>
+          <button type="button" disabled={!incomingSupported} title={incomingSupported ? "รับเป็นวิดีโอคอล" : "ระบบรับสายยังไม่พร้อมบนเครื่องนี้"} onClick={onAcceptVideo}><Video size={20}/><span>รับวิดีโอ</span></button>
         </div>
       ) : state === "failed" || state === "ended" ? (
         <button className="secondary-button" type="button" onClick={onClose}>ปิด</button>
       ) : (
         <div className="call-actions">
-          <button type="button" className={muted ? "active" : ""} onClick={onMute}><Mic size={19}/><span>{muted ? "เปิดไมค์" : "ปิดไมค์"}</span></button>
-          <button type="button" disabled title="วิดีโอคอลยังไม่รองรับ"><Video size={20}/><span>วิดีโอ</span></button>
-          <label className="call-device-picker" title={outputDevices.length ? "เลือกอุปกรณ์เสียงออก" : "ไม่พบอุปกรณ์เสียงออก"}>
+          <button
+            type="button"
+            className={muted ? "active" : ""}
+            disabled={!microphoneAvailable}
+            title={microphoneAvailable ? (muted ? "เปิดไมค์" : "ปิดไมค์") : "ไม่พบไมโครโฟน · สายยังทำงานและฟังอีกฝั่งได้"}
+            onClick={onMute}
+          ><Mic size={19}/><span>{microphoneAvailable ? (muted ? "เปิดไมค์" : "ปิดไมค์") : "ไม่มีไมค์"}</span></button>
+          <button
+            type="button"
+            className={videoEnabled ? "active" : ""}
+            aria-pressed={videoEnabled}
+            disabled={!videoCapable || !cameraAvailable}
+            title={!videoCapable ? (mode === "AUDIO" ? "สายเสียงต้องเปลี่ยนเป็นวิดีโอคอลก่อน" : "LINE ยังไม่ได้เจรจาช่องวิดีโอ") : !cameraAvailable ? "ไม่พบกล้อง · แชร์หน้าจอยังใช้ได้" : videoEnabled ? "ปิดกล้อง" : "เปิดกล้อง"}
+            onClick={onVideo}
+          ><Video size={20}/><span>{videoEnabled ? "ปิดกล้อง" : cameraAvailable ? "กล้อง" : "ไม่มีกล้อง"}</span></button>
+          <button
+            type="button"
+            className={screenSharing ? "active" : ""}
+            aria-pressed={screenSharing}
+            disabled={!videoCapable || !screenShareAvailable}
+            title={!videoCapable ? (mode === "AUDIO" ? "สายเสียงต้องเปลี่ยนเป็นวิดีโอคอลก่อน" : "LINE ยังไม่ได้เจรจาช่องวิดีโอ") : !screenShareAvailable ? "ระบบจับภาพหน้าจอยังไม่พร้อม" : screenSharing ? "หยุดแชร์หน้าจอ" : "แชร์หน้าจอ"}
+            onClick={onScreenShare}
+          ><Monitor size={20}/><span>{screenSharing ? "หยุดแชร์" : "แชร์จอ"}</span></button>
+          {!screenManagedBySystem && screenTargets.length ? <label className="call-device-picker" title={screenSharing ? "หยุดแชร์ก่อนเปลี่ยนเป้าหมาย" : "เลือกจอ หน้าต่าง หรือพื้นที่ที่ต้องการแชร์"}>
+            <Monitor size={19}/>
+            <span>เป้าหมาย</span>
+            <select
+              aria-label="เป้าหมายแชร์หน้าจอ"
+              value={screenTarget}
+              onChange={(event) => onScreenTarget(event.target.value)}
+              disabled={screenSharing}
+            >
+              {screenTargets.map((target) => <option key={target.id} value={target.id}>
+                {target.kind === "desktop" ? "ทั้งเดสก์ท็อป" : target.kind === "monitor" ? "จอ · " + target.name : target.kind === "window" ? "หน้าต่าง · " + target.name : "เลือกพื้นที่ด้วยเมาส์"}
+              </option>)}
+            </select>
+          </label> : null}
+          <label className="call-device-picker" title={speakerAvailable && outputDevices.length ? "เลือกอุปกรณ์เสียงออก" : "ไม่พบลำโพง · สายยังเชื่อมต่อได้"}>
             <Volume2 size={19}/>
-            <span>ลำโพง</span>
-            <select aria-label="อุปกรณ์เสียงออก" value={outputTarget} onChange={(event) => onOutput(event.target.value)} disabled={!outputDevices.length}>
+            <span>{speakerAvailable ? "ลำโพง" : "ไม่มีลำโพง"}</span>
+            <select aria-label="อุปกรณ์เสียงออก" value={outputTarget} onChange={(event) => onOutput(event.target.value)} disabled={!speakerAvailable || !outputDevices.length}>
               <option value="">ค่าเริ่มต้น</option>
               {outputDevices.map((device) => <option key={device.id} value={device.id}>{device.description || device.name}</option>)}
             </select>
@@ -4859,7 +6256,24 @@ function CallModal({
           <button className="hangup" type="button" onClick={onClose}><Phone size={20}/><span>วางสาย</span></button>
         </div>
       )}
-      <div className="call-note">LINE audio · PipeWire · 1:1{state === "incoming" || incomingSupported ? " · Incoming Experimental" : ""}</div>
+      {state === "in-call" && !videoCapable && mode === "AUDIO" ? (
+        <div className="call-video-upgrade">
+          <span>กล้องและแชร์จอต้องเริ่มผ่านวิดีโอคอล</span>
+          <button type="button" onClick={onUpgradeVideo}>เริ่มวิดีโอคอลใหม่</button>
+        </div>
+      ) : null}
+      {state === "in-call" && !videoCapable && mode === "VIDEO" ? (
+        <div className="call-capability-note" role="status">LINE ยังไม่ได้เปิดช่องวิดีโอสำหรับสายนี้</div>
+      ) : null}
+      <div className="call-note">
+        {state === "incoming"
+          ? "LINE 1:1 · สายเรียกเข้า"
+          : state === "in-call"
+            ? videoCapable
+              ? screenSharing ? "กำลังแชร์หน้าจอ" : videoEnabled ? "กำลังส่งวิดีโอ" : remoteVideoFrame ? "กำลังรับวิดีโอจากอีกฝั่ง" : "วิดีโอพร้อม · รออีกฝั่งเปิดกล้อง"
+              : mode === "AUDIO" ? "สายเสียง 1:1" : "สายวิดีโอ 1:1"
+            : "LINE 1:1"}
+      </div>
     </motion.div>
   </motion.div>;
 }

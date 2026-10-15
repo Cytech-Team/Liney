@@ -4,8 +4,10 @@
  * Future LINEJS API changes or replacements require changes only here.
  */
 import { Buffer } from "node:buffer";
-import { loginWithAuthToken, loginWithPassword, loginWithQR, Client as LineJsRuntimeClient, SquareMessage, TalkMessage, type Client } from "@evex/linejs";
+import { listLineAlbums, listLineAlbumPhotos, previewLineAlbumPhoto } from "./albums";
+import { loginWithAuthToken, loginWithPassword, loginWithQR, Client as LineJsRuntimeClient, SquareMessage, TalkMessage, User as LineJsUser, type Client } from "@evex/linejs";
 import { BaseClient } from "@evex/linejs/base";
+import { MemoryStorage } from "@evex/linejs/storage";
 import { parseCancelCall, parseIncomingCall } from "@evex/linejs/call";
 
 // All LINEJS runtime values and types used by the engine are re-exported from
@@ -31,6 +33,9 @@ export const LINEJS_VERSION = "3.5.0";
 export type LineClient = Client;
 
 export const LineJsAdapter = {
+  listLineAlbums,
+  listLineAlbumPhotos,
+  previewLineAlbumPhoto,
   loginWithQR,
   loginWithBrandedQR,
   loginWithPassword,
@@ -39,6 +44,7 @@ export const LineJsAdapter = {
   fromRawTalk,
   createSquareMessage,
   parseIncomingCall,
+  parseIncomingCallForClient,
   parseCancelCall,
   getMyProfile,
   fetchJoinedChats,
@@ -62,6 +68,7 @@ export const LineJsAdapter = {
   downloadMessageData,
   getContactsV2,
   getContacts,
+  fetchUsers,
   getSquareMember,
   getMessageBoxes,
   getTalkMessageReadRanges,
@@ -74,7 +81,7 @@ export const LineJsAdapter = {
   getRecentMessages,
   profileMid,
   decryptE2EEMessage,
-  createPolling,
+  createPollingSession,
   push,
   renewPushStream,
   renewPushStreams,
@@ -99,6 +106,7 @@ export const LineJsAdapter = {
   sendTalkChecked,
   markTalkMessageRead,
   startCallSession,
+  answerIncomingCall,
   setCallCodecFactory,
   // Re-export version for RPC capabilities
   version: LINEJS_VERSION,
@@ -109,6 +117,24 @@ export type LineyLoginBrand = {
   modelName: string;
   systemName: string;
 };
+
+/** Isolated, in-memory storage used for a same-account QR keychain refresh. */
+export function createTemporaryQrStorage(initialData: Record<string, unknown>) {
+  const storage = new MemoryStorage(initialData as any);
+  return {
+    storage,
+    snapshot: () => storage.getAll() as Record<string, unknown>,
+    clear: () => storage.clear(),
+  };
+}
+
+/** Rebind a QR-authenticated client to Liney's durable, protected storage. */
+export function bindClientStorage(client: LineClient, storage: unknown): void {
+  const base = (client as any).base;
+  if (!base || !("storage" in base)) throw new Error("LINEJS client storage is unavailable");
+  base.storage = storage;
+  if (base.storage !== storage) throw new Error("LINEJS client storage could not be rebound");
+}
 
 export async function loginWithBrandedQR(
   opts: Parameters<typeof loginWithQR>[0],
@@ -254,6 +280,139 @@ export function getContactsV2(client: LineClient, params: Record<string, unknown
 
 export function getContacts(client: LineClient, params: Record<string, unknown>) {
   return (client as any).base.talk.getContacts(params);
+}
+
+/**
+ * Fetches friends using LINEJS's supported V3 → V2 → getUser fallback path.
+ * Keep this compatibility policy behind the adapter boundary.
+ */
+const FRIEND_CONTACT_BATCH_SIZE = 50;
+
+function isInvalidContactLength(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /INVALID_LENGTH|invalid length/i.test(message);
+}
+
+function hasUsefulContactName(user: any): boolean {
+  const raw = user?.raw && typeof user.raw === "object" ? user.raw : {};
+  const records = [
+    raw,
+    raw?.contact,
+    raw?.targetProfileDetail,
+    raw?.profile,
+    raw?.contact?.targetProfileDetail,
+    raw?.contact?.profile,
+  ].filter((value) => value && typeof value === "object");
+  return records.some((record) => [
+    record.displayNameOverridden,
+    record.profileName,
+    record.displayName,
+    record.name,
+  ].some((value) => {
+    if (typeof value !== "string") return false;
+    const name = value.trim();
+    return Boolean(name) && !["line user", "line chat"].includes(name.toLowerCase());
+  }));
+}
+
+async function fetchContactUsers(
+  mids: string[],
+  fetchBatch: (batch: string[]) => Promise<any>,
+  mapResponse: (response: any) => any[],
+): Promise<{ users: any[]; failedMids: string[] }> {
+  const users: any[] = [];
+  const failedMids: string[] = [];
+  const pending: string[][] = [];
+  for (let start = 0; start < mids.length; start += FRIEND_CONTACT_BATCH_SIZE) {
+    pending.push(mids.slice(start, start + FRIEND_CONTACT_BATCH_SIZE));
+  }
+
+  while (pending.length) {
+    const batch = pending.shift()!;
+    try {
+      const response = await fetchBatch(batch);
+      const mapped = mapResponse(response);
+      users.push(...mapped);
+      const resolved = new Set(mapped
+        .filter(hasUsefulContactName)
+        .map((user) => String(user?.mid ?? user?.raw?.targetUserMid ?? "").trim())
+        .filter(Boolean));
+      failedMids.push(...batch.filter((mid) => !resolved.has(mid)));
+    } catch (error) {
+      // Some LINE endpoints impose a smaller server-side limit than the
+      // advertised limit. Split only the rejected batch and retain all other
+      // successful batches instead of discarding the complete friend refresh.
+      if (isInvalidContactLength(error) && batch.length > 1) {
+        const middle = Math.ceil(batch.length / 2);
+        pending.unshift(batch.slice(middle));
+        pending.unshift(batch.slice(0, middle));
+      } else {
+        failedMids.push(...batch);
+      }
+    }
+  }
+  return { users, failedMids };
+}
+
+/**
+ * Fetch profiles in bounded, adaptive batches. An endpoint error for one batch
+ * is isolated so cached and successfully refreshed contacts remain available.
+ */
+export async function fetchUsers(client: LineClient): Promise<any[]> {
+  const runtime = client as any;
+  const relation = runtime.base?.relation;
+  const talk = runtime.base?.talk;
+  if (!relation?.getUserFriendIds) throw new Error("LINEJS friend list fetch is unavailable");
+
+  const result = await relation.getUserFriendIds({ request: { blockStatus: "ALL" } });
+  const rawMids = Array.isArray(result?.userFriendMids) ? result.userFriendMids : [];
+  const friendMids = [...new Set(rawMids.map((mid: unknown) => String(mid ?? "").trim()).filter(Boolean))];
+  if (!friendMids.length) return [];
+
+  let users: any[] = [];
+  let unresolved = friendMids;
+  if (typeof relation.getContactsV3 === "function") {
+    const v3 = await fetchContactUsers(
+      unresolved,
+      (batch) => relation.getContactsV3({ mids: batch }),
+      (response) => (response?.responses ?? []).map((raw: any) => new LineJsUser({ client, raw })),
+    );
+    users = v3.users;
+    unresolved = v3.failedMids;
+  }
+
+  if (unresolved.length && typeof talk?.getContactsV2 === "function") {
+    const v2 = await fetchContactUsers(
+      unresolved,
+      (batch) => talk.getContactsV2({ mids: batch }),
+      (response) => Object.entries(response?.contacts ?? {}).map(([mid, entry]) => new LineJsUser({
+        client,
+        raw: { ...(entry as object), targetUserMid: mid } as never,
+      })),
+    );
+    users.push(...v2.users);
+    unresolved = v2.failedMids;
+  }
+
+  // Use the per-user endpoint only for contacts that the batched endpoints
+  // could not resolve. Bound concurrency to avoid turning a partial sync into
+  // a burst of hundreds of profile requests.
+  if (typeof runtime.getUser === "function" && unresolved.length) {
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(4, unresolved.length) }, async () => {
+      while (cursor < unresolved.length) {
+        const mid = unresolved[cursor++];
+        try {
+          users.push(await runtime.getUser(mid));
+        } catch {
+          // Keep the profile missing; the next background refresh can retry.
+        }
+      }
+    });
+    await Promise.all(workers);
+  }
+
+  return users;
 }
 
 export function getSquareMember(client: LineClient, params: Record<string, unknown>) {
@@ -433,8 +592,23 @@ export function decryptE2EEMessage(client: LineClient, encrypted: unknown) {
   return (client as any).base.e2ee.decryptE2EEMessage(encrypted);
 }
 
-export function createPolling(client: LineClient) {
-  return (client as any).base.createPolling();
+export type LineyPollingOptions = {
+  signal?: AbortSignal;
+  onError?: (error: unknown) => void;
+  pollingInterval?: number;
+};
+
+export type LineyPollingSession = {
+  talk(options?: LineyPollingOptions): AsyncIterable<unknown>;
+  square(options?: LineyPollingOptions): AsyncIterable<unknown>;
+};
+
+export function createPollingSession(client: LineClient): LineyPollingSession {
+  const polling = (client as any).base.createPolling();
+  return {
+    talk: (options = {}) => polling._listenTalkEvents(options),
+    square: (options = {}) => polling._listenSquareEvents(options),
+  };
 }
 
 export function push(client: LineClient) {
@@ -482,10 +656,124 @@ export function on(client: LineClient, event: string, listener: (...args: any[])
   (client as any).base.on(event, listener);
 }
 
-export function sendTalkMessage(client: LineClient, params: Record<string, unknown>) {
-  return (client as any).base.talk.sendMessage(params);
+const e2eeSenderKeyUpdates = new WeakMap<object, Promise<void>>();
+
+async function updateE2EESenderKey(client: LineClient): Promise<void> {
+  const key = client as object;
+  const pending = e2eeSenderKeyUpdates.get(key);
+  if (pending) return pending;
+
+  const update = (async () => {
+    const base = (client as any).base;
+    const e2ee = base.e2ee;
+    const selfMid = base.profile?.mid;
+    if (typeof selfMid !== "string" || !selfMid) {
+      throw new Error("LINE requires an E2EE sender-key update, but the active account profile is unavailable");
+    }
+    if (typeof e2ee?.registerE2EEKeyPair !== "function") {
+      throw new Error("LINE requires an E2EE sender-key update, but key registration is unavailable");
+    }
+    const registered = await e2ee.registerE2EEKeyPair();
+    if (!registered) {
+      throw new Error("LINE requires an E2EE sender-key update, but key registration failed");
+    }
+    const keyData = {
+      keyId: registered.keyId,
+      privKey: Buffer.from(registered.privKey).toString("base64"),
+      pubKey: Buffer.from(registered.pubKey).toString("base64"),
+      e2eeVersion: registered.e2eeVersion,
+    };
+    if (typeof e2ee.saveE2EESelfKeyData !== "function" || typeof e2ee.getE2EESelfKeyData !== "function") {
+      throw new Error("LINE registered an E2EE key, but the active sender-key store is unavailable");
+    }
+    await e2ee.saveE2EESelfKeyData(keyData);
+    const activeKey = await e2ee.getE2EESelfKeyData(selfMid);
+    if (
+      String(activeKey?.keyId ?? "") !== String(registered.keyId)
+      || activeKey?.privKey !== keyData.privKey
+      || activeKey?.pubKey !== keyData.pubKey
+    ) {
+      throw new Error("LINE registered an E2EE key, but the active session still selects a stale sender key");
+    }
+    if (typeof e2ee.verifyStoredKeyAgainstServer === "function") {
+      const verified = await e2ee.verifyStoredKeyAgainstServer(registered.keyId, registered.privKey);
+      if (verified === false) {
+        throw new Error("LINE registered an E2EE sender key that does not match the server's public key");
+      }
+    }
+  })();
+  e2eeSenderKeyUpdates.set(key, update);
+  try {
+    await update;
+  } catch (error) {
+    if (e2eeSenderKeyUpdates.get(key) === update) e2eeSenderKeyUpdates.delete(key);
+    throw error;
+  }
 }
 
+function codeFromTalkErrorMessage(message: string): string {
+  const marker = message.indexOf('"code"');
+  if (marker < 0) return "";
+  const colon = message.indexOf(":", marker + 6);
+  if (colon < 0) return "";
+  const quoteStart = message.indexOf('"', colon + 1);
+  if (quoteStart < 0) return "";
+  const quoteEnd = message.indexOf('"', quoteStart + 1);
+  return quoteEnd > quoteStart ? message.slice(quoteStart + 1, quoteEnd) : "";
+}
+
+function talkSendErrorCode(error: unknown): string {
+  if (typeof error === "string") return codeFromTalkErrorMessage(error);
+  if (!error || typeof error !== "object") return "";
+  const value = error as {
+    code?: unknown;
+    data?: { code?: unknown; e?: { code?: unknown }; error?: { code?: unknown } };
+    message?: unknown;
+    cause?: unknown;
+  };
+  const code = value.data?.code ?? value.data?.e?.code ?? value.data?.error?.code ?? value.code;
+  if (code !== undefined && code !== null) return String(code);
+  const message = typeof value.message === "string" ? value.message : String(error);
+  const parsedCode = codeFromTalkErrorMessage(message);
+  if (parsedCode) return parsedCode;
+  return value.cause && value.cause !== error ? talkSendErrorCode(value.cause) : "";
+}
+function isTalkSenderKeyError(error: unknown): boolean {
+  const code = talkSendErrorCode(error);
+  if (code === "E2EE_UPDATE_SENDER_KEY" || code === "83") return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return message.toLowerCase().includes("invalid sender key");
+}
+
+export async function sendTalkMessage(
+  client: LineClient,
+  params: Record<string, unknown>,
+  rebuildAfterSenderKeyUpdate?: () => Promise<Record<string, unknown>>,
+) {
+  const talk = (client as any).base.talk;
+  try {
+    return await talk.sendMessage(params);
+  } catch (error) {
+    if (!isTalkSenderKeyError(error) || params.e2ee === false) throw error;
+    await updateE2EESenderKey(client);
+    // The sender-key ID is embedded in E2EE chunks. Media retries must rebuild
+    // those chunks after key rotation, while text lets LINEJS encrypt the text.
+    try {
+      const retryParams = rebuildAfterSenderKeyUpdate
+        ? await rebuildAfterSenderKeyUpdate()
+        : { ...params, e2ee: true };
+      return await talk.sendMessage(retryParams);
+    } catch (retryError) {
+      if (isTalkSenderKeyError(retryError)) {
+        throw new Error(
+          "LINE still rejects the verified E2EE sender key. Reconnect this LINE account to refresh its encrypted session.",
+          { cause: retryError },
+        );
+      }
+      throw retryError;
+    }
+  }
+}
 export function uploadObjTalk(client: LineClient, ...args: any[]) {
   return (client as any).base.obs.uploadObjTalk(...args);
 }
@@ -562,37 +850,40 @@ export async function sendTalkMediaE2EE(
     if (String(previewUpload?.objId ?? "") !== objId) throw new Error("LINE OBS preview object id mismatch");
   }
 
-  const chunks = await base.e2ee.encryptE2EEMessage(
-    to,
-    { keyMaterial: encrypted.keyMaterial, fileName: filename || `line.${ext}` },
-    contentType,
-  );
   const roundedDuration = typeof durationMs === "number" ? Math.round(durationMs) : NaN;
   const durationMetadata = oType === "video" && Number.isSafeInteger(roundedDuration) && roundedDuration > 0
     ? { DURATION: String(roundedDuration) }
     : {};
 
-  return base.talk.sendMessage({
+  const contentMetadata = {
+    SID: obsNamespace,
+    OID: objId,
+    FILE_SIZE: String(encryptedBlob.size),
+    e2eeVersion: "2",
+    ...(oType === "image" || oType === "gif" || oType === "video"
+      ? { MEDIA_CONTENT_INFO: JSON.stringify({
+        category: "original",
+        fileSize: encryptedBlob.size,
+        extension: ext,
+        animated: oType === "gif",
+      }) }
+      : {}),
+    ...durationMetadata,
+  };
+  const buildEncryptedMessage = async () => ({
     to,
-    chunks,
+    chunks: await base.e2ee.encryptE2EEMessage(
+      to,
+      { keyMaterial: encrypted.keyMaterial, fileName: filename || "line." + ext },
+      contentType,
+    ),
     contentType,
-    contentMetadata: {
-      SID: obsNamespace,
-      OID: objId,
-      FILE_SIZE: String(encryptedBlob.size),
-      e2eeVersion: "2",
-      ...(oType === "image" || oType === "gif" || oType === "video"
-        ? { MEDIA_CONTENT_INFO: JSON.stringify({
-          category: "original",
-          fileSize: encryptedBlob.size,
-          extension: ext,
-          animated: oType === "gif",
-        }) }
-        : {}),
-      ...durationMetadata,
-    },
+    contentMetadata,
     ...(relatedMessageId ? { relatedMessageId } : {}),
+    e2ee: true,
   });
+
+  return sendTalkMessage(client, await buildEncryptedMessage(), buildEncryptedMessage);
 }
 
 export function getReqseq(client: LineClient) {
@@ -646,6 +937,26 @@ export async function markTalkMessageRead(client: LineClient, chatId: string, me
     lastMessageId: normalizedMessageId,
     seq: await (client as any).base.getReqseq(),
   });
+}
+
+export function parseIncomingCallForClient(client: LineClient, operation: unknown) {
+  return (parseIncomingCall as any)(operation, (client as any).base.profile?.mid ?? "");
+}
+
+export function answerIncomingCall(
+  client: LineClient,
+  event: unknown,
+  opts: {
+    deviceId: string;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    debug?: (event: Record<string, unknown>) => void;
+    preferVideo?: boolean;
+  },
+) {
+  const answer = (client as any).call?.answerIncoming;
+  if (typeof answer !== "function") throw new Error("LINEJS incoming PLANET answer helper is unavailable");
+  return answer.call((client as any).call, event, opts);
 }
 
 export function startCallSession(client: LineClient, params: Record<string, unknown>) {

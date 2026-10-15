@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@evex/linejs": "npm:@jsr/evex__linejs@3.5.0",
+    "@tanstack/react-virtual": "^3.14.13",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-notification": "^2",
@@ -48,5 +49,8 @@
   },
   "description": "Independent unofficial LINE desktop client for Linux",
   "author": "Cytech Team Development",
-  "repository": "https://github.com/Cytech-Team/Liney"
+  "repository": "https://github.com/Cytech-Team/Liney",
+  "patchedDependencies": {
+    "lucide-react@1.41.0": "patches/lucide-react@1.41.0.patch"
+  }
 }
