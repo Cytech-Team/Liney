@@ -30,6 +30,19 @@ chmod +x "$TAURI_OUT"
 printf 'Built %s\n' "$OUT"
 printf 'Staged Tauri sidecar %s\n' "$TAURI_OUT"
 
+# Tauri's Cargo build.rs checks *all* externalBin paths when the first
+# native helper (liney-media) compiles. Stage temporary placeholders for
+# every pending helper upfront; subsequent builds replace each placeholder
+# with its actual executable. Without this, a fresh Linux CI checkout fails
+# at the first Cargo build before audio/screen compilation can begin.
+for sidecar in liney-media liney-audio liney-screen liney-screen-wayland liney-screen-x11; do
+  placeholder="$ROOT/src-tauri/binaries/$sidecar-$TARGET"
+  if [ ! -e "$placeholder" ]; then
+    : > "$placeholder"
+    chmod +x "$placeholder"
+  fi
+done
+
 
 MEDIA_OUT="$ROOT/build/liney-media-$TARGET"
 MEDIA_TAURI_OUT="$ROOT/src-tauri/binaries/liney-media-$TARGET"

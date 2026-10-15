@@ -1,4 +1,4 @@
-# Liney v0.1.0 — Linux Developer Preview
+# Liney v0.1.1 — Linux Developer Preview
 
 This is an **unofficial, experimental LINE client for Linux** by Cytech Team Development. It is a **pre-release, not a stable release**. Not affiliated with or endorsed by LY Corporation.
 
@@ -20,3 +20,5 @@ This is an **unofficial, experimental LINE client for Linux** by Cytech Team Dev
 - AppImage is **not included** in this preview; Bun's standalone Engine ELF currently causes linuxdeploy/GTK's dependency scanner to fail. DEB, RPM, and portable tarball are the supported preview artifacts.
 
 Do not use a critical account without understanding the risks. Keep local sessions and keys private. Check `.sha256` files for downloaded packages. This prerelease does not auto-merge future upstream changes.
+
+- Packaging fix: stage all native sidecar placeholders before Cargo validates the external binary set.
