@@ -1,6 +1,6 @@
 [package]
 name = "liney"
-version = "0.1.0"
+version = "0.1.1"
 description = "LINE desktop client for Linux"
 authors = ["Cytech Team Development"]
 license = "LicenseRef-TLL-1.0"
