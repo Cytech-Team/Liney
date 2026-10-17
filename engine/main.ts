@@ -242,46 +242,67 @@ async function listOwnedStickers(): Promise<ReturnType<typeof ownedStickersFromP
   const stickers: ReturnType<typeof ownedStickersFromPurchases> = [];
   let offset = 0;
   let total = Number.POSITIVE_INFINITY;
-  while (offset < total && offset < 2_000) {
-    // LINEJS exposes getPurchasedProducts, but it only includes transaction
-    // history. getOwnedProducts is the Shop API inventory endpoint and also
-    // includes free/default packs currently attached to this account.
-    const page = await LineJsAdapter.request(client,
-      [
-        [11, 2, "stickershop"], [8, 3, offset], [8, 4, pageSize],
-        [12, 5, [[11, 1, "th"], [11, 2, "TH"]]],
-      ],
-      "getOwnedProducts", 4, true, "/TSHOP4",
-    ) as unknown;
-    // getOwnedProducts is not yet declared in LINEJS's generated result map,
-    // so RequestClient returns the decoded thrift fields by number. Rename it
-    // with the already-generated ProductList schema before consuming it.
-    const result = shopResultAs<Record<string, unknown>>("ProductList", page);
-    stickers.push(...ownedStickersFromPurchases(result));
-    const records = Array.isArray(result.productList) ? result.productList : [];
-    total = Math.max(0, Number(result.totalSize ?? records.length));
-    if (!records.length) break;
-    offset += records.length;
+  try {
+    while (offset < total && offset < 2_000) {
+      const page = await LineJsAdapter.request(client,
+        [
+          [11, 2, "stickershop"], [8, 3, offset], [8, 4, pageSize],
+          [12, 5, [[11, 1, "th"], [11, 2, "TH"]]],
+        ],
+        "getOwnedProducts", 4, true, "/TSHOP4",
+      ) as unknown;
+      const result = shopResultAs<Record<string, unknown>>("ProductList", page);
+      stickers.push(...ownedStickersFromPurchases(result));
+      const records = Array.isArray(result.productList) ? result.productList : [];
+      total = Math.max(0, Number(result.totalSize ?? records.length));
+      if (!records.length) break;
+      offset += records.length;
+    }
+  } catch (error) {
+    // LINE's installed-products endpoint is not available on every desktop
+    // session. Keep whatever was already fetched and try account summaries.
+    console.warn("[sticker catalog] full inventory unavailable:", error instanceof Error ? error.message : String(error));
   }
-  // Modern desktop sessions can return no details from getOwnedProducts.
-  // Ask the companion summaries endpoint for the installed account packs,
-  // then read each pack's public manifest for its sticker IDs. Neither source
-  // is chat history and each id is still anchored to account ownership.
-  if (!stickers.length) {
+
+  // A Shop product can provide only some sticker IDs (or no detail at all).
+  // Query the account-owned package summaries independently and fill missing
+  // packages from LINE's public product manifests. This never adds packs
+  // merely observed in another person's chat.
+  try {
     const summariesRaw = await LineJsAdapter.request(client,
       [[11, 2, "stickershop"], [8, 3, 0], [8, 4, 200], [12, 5, [[11, 1, "th"], [11, 2, "TH"]]]],
       "getOwnedProductSummaries", 4, true, "/TSHOP4",
     ) as unknown;
-    const summaries = shopResultAs<{ productList?: unknown }>("ProductSummaryList", summariesRaw);
-    const products = Array.isArray(summaries.productList) ? summaries.productList : [];
-    for (const product of products.slice(0, 200)) {
-      if (!product || typeof product !== "object") continue;
-      const data = product as Record<string, unknown>;
-      const packageId = String(data.id ?? "").trim();
-      if (!/^\d{1,30}$/.test(packageId)) continue;
-      const version = String(data.latestVersion ?? "1").trim() || "1";
-      stickers.push(...await stickerPackFromPublicMetadata(packageId, version));
+    const decoded = shopResultAs<{ productList?: unknown }>("ProductSummaryList", summariesRaw);
+    const rawRecord = summariesRaw && typeof summariesRaw === "object" ? summariesRaw as Record<string, unknown> : {};
+    const products = Array.isArray(decoded.productList) ? decoded.productList
+      : Array.isArray(rawRecord.productList) ? rawRecord.productList
+      : Array.isArray(rawRecord["1"]) ? rawRecord["1"] : [];
+    const knownPackages = new Set(stickers.map((sticker) => sticker.packageId));
+    const missing = new Map<string, string>();
+    for (const entry of products) {
+      if (!entry || typeof entry !== "object") continue;
+      const data = entry as Record<string, unknown>;
+      const packageId = String(data.id ?? data["1"] ?? "").trim();
+      if (!/^\d{1,30}$/.test(packageId) || knownPackages.has(packageId)) continue;
+      const version = String(data.latestVersion ?? data["21"] ?? "1").trim() || "1";
+      missing.set(packageId, version);
     }
+    const pending = [...missing.entries()];
+    let cursor = 0;
+    await Promise.all(Array.from({ length: Math.min(5, pending.length) }, async () => {
+      while (cursor < pending.length) {
+        const [packageId, version] = pending[cursor++];
+        try {
+          stickers.push(...await stickerPackFromPublicMetadata(packageId, version));
+        } catch (error) {
+          console.warn("[sticker catalog] package metadata failed:", packageId, error instanceof Error ? error.message : String(error));
+        }
+      }
+    }));
+  } catch (error) {
+    if (!stickers.length) throw error; // Don't cache empty results as success.
+    console.warn("[sticker catalog] summaries unavailable:", error instanceof Error ? error.message : String(error));
   }
   const unique = [...new Map(stickers.map((sticker) => [`${sticker.packageId}:${sticker.stickerId}`, sticker])).values()];
   stickerCatalogCache.write(unique, Date.now() + STICKER_CACHE_TTL_MS);
@@ -5932,7 +5953,14 @@ async function handle(request: any) {
       return;
     }
 
+    if (method === "sticker.catalog") {
+      // The picker needs every entry; 36 recent stickers are not a full pack.
+      emit({ id, ok: true, result: await listOwnedStickers() });
+      return;
+    }
+
     if (method === "sticker.recent") {
+      // Preserve compatibility with older Liney clients.
       const limit = Math.max(1, Math.min(Number(request?.params?.limit ?? 240), 1_000));
       emit({ id, ok: true, result: (await listOwnedStickers()).slice(0, limit) });
       return;
