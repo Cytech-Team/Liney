@@ -1,0 +1,34 @@
+# Maintainer: Cytech Team Development
+pkgname=liney-bin
+pkgver=0.1.1
+pkgrel=1
+pkgdesc='Unofficial LINE desktop client for Linux (prebuilt portable release)'
+arch=('x86_64' 'aarch64')
+url='https://github.com/Cytech-Team/Liney'
+license=('MIT')
+provides=('liney')
+conflicts=('liney')
+depends=('webkit2gtk-4.1' 'gtk3' 'libappindicator' 'alsa-lib' 'pipewire')
+optdepends=('xdg-desktop-portal: screen share picker and file dialogs'
+            'wayland: Wayland screen share support')
+source_x86_64=("Liney-${pkgver}-linux-x86_64.tar.gz::${url}/releases/download/v${pkgver}/Liney-${pkgver}-linux-x86_64.tar.gz")
+source_aarch64=("Liney-${pkgver}-linux-aarch64.tar.gz::${url}/releases/download/v${pkgver}/Liney-${pkgver}-linux-aarch64.tar.gz")
+# Replaced with verified release SHA256 by scripts/publish-aur-packages.sh.
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+
+package() {
+  local dir="$srcdir/Liney-${pkgver}-linux-${CARCH}"
+  local bin
+  for bin in liney liney-engine liney-media liney-audio liney-screen liney-screen-wayland liney-screen-x11; do
+    install -Dm755 "$dir/$bin" "$pkgdir/usr/lib/liney/$bin"
+  done
+  install -Dm644 "$dir/liney.desktop" "$pkgdir/usr/share/applications/liney.desktop"
+  install -Dm644 "$dir/liney.png" "$pkgdir/usr/share/icons/hicolor/512x512/apps/liney.png"
+  install -Dm644 "$dir/LICENSE" "$pkgdir/usr/share/licenses/liney-bin/LICENSE"
+  install -Dm644 "$dir/LICENSE-WAYSHOT-BSD" "$pkgdir/usr/share/licenses/liney-bin/LICENSE-WAYSHOT-BSD"
+  install -Dm644 "$dir/README.md" "$pkgdir/usr/share/doc/liney-bin/README.md"
+  mkdir -p "$pkgdir/usr/bin"
+  printf '%s\n' '#!/bin/sh' 'exec /usr/lib/liney/liney "$@"' > "$pkgdir/usr/bin/liney"
+  chmod 755 "$pkgdir/usr/bin/liney"
+}

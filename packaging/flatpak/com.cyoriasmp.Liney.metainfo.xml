@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.cyoriasmp.Liney</id>
+  <name>Liney</name>
+  <summary>Unofficial LINE desktop client for Linux</summary>
+  <developer id="com.cyoriasmp"><name>Cytech Team Development</name></developer>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <launchable type="desktop-id">com.cyoriasmp.Liney.desktop</launchable>
+  <url type="homepage">https://github.com/Cytech-Team/Liney</url>
+  <url type="bugtracker">https://github.com/Cytech-Team/Liney/issues</url>
+  <description>
+    <p>Liney is an independent, unofficial desktop client for LINE on Linux, with chats, media, E2EE support, and experimental calling.</p>
+    <p>Liney is not affiliated with LINE Corporation or LY Corporation.</p>
+  </description>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.1.1" date="2026-10-17" />
+  </releases>
+</component>

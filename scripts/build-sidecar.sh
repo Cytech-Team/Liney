@@ -10,6 +10,19 @@ OUT="$ROOT/build/liney-engine-$TARGET"
 TAURI_OUT="$ROOT/src-tauri/binaries/liney-engine-$TARGET"
 mkdir -p "$(dirname "$OUT")"
 mkdir -p "$(dirname "$TAURI_OUT")"
+# Tauri's build.rs checks *all* externalBin paths during the first Cargo
+# invocation. On a clean CI checkout the first `cargo build --bin liney-media`
+# otherwise fails before the later audio/screen helpers are built. Bootstrap
+# every declared external binary up front and replace each placeholder with
+# its real compiled executable before packaging.
+for binary in liney-engine liney-media liney-audio liney-screen liney-screen-wayland liney-screen-x11; do
+  destination="$ROOT/src-tauri/binaries/$binary-$TARGET"
+  if [ ! -e "$destination" ]; then
+    : > "$destination"
+    chmod +x "$destination"
+  fi
+done
+
 USER_HOME=${HOME:-/home/namkrub}
 if command -v bun >/dev/null 2>&1; then BUN=$(command -v bun); else BUN="$USER_HOME/.bun/bin/bun"; fi
 test -x "$BUN" || { echo 'bun is required to build liney-engine' >&2; exit 1; }

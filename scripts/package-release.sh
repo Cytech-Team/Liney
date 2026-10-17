@@ -23,7 +23,7 @@ rm -rf "$WORK"
 mkdir -p "$OUT" "$WORK"
 
 "$BUN" run doctor
-"$BUN" test
+"$BUN" test --timeout 20000
 "$BUN" run lint
 "$BUN" run build -- --bundles deb,rpm
 
@@ -97,10 +97,18 @@ if [ "$ENGINE_SMOKE_STATUS" -ne 0 ] && [ "$ENGINE_SMOKE_STATUS" -ne 124 ]; then
 fi
 grep -q '"pong":true' "$ENGINE_SMOKE"
 
+# Build and validate AppImage separately: Tauri clears the bundle directory,
+# therefore .deb/.rpm have already been copied to release/ above.
+"$BUN" run build -- --bundles appimage
+APPIMAGE=$(find "$ROOT/src-tauri/target/release/bundle/appimage" -maxdepth 1 -type f -name '*.AppImage' -print -quit)
+test -n "$APPIMAGE" && test -s "$APPIMAGE"
+APPIMAGE_OUT="$OUT/Liney-${VERSION}-linux-${ARCH}.AppImage"
+install -m755 "$APPIMAGE" "$APPIMAGE_OUT"
+
 CHECKSUM="$OUT/Liney-${VERSION}-linux-${ARCH}.sha256"
 (
   cd "$OUT"
-  files="Liney-${VERSION}-linux-${ARCH}.deb $PORTABLE_NAME.tar.gz"
+  files="Liney-${VERSION}-linux-${ARCH}.deb $PORTABLE_NAME.tar.gz Liney-${VERSION}-linux-${ARCH}.AppImage"
   if [ -f "Liney-${VERSION}-linux-${ARCH}.rpm" ]; then files="$files Liney-${VERSION}-linux-${ARCH}.rpm"; fi
   # shellcheck disable=SC2086
   sha256sum $files

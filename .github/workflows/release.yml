@@ -89,20 +89,56 @@ jobs:
           name: liney-linux-${{ matrix.arch }}
           if-no-files-found: error
           path: |
+            release/Liney-*-linux-${{ matrix.arch }}.AppImage
             release/Liney-*-linux-${{ matrix.arch }}.deb
             release/Liney-*-linux-${{ matrix.arch }}.rpm
             release/Liney-*-linux-${{ matrix.arch }}.tar.gz
             release/Liney-*-linux-${{ matrix.arch }}.sha256
 
+  flatpak:
+    needs: linux
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: liney-linux-x86_64
+          path: release-assets
+      - name: Install Flatpak packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y flathub org.gnome.Platform//50 org.gnome.Sdk//50
+      - name: Build verified Flatpak bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p 'require("./package.json").version')
+          cp "release-assets/Liney-${version}-linux-x86_64.deb" packaging/flatpak/Liney-release.deb
+          flatpak-builder --user --force-clean --repo=flatpak-repo flatpak-build packaging/flatpak/com.cyoriasmp.Liney.yml
+          mkdir -p release
+          flatpak build-bundle flatpak-repo "release/Liney-${version}-linux-x86_64.flatpak" com.cyoriasmp.Liney \
+            --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
+          test -s "release/Liney-${version}-linux-x86_64.flatpak"
+          sha256sum "release/Liney-${version}-linux-x86_64.flatpak" > "release/Liney-${version}-linux-x86_64.flatpak.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: liney-flatpak-x86_64
+          if-no-files-found: error
+          path: |
+            release/*.flatpak
+            release/*.flatpak.sha256
+
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: linux
+    needs: [linux, flatpak]
     runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: liney-linux-*
+          pattern: liney-*
           path: release-assets
           merge-multiple: true
 
@@ -111,6 +147,8 @@ jobs:
         run: |
           set -euo pipefail
           find release-assets -maxdepth 1 -type f -printf '%f\n' | sort
+          test -n "$(find release-assets -maxdepth 1 -type f -name '*.flatpak' -print -quit)"
+          test -n "$(find release-assets -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
           test -n "$(find release-assets -maxdepth 1 -type f -name '*.deb' -print -quit)"
           test -n "$(find release-assets -maxdepth 1 -type f -name '*.rpm' -print -quit)"
           test -n "$(find release-assets -maxdepth 1 -type f -name '*.tar.gz' -print -quit)"

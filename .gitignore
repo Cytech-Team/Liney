@@ -51,3 +51,11 @@ release/
 
 # Cloudflare static website build output
 website/dist/
+
+# Flatpak local package/build and staging
+/packaging/flatpak/Liney-release.deb
+/flatpak-build/
+/flatpak-repo/
+/packaging/flatpak/.flatpak-builder/
+
+/.flatpak-builder/

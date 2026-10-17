@@ -1,14 +1,16 @@
 pkgname=liney
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc='Independent unofficial LINE desktop client for Linux'
-arch=('x86_64')
+arch=('x86_64' 'aarch64')
 url='https://github.com/Cytech-Team/Liney'
 license=('MIT')
 depends=(
   'webkit2gtk-4.1'
   'gtk3'
-  'libappindicator-gtk3'
+  'libappindicator'
+  'alsa-lib'
+  'pipewire'
 )
 makedepends=(
   'bun'
@@ -30,7 +32,7 @@ optdepends=(
   'wayland: direct Wayland screen-capture fallback'
 )
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-# Replace this with the release tarball checksum before publishing to AUR.
+# scripts/publish-aur-packages.sh replaces this before publishing to AUR.
 sha256sums=('SKIP')
 
 build() {

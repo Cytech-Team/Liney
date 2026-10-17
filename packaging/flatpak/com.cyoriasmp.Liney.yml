@@ -1,0 +1,46 @@
+id: com.cyoriasmp.Liney
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+command: liney
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=dri
+  - --device=all
+  - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --filesystem=xdg-run/pipewire-0
+modules:
+  - name: liney
+    buildsystem: simple
+    sources:
+      - type: file
+        path: Liney-release.deb
+      - type: file
+        path: com.cyoriasmp.Liney.metainfo.xml
+      - type: file
+        path: ../liney.png
+    build-commands:
+      - mkdir -p deb-extract && cd deb-extract && ar x ../Liney-release.deb && tar -xf data.tar.*
+      - install -Dm755 deb-extract/usr/bin/liney /app/bin/liney
+      - |
+        for helper in liney-engine liney-media liney-audio liney-screen liney-screen-wayland liney-screen-x11; do
+          test -x "deb-extract/usr/bin/$helper"
+          install -Dm755 "deb-extract/usr/bin/$helper" "/app/bin/$helper"
+        done
+      - |
+        if test -d deb-extract/usr/lib/Liney; then
+          mkdir -p /app/lib/Liney
+          cp -a deb-extract/usr/lib/Liney/. /app/lib/Liney/
+        fi
+      - |
+        sed -e 's/^Exec=.*/Exec=liney/' \
+            -e 's/^Icon=.*/Icon=com.cyoriasmp.Liney/' \
+            deb-extract/usr/share/applications/*.desktop > liney-flatpak.desktop
+        install -Dm644 liney-flatpak.desktop /app/share/applications/com.cyoriasmp.Liney.desktop
+      - install -Dm644 liney.png /app/share/icons/hicolor/512x512/apps/com.cyoriasmp.Liney.png
+      - install -Dm644 com.cyoriasmp.Liney.metainfo.xml /app/share/metainfo/com.cyoriasmp.Liney.metainfo.xml
