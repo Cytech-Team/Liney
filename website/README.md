@@ -35,6 +35,18 @@ window.LINEY_SITE_CONFIG = {
 
 The repository is public. Keep the repository and release URL pointed at Cytech-Team/Liney so all buttons resolve to the real project.
 
+## 2026 website redesign
+
+The product website uses a fresh light editorial design with a responsive navigation,
+CSS-only illustrative desktop chat mock (explicitly marked as a concept), bento-style
+feature summaries, developer architecture, Linux-first roadmap, and an interactive
+installer/download guide. Legal and privacy pages use the same design system.
+This intentionally does not change the separately deployed Web App runtime UI.
+
+The shared stylesheet is website/styles.css; the page-specific markup is in
+index.html and download.html. Mobile navigation uses site.js and download metadata
+uses release.js. Test all pages at desktop/mobile widths and run the website build.
+
 ## Published packages and feature status
 
 The landing page and download guide must describe features present in current source.

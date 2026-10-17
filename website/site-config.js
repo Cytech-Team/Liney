@@ -1,6 +1,5 @@
 window.LINEY_SITE_CONFIG = {
-  // Leave repositoryUrl empty when the site is hosted at *.github.io.
-  // site.js derives the repository URL from the GitHub Pages hostname/path.
+  // Public GitHub repo + published release links for the Cloudflare-hosted Liney site.
   repositoryUrl: "https://github.com/Cytech-Team/Liney",
   releaseUrl: "https://github.com/Cytech-Team/Liney/releases/latest",
   contactEmail: "namnarak@namnarak.in.th",
