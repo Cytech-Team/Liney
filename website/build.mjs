@@ -10,12 +10,14 @@ const files = [
   "features.html", "technology.html", "roadmap.html", "license.html",
   "LICENSE.txt", "notice.html", "privacy.html", "robots.txt", "sitemap.xml",
   "site-config.js", "site.js", "theme-init.js", "release.js",
+  "liney-manifest.webmanifest", "liney-app-sw.js",
   "styles.css", "theme.css", "terms.html", "favicon.svg",
-  "icons.svg", "liney-logo.png", "liney-mark.svg",
+  "icons.svg", "liney-logo.png", "liney-icon-192.png", "liney-mark.svg",
 ];
 const directories = ["assets", "app-assets", "api"];
 const versioned = [
   "site-config.js", "site.js", "theme-init.js", "release.js",
+  "liney-manifest.webmanifest", "liney-app-sw.js",
   "styles.css", "theme.css",
 ];
 

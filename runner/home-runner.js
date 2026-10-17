@@ -10,12 +10,17 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 const PORT = Number(process.env.LINEY_RUNNER_PORT || 39211);
 const HOST = process.env.LINEY_RUNNER_HOST || "127.0.0.1";
+const LOCAL_ONLY = process.env.LINEY_LOCAL_ONLY === "1";
+if (LOCAL_ONLY && !["127.0.0.1", "localhost", "::1"].includes(HOST)) {
+  console.error("Local Engine must listen on loopback only");
+  process.exit(1);
+}
 const PREFIX = normalizePrefix(process.env.LINEY_RUNNER_PREFIX || "/liney-runner");
 const ENGINE_PATH = process.env.LINEY_ENGINE_PATH || resolve(ROOT, "build/liney-engine-x86_64-unknown-linux-gnu");
 const TOKEN = String(process.env.LINEY_RUNNER_TOKEN || "").trim();
 const MAX_BODY_BYTES = Number(process.env.LINEY_RUNNER_MAX_BODY_BYTES || 24 * 1024 * 1024);
 const ENGINE_REQUEST_TIMEOUT = Number(process.env.LINEY_ENGINE_REQUEST_TIMEOUT_MS || 180_000);
-const PUBLIC_ENABLED = process.env.LINEY_PUBLIC_ENABLED !== "0";
+const PUBLIC_ENABLED = !LOCAL_ONLY && process.env.LINEY_PUBLIC_ENABLED !== "0";
 const PUBLIC_MAX_SESSIONS = Number(process.env.LINEY_PUBLIC_MAX_SESSIONS || 6);
 const PUBLIC_SESSION_TTL_MS = Number(process.env.LINEY_PUBLIC_SESSION_TTL_MS || 2 * 60 * 60 * 1000);
 const PUBLIC_CREATE_WINDOW_MS = Number(process.env.LINEY_PUBLIC_CREATE_WINDOW_MS || 60 * 1000);
@@ -100,10 +105,10 @@ function sendJson(res, status, body, extraHeaders = {}) {
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
-    "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
-    "access-control-allow-headers": "content-type, authorization, x-liney-runner-token, x-liney-session-id, x-liney-session-token",
-    "cross-origin-resource-policy": "cross-origin",
+    ...(LOCAL_ONLY ? {} : { "access-control-allow-origin": "*" }),
+    ...(LOCAL_ONLY ? {} : { "access-control-allow-methods": "GET,POST,DELETE,OPTIONS" }),
+    ...(LOCAL_ONLY ? {} : { "access-control-allow-headers": "content-type, authorization, x-liney-runner-token, x-liney-session-id, x-liney-session-token" }),
+    ...(LOCAL_ONLY ? {} : { "cross-origin-resource-policy": "cross-origin" }),
     ...extraHeaders,
   });
   res.end(payload);
@@ -603,7 +608,9 @@ const server = http.createServer(async (req, res) => {
 
     return sendJson(res, 404, { ok: false, error: { message: "not found", code: "NOT_FOUND" } });
   } catch (error) {
-    const status = error?.code === "UNAUTHORIZED" || error?.code === "SESSION_EXPIRED"
+    const status = error?.code === "PUBLIC_DISABLED" || error?.code === "LOCAL_ONLY"
+      ? 403
+      : error?.code === "UNAUTHORIZED" || error?.code === "SESSION_EXPIRED"
       ? 401
       : error?.code === "BODY_TOO_LARGE"
         ? 413

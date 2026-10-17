@@ -72,6 +72,27 @@ Mobile navigation uses site.js and download metadata uses release.js.
 Test pages at desktop/mobile widths and run `bun run test:website` to check
 links, anchors, theme persistence, cached asset hashes and built pages.
 
+## Liney Web (device-local compute)
+
+The experimental /app route uses a LOCAL connector and LINEJS Engine on the
+visitor's device. It does not create a Home Server public session or invoke
+Cloudflare Workers for LINE traffic. Cloudflare Pages supplies only the PWA UI.
+Without a working extension and local Engine, the browser cannot log in.
+
+On Linux or Chromebook with a permitted Linux environment:
+
+1. Build or install the corresponding Liney Engine on the same device.
+2. Start bash scripts/start-local-web-engine.sh; this uses localhost only.
+3. Install the extensions/liney-connector v0.3.0 unpacked in Chrome/Chromium,
+   enable the local connection, and provide its unique local token.
+4. Open https://liney.namnarak.in.th/app, verify the connector, then QR-login.
+
+In managed/locked Chromebooks without extension or local process permissions,
+LINEJS cannot currently run through a plain PWA. Do not claim all
+Chromebooks are supported. Real QR and message send/receive must be validated
+on a dedicated test account before advertising live Web chat support.
+See docs/WEB_APP_MODE.md in the repository.
+
 ## Published packages and feature status
 
 The landing page and download guide must describe features present in current source.

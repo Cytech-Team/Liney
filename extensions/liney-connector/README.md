@@ -1,30 +1,25 @@
-# Liney Connector
+# Liney Local Connector
 
-Chrome extension bridge for `https://liney.namnarak.in.th/app`.
+Liney Web's browser UI is static. LINEJS needs a local Liney Engine process
+because browsers cannot run the existing Bun/Node protocol engine directly.
+The extension talks to 127.0.0.1 on the user's device, not to Home Server,
+Cloudflare Workers, or a maintainer-owned relay.
 
-Default transport:
+## Linux / ChromeOS with Linux development environment enabled
 
-```text
-Liney Web App -> Liney Connector extension -> Liney Home Runner -> local Liney JSONL engine -> LINE
-```
+1. Download or build Liney's local engine binary for your architecture.
+2. Run bash scripts/start-local-web-engine.sh from the Liney repo.
+3. Read the token from ~/.config/liney-web/runner.token.
+4. In Chromium, open chrome://extensions, enable developer mode and load
+   extensions/liney-connector as unpacked (if policy allows).
+5. Paste the token into its popup, enable Local Engine, save, and check it.
+6. Open https://liney.namnarak.in.th/app and scan LINE QR.
 
-Default runner URL:
+Do not publish the token or paste it into website URLs. All LINE credential
+and chat data stays on the user's machine. The site is delivered by
+Cloudflare Pages as static assets; no Cloudflare Workers handle LINE traffic.
 
-```text
-https://cdn.cytechteam.site/liney-runner
-```
-
-The connector stores only its runner URL/token in `chrome.storage.local`. It does not include a hard-coded runner token and does not use Cloudflare Worker relay by default.
-
-## Dev install
-
-1. Open `chrome://extensions`.
-2. Enable Developer mode.
-3. Load unpacked: `extensions/liney-connector`.
-4. Open the extension popup, set the Home Runner token, then open Liney Web App.
-
-## Package
-
-```sh
-bun run extension:zip
-```
+A locked Chromebook that forbids installing extensions and Linux helpers
+cannot currently use this full Liney protocol engine. Plain PWA cannot
+access needed Node/Bun APIs or arbitrary LINE cross-origin endpoints.
+Remote runner URLs from earlier releases are rejected, not silently reused.

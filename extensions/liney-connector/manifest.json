@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Liney Connector",
-  "version": "0.2.0",
-  "description": "Connect Liney Web App to LINE endpoints from the user's browser without a central Worker relay.",
+  "version": "0.3.0",
+  "description": "Connect Liney Web to LINE engine on this user's device. No remote runner.",
   "minimum_chrome_version": "120",
   "permissions": [
     "storage"
@@ -16,8 +16,6 @@
     "https://obs.line-scdn.net/*",
     "https://dl.profile.line-cdn.net/*",
     "https://profile.line-scdn.net/*",
-    "https://cdn.cytechteam.site/*",
-    "https://*.cytechteam.site/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],

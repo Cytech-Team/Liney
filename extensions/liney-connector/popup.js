@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const DEFAULT_URL = "https://cdn.cytechteam.site/liney-runner";
+const DEFAULT_URL = "http://127.0.0.1:39211/liney-runner";
 
 function request(method, params = {}) {
   return chrome.runtime.sendMessage({ type: "liney.connector.request", method, params }).then((response) => {
@@ -15,7 +15,7 @@ async function load() {
     const config = await request("connector.config.get");
     $("runner-url").value = config.url || DEFAULT_URL;
     $("runner-enabled").checked = config.enabled !== false;
-    $("status").textContent = config.tokenConfigured ? "ตั้งค่า token แล้ว" : "ยังไม่ได้ตั้ง token";
+    $("status").textContent = config.tokenConfigured ? "ตั้งค่า Local token แล้ว" : "ยังไม่ได้ตั้ง Local token";
   } catch (error) {
     $("runner-url").value = DEFAULT_URL;
     $("status").textContent = error.message || String(error);
@@ -34,7 +34,7 @@ async function save() {
 
 async function check() {
   const health = await request("connector.health");
-  $("status").textContent = health.online ? `Runner online · pid ${health.status?.pid || "-"}` : `Runner offline · ${health.error || "not configured"}`;
+  $("status").textContent = health.online ? `Local Engine online · pid ${health.status?.pid || "-"}` : `Local Engine offline · ${health.error || "not configured"}`;
 }
 
 $("save").addEventListener("click", () => save().catch((error) => { $("status").textContent = error.message || String(error); }));

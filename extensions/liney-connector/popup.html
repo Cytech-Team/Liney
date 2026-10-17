@@ -7,13 +7,13 @@
   </head>
   <body>
     <main>
-      <h1>Liney Connector</h1>
+      <h1>Liney Local Connector</h1><p>LINE Engine รันบนเครื่องนี้ ไม่ส่งข้อมูลผ่าน Home Server หรือ Cloudflare Workers</p>
       <p id="status">กำลังเช็ก...</p>
-      <label>Runner URL<input id="runner-url" autocomplete="off" spellcheck="false"></label>
-      <label>Runner token<input id="runner-token" type="password" autocomplete="off" spellcheck="false" placeholder="วาง token จาก Home Server"></label>
-      <label class="row"><input id="runner-enabled" type="checkbox"> เปิดใช้ Home Runner</label>
+      <label>Local Engine URL<input id="runner-url" autocomplete="off" spellcheck="false"></label>
+      <label>Local Engine token<input id="runner-token" type="password" autocomplete="off" spellcheck="false" placeholder="Token อยู่ใน ~/.config/liney-web/runner.token"></label>
+      <label class="row"><input id="runner-enabled" type="checkbox"> เปิดใช้ Engine ในเครื่องนี้</label>
       <button id="save">บันทึก</button>
-      <button id="check">เช็ก runner</button>
+      <button id="check">เช็ก Local Engine</button>
       <button id="open-app">เปิด Liney Web App</button>
     </main>
     <script src="popup.js"></script>

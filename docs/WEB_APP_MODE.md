@@ -1,86 +1,66 @@
-# Liney Web App Mode
+# Liney Web: Device-First (No Hosted LINE Engine)
 
-Liney Web is the Chromebook / locked-device path for users who cannot install a native Linux app.
-The goal is to keep the same privacy posture as desktop as much as the browser allows.
+## Non-negotiable default
 
-## Product requirement
+Liney Web must never auto-create a session on Cytech's Home Server or on
+Cloudflare Workers. Cloudflare Pages distributes static UI/PWA assets only.
+All LINEJS processing, LINE authentication, E2EE keys, chat history, session
+storage and outgoing LINE requests run on the user's OWN machine.
 
-- The user can open `liney.namnarak.in.th` and use Liney from a normal browser.
-- No LINE password is stored by Liney Web.
-- No central Liney message database is created.
-- Human operators should not be able to browse user chats, tokens, or media.
-- The runtime may process requests transiently so the app can function.
-- The client label must make the login source clear, for example:
-  - `Liney-CachyOS`
-  - `Liney-Ubuntu`
-  - `Liney-Linux`
-  - `Liney-Website`
-  - `Liney-Chromebook`
+## Tested architecture for devices that permit a local helper
 
-## Architecture decision
+Browser / PWA (served as static assets by Cloudflare Pages)
+  |
+  | Local Chrome extension content bridge
+  v
+Liney Connector (Chrome extension; validates page origin)
+  |
+  | Authenticated localhost HTTP over 127.0.0.1, never the public internet
+  v
+Liney local engine process (Bun-compiled LINEJS / SQLite / E2EE)
+  |
+  v
+LINE services directly
 
-The production Web App uses the same React UI as desktop, but the browser does not run the full LINEJS Node runtime. Real LINE traffic is handled by a Public Home Runner hosted on the project Home Server.
+On Linux and ChromeOS with Crostini enabled:
+- Run bash scripts/start-local-web-engine.sh from the repo, or package
+  the bundled local sidecar + launcher for supported architectures.
+- Extension settings accept ONLY http://127.0.0.1, localhost or IPv6 loopback.
+- Local runner binds 127.0.0.1, rejects public sessions, requires a unique
+  strong private token, and disables wildcard CORS responses.
+- Credentials, message DB, E2EE keys and data remain in
+  ~/.local/share/liney-web; local runner token at
+  ~/.config/liney-web/runner.token (0600 permissions).
+- Desktop Tauri mode continues using its bundled on-device engine.
 
-```text
-Browser Web App (static UI)
-  ├─ creates an anonymous public runner session
-  ├─ stores only the runner session id/token in Liney origin localStorage
-  └─ sends RPC/events over HTTPS
+## Chromebook / browser limitations
 
-Public Home Runner
-  ├─ creates one isolated Liney engine process per public session
-  ├─ uses a separate LINEY_DATA_DIR per session
-  ├─ rate-limits session creation and RPC
-  ├─ rejects non-allowlisted engine methods
-  ├─ never accepts Home Server file paths from public media uploads
-  ├─ deletes session data on close/expiry
-  └─ does not use a Cloudflare Worker or Chrome extension in the default path
+A standard PWA CAN render UI, cache assets for offline access and store app
+data in IndexedDB/OPFS, but CANNOT transparently run the existing Node/Bun
+LINEJS engine, bypass CORS or use raw TCP/UDP. Installing a Chrome extension
+does not by itself port LINEJS from Node/Bun to browser runtime.
 
-LINE services
-  └─ reached by LINEJS running inside the isolated Home Runner engine
-```
+- Admin-locked Chromebook that blocks both extensions and Linux development
+  environment: full LINE Web chat is not supported by this architecture.
+- Admin-approved Chrome extension + Linux helper: technically feasible when
+  the device's actual policies and localhost forwarding permit it.
+- Enterprise Isolated Web Apps (IWA) with Direct Sockets may eventually
+  support fully device-side connections without a helper, but this requires
+  a separate engine port and admin-approved IWA installation.
+- Closing the PWA does not guarantee notifications; service workers are
+  suspended by browsers. Full background chat requires an allowed native
+  or other device-local long-running component.
 
-## Privacy wording
+## Public web release gate
 
-Use precise language:
+1. Confirm local engine ping / capabilities through localhost with token.
+2. Install the connector and verify the QR flow on a non-production test
+   LINE account.
+3. Confirm fetch chat list, text send, text receive and session recovery on
+   actual supported Chromium/Linux and managed Chromebook configurations.
+4. Check no outgoing network requests to maintainer-owned runner endpoints.
+5. Only then describe the Web App as live-supported. Static app shell being
+   deployed does not prove real chat works.
 
-- Correct: `Liney Web uses an isolated Public Home Runner session.`
-- Correct: `The browser does not need an admin Home Runner token.`
-- Correct: `Public Web login uses QR Code and does not expose email/password login.`
-- Correct: `Session/E2EE/cache data is temporarily stored on the Home Server inside the user's isolated session directory.`
-- Incorrect: `Liney Web has no central server.`
-- Incorrect: `The server can never access user data.`
-
-The Home Runner is a real server-side runtime and necessarily processes LINE protocol data. The host administrator has system-level access to the machine, so privacy claims must not imply cryptographic blindness from the server operator.
-
-## Storage model
-
-### Browser
-
-- Stores a random public session id/token for the Home Runner.
-- Does not store the user's LINE password in localStorage/sessionStorage.
-- Can clear Liney site data to discard the browser-side runner session reference.
-
-### Public Home Runner
-
-- Separate engine process and `LINEY_DATA_DIR` for each public session.
-- Temporary SQLite/E2EE/cache/session files may exist while the session is active.
-- Session directories are deleted when the public session is explicitly closed or expires.
-- Gateway logs method names/status, not request bodies or credentials.
-- Public RPC has an allowlist, rate limiting, and blocks server-local file path uploads.
-
-## Production flow
-
-1. `/app` loads the same React UI as the desktop app.
-2. The browser creates a public Home Runner session automatically; no admin token is requested.
-3. The runner starts an isolated Liney engine with a unique `LINEY_DATA_DIR`.
-4. QR login and chat RPC calls are routed to that session's engine.
-5. Engine events are polled back to the browser.
-6. Closing/expiring the public session stops the engine and removes its session directory.
-
-## Non-goals
-
-- Do not run an open generic proxy.
-- Do not store LINE credentials in Cloudflare KV/D1/R2.
-- Do not claim the server never processes data if the relay is in the request path.
-- Do not hide the unofficial/TOS risk warning.
+No cloud LINE storage, no remote fallback, no public proxy, no central LINE
+credentials. Chrome/Workspace Admin can still delete or restrict local data.

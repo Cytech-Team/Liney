@@ -1,6 +1,6 @@
 const VERSION = chrome.runtime.getManifest().version;
 const PROTOCOL_VERSION = 1;
-const DEFAULT_RUNNER_URL = "https://cdn.cytechteam.site/liney-runner";
+const DEFAULT_RUNNER_URL = "http://127.0.0.1:39211/liney-runner";
 
 const ALLOWED_APP_ORIGINS = new Set([
   "https://liney.namnarak.in.th",
@@ -99,24 +99,33 @@ async function storageSet(value) {
   return chrome.storage.local.set(value);
 }
 
+function localRunnerUrl(value) {
+  let parsed;
+  try { parsed = new URL(String(value || DEFAULT_RUNNER_URL)); }
+  catch { throw Object.assign(new Error("Invalid local engine URL"), { code: "LOCAL_ONLY" }); }
+  if (parsed.protocol !== "http:" || !["localhost","127.0.0.1","[::1]"].includes(parsed.hostname) ||
+      parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw Object.assign(new Error("Remote Liney runners are disabled; use localhost only"), { code: "LOCAL_ONLY" });
+  }
+  return parsed.href.replace(/\/$/, "");
+}
+
 async function runnerConfig() {
   const saved = await storageGet(["runnerUrl", "runnerToken", "runnerEnabled"]);
-  return {
-    enabled: saved.runnerEnabled !== false,
-    url: String(saved.runnerUrl || DEFAULT_RUNNER_URL).replace(/\/$/, ""),
-    token: String(saved.runnerToken || "").trim(),
-  };
+  let url = DEFAULT_RUNNER_URL;
+  let enabled = saved.runnerEnabled === true;
+  try { url = localRunnerUrl(saved.runnerUrl || DEFAULT_RUNNER_URL); }
+  catch { enabled = false; } // Prior remote settings cannot be reused.
+  return { enabled, url, token: String(saved.runnerToken || "").trim() };
 }
 
 async function saveRunnerConfig(params) {
-  const url = String(params?.url || DEFAULT_RUNNER_URL).trim().replace(/\/$/, "");
+  const url = localRunnerUrl(params?.url || DEFAULT_RUNNER_URL);
   const token = String(params?.token || "").trim();
-  const enabled = params?.enabled !== false;
-  if (!url.startsWith("https://") && !url.startsWith("http://127.0.0.1") && !url.startsWith("http://localhost")) {
-    const error = new Error("Runner URL must be HTTPS or localhost");
-    error.code = "BAD_RUNNER_URL";
-    throw error;
+  if (token && token.length < 24) {
+    throw Object.assign(new Error("Local engine token must be at least 24 characters"), { code: "BAD_LOCAL_TOKEN" });
   }
+  const enabled = params?.enabled === true;
   await storageSet({ runnerUrl: url, runnerToken: token, runnerEnabled: enabled });
   return { enabled, url, tokenConfigured: Boolean(token) };
 }
@@ -124,12 +133,12 @@ async function saveRunnerConfig(params) {
 async function runnerRpc(method, params, timeout) {
   const config = await runnerConfig();
   if (!config.enabled) {
-    const error = new Error("Liney Home Runner is disabled in the connector");
+    const error = new Error("Local engine connection is disabled");
     error.code = "RUNNER_DISABLED";
     throw error;
   }
   if (!config.token) {
-    const error = new Error("ตั้งค่า Liney Home Runner token ใน extension ก่อน");
+    const error = new Error("Start your local engine and enter its local token in the extension");
     error.code = "RUNNER_NOT_CONFIGURED";
     error.retryable = false;
     throw error;
@@ -148,14 +157,14 @@ async function runnerRpc(method, params, timeout) {
   try {
     data = await response.json();
   } catch {
-    const error = new Error(`Liney Home Runner returned HTTP ${response.status}`);
+    const error = new Error(`Local Engine returned HTTP ${response.status}`);
     error.code = "RUNNER_HTTP_ERROR";
     error.retryable = true;
     throw error;
   }
   if (!response.ok || data?.ok === false) {
     const raw = data?.error || {};
-    const error = new Error(String(raw.message || `Liney Home Runner failed with HTTP ${response.status}`));
+    const error = new Error(String(raw.message || `Local Engine failed with HTTP ${response.status}`));
     error.code = String(raw.code || "RUNNER_ERROR");
     error.retryable = Boolean(raw.retryable || response.status >= 500);
     throw error;
@@ -191,7 +200,7 @@ async function runnerEvents(after) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data?.ok === false) {
     const raw = data?.error || {};
-    const error = new Error(String(raw.message || `Liney Home Runner events failed with HTTP ${response.status}`));
+    const error = new Error(String(raw.message || `Local Engine events failed with HTTP ${response.status}`));
     error.code = String(raw.code || "RUNNER_EVENTS_ERROR");
     error.retryable = Boolean(raw.retryable || response.status >= 500);
     throw error;
@@ -222,8 +231,8 @@ async function runtimeStatus() {
     },
     features: [
       "web-extension-bridge",
-      "home-runner-connector",
-      "no-central-worker-relay",
+      "local-device-engine-connector",
+      "no-remote-compute",
       "browser-static-ui"
     ],
     authenticated: false,
@@ -273,9 +282,26 @@ async function handleRequest(message, sender) {
   if (method === "connector.config.get") return { ...(await runnerConfig()), tokenConfigured: Boolean((await runnerConfig()).token) };
   if (method === "connector.config.set") return saveRunnerConfig(params);
   if (method === "connector.health") return runnerHealth();
+  if (method === "connector.transport") {
+    const config = await runnerConfig();
+    return { mode: "local-device", transport: "loopback", url: config.url,
+      configured: config.enabled && Boolean(config.token), protocolVersion: PROTOCOL_VERSION };
+  }
   if (method === "connector.events") return runnerEvents(params?.after);
   if (method === "ping") return { pong: true, protocolVersion: PROTOCOL_VERSION, connectorVersion: VERSION, runner: await runnerHealth() };
-  if (method === "capabilities" || method === "runtime.status") return runtimeStatus();
+  if (method === "capabilities" || method === "runtime.status") {
+    const config = await runnerConfig();
+    if (!config.enabled || !config.token) throw Object.assign(
+      new Error("เปิด Local Liney Engine และตั้งค่า token ใน Liney Connector ก่อน"),
+      { code: "LOCAL_ENGINE_NOT_CONFIGURED" }
+    );
+    const health = await runnerHealth();
+    if (!health.online) throw Object.assign(
+      new Error("เครื่องนี้ยังไม่พบ Local Liney Engine ที่ localhost"),
+      { code: "LOCAL_ENGINE_OFFLINE", retryable: true }
+    );
+    return runnerRpc("capabilities", {}, 15_000);
+  }
   if (method === "connector.relayFetch" || method === "relay.fetch" || method === "line.fetch") return relayFetch(params);
 
   return runnerRpc(method, params, message?.timeout);
