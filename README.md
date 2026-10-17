@@ -15,9 +15,9 @@
 
 <p>
   <a href="#current-implementation"><img src="https://img.shields.io/badge/Status-In_Development-2C7A5B?style=flat-square" alt="Status: In development"></a>
-  <a href="#license"><img src="https://img.shields.io/badge/License-TLL--1.0-26BF75?style=flat-square" alt="License: TLL-1.0"></a>
-  <a href="#license"><img src="https://img.shields.io/badge/Source-Available-23383A?style=flat-square" alt="Source available; custom license"></a>
-  <a href="#build-and-release"><img src="https://img.shields.io/badge/Packages-DEB_%7C_RPM_%7C_AppImage-23383A?style=flat-square" alt="Packages: DEB, RPM and AppImage"></a>
+  <a href="#license"><img src="https://img.shields.io/badge/License-MIT-26BF75?style=flat-square" alt="License: MIT"></a>
+  <a href="#license"><img src="https://img.shields.io/badge/Source-Available-23383A?style=flat-square" alt="Source available; MIT license"></a>
+  <a href="#build-and-release"><img src="https://img.shields.io/badge/Packages-AppImage_%7C_DEB_%7C_RPM_%7C_Flatpak-23383A?style=flat-square" alt="Packages: AppImage, DEB, RPM and Flatpak"></a>
 </p>
 
 <a href="https://liney.namnarak.in.th">Website</a> ·
@@ -219,22 +219,20 @@ The internals stay cleanly separated: `src/` (React UI) talks to the
 `liney-engine` sidecar over versioned JSONL, and the engine owns all LINEJS,
 SQLite, sync, and media logic.
 
-## Public web preview
+## Web experience vs. public website
 
-The Vite build also contains a static product-preview site for
-`liney.namnarak.in.th`:
+The main public product website is the static site under [website/](website/),
+deployed through Cloudflare Workers at https://liney.namnarak.in.th.
+It includes product information, downloads and the current development status.
 
-```text
-/        product overview
-/login   login-flow illustration (demo only)
-/chat    interactive mock chat UI (demo data only)
-```
+The React / Vite frontend under src/ is the shared desktop UI frontend; its
+web-preview and browser-runtime paths are separate from the product website.
+A public Web App route is experimental and must not be described as having the
+same capabilities, session model or privacy boundary as the local Desktop build.
+When testing preview/demo views, do not treat demo content as a real LINE login.
 
-These pages do not log in to LINE, send credentials, or connect to the Liney
-engine. They are intended for public product communication only. Deploy the
-`dist/` directory to Cloudflare Pages with `bun run web:build` (or
-`npm run web:build`), and keep the included `public/_redirects` file so direct
-loads of `/login` and `/chat` fall back to the SPA entry point.
+For the public website build and deploy instructions, see
+[website/README.md](website/README.md).
 
 ## Engine RPC
 
@@ -275,10 +273,12 @@ and the engine RPC contract.
 
 ## Build and release
 
-The release workflow builds the engine sidecar, React + Tauri (WebView) app,
-`.deb`, and AppImage with `bun run build` for x86_64 and aarch64 runners. It
-verifies the WebKit build and AppImage runtime, then uploads the packages,
-binaries, and hashes.
+The release workflow builds the engine sidecar and React + Tauri desktop app,
+then packages AppImage, DEB, RPM and portable TAR.GZ for x86_64 and aarch64.
+It also builds a Flatpak bundle for x86_64. Artifacts and SHA-256 checksums are
+attached to a published GitHub Release when its version tag passes all jobs.
+An uploaded .flatpak bundle does not mean the project is listed on Flathub;
+PKGBUILD files in this repository are not AUR listings.
 
 Local helpers:
 
@@ -294,28 +294,30 @@ bun run engine:build   # compile and stage the engine sidecar
 
 Release bundles must never contain credentials or a user's session.
 
-## Public website / GitHub Pages
+## Public website / Cloudflare Workers
 
-The public-facing landing page and project documents live in [`website/`](website/):
+The public landing page, current feature status and download guide are in
+[website/](website/). The published site is
+[Liney Website](https://liney.namnarak.in.th), linking directly to
+this repository's **actual published GitHub Release assets**.
 
-- landing page
-- Download / FAQ
-- Safety Notice about the unofficial client and LINE TOS risk
-- Privacy Notice
-- Liney Terms of Use draft
-- MIT License and third-party rights notice
-- GitHub Pages 404 page
+- [Download and installation](https://liney.namnarak.in.th/download.html)
+  presents AppImage, DEB, RPM, Flatpak and TAR.GZ per architecture.
+- [Safety Notice](website/notice.html), [Privacy](website/privacy.html),
+  [Terms](website/terms.html) and [License](website/license.html).
+- The site uses the public GitHub releases/latest API to find uploaded files,
+  never constructing a download link for missing formats.
+- Windows/macOS ports and Liney Lite are *ideas under consideration*, not
+  released editions or promised features.
 
-The [`website` workflow](.github/workflows/pages.yml) publishes the directory
-through GitHub Pages when changes reach `main` or `master`. In the repository's
-Settings → Pages, choose **GitHub Actions** as the source. For a normal
-`OWNER.github.io/REPOSITORY` URL, the site derives the GitHub repository and
-Releases links automatically; set `repositoryUrl` and `releaseUrl` in
-[`website/site-config.js`](website/site-config.js) when using a custom domain.
+Cloudflare Workers Builds publishes static assets from website/dist on master.
+Build with `(cd website && bun run build)`. See [website/README.md](website/README.md).
+The website is informational, not the LINE Desktop protocol engine, and the
+public Web App is a separate experimental route. Never enter LINE credentials
+on a mirror or untrusted download page.
 
-The Terms and Privacy pages are publication drafts, not legal advice. Review
-them for the intended jurisdiction and distribution model before treating them
-as binding legal documents.
+The Terms and Privacy pages are project drafts, not legal advice. Review them
+for the applicable jurisdiction before treating them as binding legal documents.
 
 ## Known boundaries
 
@@ -367,7 +369,10 @@ license terms.
 MIT covers only copyright rights in Liney code granted by its copyright
 holders. It does not grant rights to LINE/LY Corporation's trademarks, logos,
 content, or services, and it does not replace terms or policies that apply to
-using LINE services. Liney is an independent, unofficial client. LINE may\nseparately enforce its rights or terms against particular users or\ndistributions; the effect depends on the specific facts and applicable law.\nMIT provides no immunity from those rights.
+using LINE services. Liney is an independent, unofficial client. LINE may
+separately enforce its rights or terms against particular users or
+distributions; the effect depends on the specific facts and applicable law.
+MIT provides no immunity from those rights.
 
 Third-party dependencies and bundled components remain under their own
 licenses. Read the relevant notices before redistributing a build.
@@ -384,18 +389,10 @@ This runs the source-build/capability doctor, unit tests, lint, and Tauri packag
 versioned AppImage, Debian, RPM, portable tarball, and SHA-256 checksum files to
 `release/`. The portable tarball includes `install-user.sh` for a per-user install.
 
-Tags matching the application version (for example `v0.1.0`) run the same release
+Tags matching the application version (for example `v0.1.3`) run the same release
 gate in GitHub Actions on x86_64 and aarch64 and attach the verified artifacts to
 the GitHub Release automatically.
 
 ## Star History
 
 Follow Liney's public GitHub star growth on [Star History](https://star-history.dera.page/Cytech-Team/Liney).
-
-<!-- Public-release note:
-     The repository is currently private. After making it public, verify the
-     Star History data before replacing this link with a chart embed.
-     GitHub's 2026 stargazer-history API restrictions can leave third-party
-     embedded charts empty. Prefer a maintainer-generated static SVG if needed.
-     Never publish a GitHub access token in README markup.
--->

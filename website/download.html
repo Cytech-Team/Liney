@@ -3,13 +3,14 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="ดาวน์โหลด Liney และดูข้อกำหนดระบบสำหรับ Linux">
+    <meta name="description" content="ดาวน์โหลด Liney สำหรับ Linux: AppImage, DEB, RPM, Flatpak พร้อมลิงก์ตรงจาก GitHub Releases และคู่มือติดตั้ง">
     <meta name="theme-color" content="#080c0d">
     <title>ดาวน์โหลดและ FAQ — Liney</title>
     <link rel="icon" type="image/svg+xml" href="assets/liney-mark.svg">
     <link rel="stylesheet" href="styles.css">
     <script src="site-config.js"></script>
     <script src="site.js" defer></script>
+    <script src="release.js" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">ข้ามไปยังเนื้อหา</a>
@@ -29,70 +30,75 @@
     </header>
 
     <main id="main-content">
-      <section class="page-hero">
-        <div class="container">
-          <p class="eyebrow">Download / FAQ</p>
-          <h1>ติดตั้ง Liney บน Linux</h1>
-          <p class="lead">ไฟล์ release ควรดาวน์โหลดจาก GitHub Releases เท่านั้น เพื่อให้ตรวจสอบ hash, SBOM และ source ที่ใช้ build ได้</p>
-          <div class="button-row">
-            <a class="button" data-release-link data-unconfigured-label="ตั้งค่า GitHub Releases ก่อน" href="download.html">ไปยัง GitHub Releases</a>
-            <a class="button secondary" href="notice.html">อ่านข้อควรรู้ก่อนติดตั้ง</a>
-          </div>
-        </div>
-      </section>
+  <section class="page-hero download-hero">
+    <div class="container download-hero-layout">
+      <div>
+        <p class="eyebrow">Official downloads from this project's GitHub</p>
+        <h1>ติดตั้ง Liney<br><span class="gradient-text">บน Linux ของคุณ</span></h1>
+        <p class="lead">เลือกสถาปัตยกรรมและแพ็กเกจให้ตรงกับดิสโทร จากนั้นดาวน์โหลดไฟล์ที่เผยแพร่จริงบน GitHub Releases โดยตรง ไม่ผ่าน mirror ภายนอก</p>
+        <div class="hero-actions"><a class="button primary-large" data-release-link href="https://github.com/Cytech-Team/Liney/releases/latest">เปิด GitHub Releases ↗</a><a class="button secondary" href="#packages">เลือกแพ็กเกจ ↓</a></div>
+      </div>
+      <aside class="release-summary">
+        <span class="summary-label">LATEST VERIFIED RELEASE</span>
+        <strong data-release-version>กำลังตรวจสอบ…</strong>
+        <span id="release-sync-state" role="status" aria-live="polite">ตรวจสอบข้อมูลจาก GitHub</span>
+        <span data-release-date>ระบบจะตรวจชื่อไฟล์จริงก่อนแสดงปุ่มดาวน์โหลด</span>
+        <a class="text-link" data-release-link href="https://github.com/Cytech-Team/Liney/releases/latest">Release notes &amp; checksums ↗</a>
+      </aside>
+    </div>
+  </section>
 
-      <section class="section section-muted" aria-labelledby="formats-title">
-        <div class="container">
-          <div class="section-heading">
-            <div><p class="eyebrow">Linux packages</p><h2 id="formats-title">Liney v0.1.1 — Linux packages</h2></div>
-            <p>ดาวน์โหลด LINEy รุ่นล่าสุด พร้อมตรวจสอบ SHA-256 ได้จาก GitHub Releases</p>
-          </div>
-          <div class="download-grid">
-            <article class="download-card"><span class="format">APPIMAGE</span><h3>AppImage</h3><p>ไฟล์ portable สำหรับทดลองใช้โดยไม่ต้องติดตั้งลงระบบ</p><a class="button secondary" data-release-link data-unconfigured-label="รอตั้งค่า Releases" href="download.html">ดู release</a></article>
-            <article class="download-card"><span class="format">DEB</span><h3>Debian / Ubuntu</h3><p>แพ็กเกจสำหรับระบบที่ใช้ Debian package manager</p><a class="button secondary" data-release-link data-unconfigured-label="รอตั้งค่า Releases" href="download.html">ดู release</a></article>
-            <article class="download-card"><span class="format">RPM</span><h3>Fedora / RPM</h3><p>แพ็กเกจ RPM สำหรับดิสโทรที่รองรับรูปแบบนี้</p><a class="button secondary" data-release-link data-unconfigured-label="รอตั้งค่า Releases" href="download.html">ดู release</a></article>
-            <article class="download-card"><span class="format">FLATPAK</span><h3>Flatpak</h3><p>ไฟล์ <code>.flatpak</code> สำหรับติดตั้งบนระบบที่มี Flatpak Runtime</p><a class="button secondary" data-release-link href="download.html">ดู release</a></article>
-            <article class="download-card"><span class="format">ARCH</span><h3>Arch package</h3><p>แพ็กเกจ <code>pkg.tar.zst</code> ที่ build จาก binary ชุดเดียวกับ release</p><a class="button secondary" data-release-link data-unconfigured-label="รอตั้งค่า Releases" href="download.html">ดู release</a></article>
-            <article class="download-card"><span class="format">TAR.GZ</span><h3>Portable archive</h3><p>tar archive สำหรับระบบที่ต้องการจัดวางไฟล์ด้วยตนเอง</p><a class="button secondary" data-release-link data-unconfigured-label="รอตั้งค่า Releases" href="download.html">ดู release</a></article>
-            <article class="download-card"><span class="format">AUR</span><h3>yay / paru</h3><p>มี PKGBUILD <code>liney</code> และ <code>liney-bin</code> แล้ว โดยยังรอเผยแพร่ขึ้น AUR</p><a class="button secondary" data-repo-link href="download.html">ดูซอร์สแพ็กเกจ</a></article>
-            <article class="download-card"><span class="format">SOURCE</span><h3>Source code</h3><p>ดู source, license และ workflow ที่ใช้สร้าง artifact ทั้งหมด</p><a class="button secondary" data-repo-link href="download.html">ดู repository</a></article>
-          </div>
-          <div class="callout warning"><p><strong>อย่าดาวน์โหลดไฟล์จาก mirror ที่ไม่ทราบที่มา</strong></p><p>ตรวจชื่อ artifact, SHA256 และ SBOM ใน release ให้ตรงกับไฟล์ที่ดาวน์โหลด และอย่าใส่ credential ลงใน bug report หรือ issue</p></div>
-        </div>
-      </section>
+  <section class="section section-muted packages-section" id="packages">
+    <div class="container">
+      <div class="section-heading">
+        <div><p class="eyebrow">Linux packages</p><h2>เลือกรูปแบบติดตั้ง</h2></div>
+        <div class="arch-picker"><label for="release-arch">สถาปัตยกรรมเครื่อง</label><select id="release-arch" name="architecture"><option value="x86_64">x86_64 · Intel / AMD</option><option value="aarch64">aarch64 · ARM64</option></select></div>
+      </div>
+      <p class="packages-hint">ปุ่มดาวน์โหลดจะชี้ไปยังไฟล์ใน Release จริงหลังตรวจสอบสำเร็จ หากไฟล์ยังไม่เผยแพร่ ระบบจะไม่แสดงลิงก์ดาวน์โหลดปลอม</p>
+      <div class="download-grid revamped-download-grid">
+        <article class="download-card package-card" data-package="AppImage"><div class="package-heading"><span class="format">APPIMAGE</span><span class="package-mark">↗</span></div><h3>AppImage</h3><p>เหมาะกับการทดลองใช้ ไม่ต้องติดตั้งเป็นแพ็กเกจระบบ</p><div class="package-footer"><span data-asset-size>ตรวจสอบไฟล์…</span><a class="button secondary" data-asset-link href="https://github.com/Cytech-Team/Liney/releases/latest">ดู Release</a></div></article>
+        <article class="download-card package-card" data-package="deb"><div class="package-heading"><span class="format">DEB</span><span class="package-mark">▣</span></div><h3>Debian / Ubuntu</h3><p>แพ็กเกจ .deb สำหรับ Ubuntu, Debian, Linux Mint และระบบที่รองรับ</p><div class="package-footer"><span data-asset-size>ตรวจสอบไฟล์…</span><a class="button secondary" data-asset-link href="https://github.com/Cytech-Team/Liney/releases/latest">ดู Release</a></div></article>
+        <article class="download-card package-card" data-package="rpm"><div class="package-heading"><span class="format">RPM</span><span class="package-mark">▤</span></div><h3>Fedora / RPM</h3><p>แพ็กเกจ .rpm สำหรับ Fedora และดิสโทรที่ติดตั้ง RPM ได้</p><div class="package-footer"><span data-asset-size>ตรวจสอบไฟล์…</span><a class="button secondary" data-asset-link href="https://github.com/Cytech-Team/Liney/releases/latest">ดู Release</a></div></article>
+        <article class="download-card package-card" data-package="flatpak"><div class="package-heading"><span class="format">FLATPAK</span><span class="package-mark">◇</span></div><h3>Flatpak bundle</h3><p>ไฟล์ .flatpak สำหรับติดตั้งเองผ่าน Flatpak (ไม่ใช่รายการบน Flathub)</p><div class="package-footer"><span data-asset-size>ตรวจสอบไฟล์…</span><a class="button secondary" data-asset-link href="https://github.com/Cytech-Team/Liney/releases/latest">ดู Release</a></div></article>
+        <article class="download-card package-card" data-package="tar.gz"><div class="package-heading"><span class="format">TAR.GZ</span><span class="package-mark">⌁</span></div><h3>Portable archive</h3><p>ไฟล์สำหรับผู้ใช้ที่ต้องการจัดการติดตั้งและ dependencies ด้วยตนเอง</p><div class="package-footer"><span data-asset-size>ตรวจสอบไฟล์…</span><a class="button secondary" data-asset-link href="https://github.com/Cytech-Team/Liney/releases/latest">ดู Release</a></div></article>
+        <article class="download-card package-card community-card"><div class="package-heading"><span class="format">ARCH / AUR</span><span class="state-tag state-idea">ยังไม่เผยแพร่บน AUR</span></div><h3>Arch / CachyOS</h3><p>มีไฟล์ PKGBUILD ในซอร์ส แต่ยังไม่ควรแนะนำ <code>yay -S liney</code> จนกว่าจะมีแพ็กเกจบน AUR จริง ใช้ AppImage หรือแพ็กเกจจาก Release ไปก่อน</p><div class="package-footer"><span>สำหรับผู้ใช้ขั้นสูง</span><a class="button secondary" href="https://github.com/Cytech-Team/Liney/tree/master/packaging/arch" target="_blank" rel="noopener noreferrer">ดู PKGBUILD ↗</a></div></article>
+      </div>
+      <div class="download-note"><strong>ตรวจสอบความถูกต้องก่อนติดตั้ง</strong><p>ใน Release มีไฟล์ SHA-256 สำหรับตรวจสอบดาวน์โหลด อย่าใช้ไฟล์จาก mirror ที่ไม่ทราบที่มา และอย่าแชร์ token, QR, session หรือรหัสผ่านใน Issue</p><a class="text-link" data-release-link href="https://github.com/Cytech-Team/Liney/releases/latest">ตรวจสอบ Release และไฟล์ .sha256 ↗</a></div>
+    </div>
+  </section>
 
-      <section class="section" aria-labelledby="requirements-title">
-        <div class="container">
-          <div class="section-heading"><div><p class="eyebrow">Before install</p><h2 id="requirements-title">ข้อกำหนดระบบ</h2></div><p>ความสามารถบางอย่างขึ้นกับ runtime และ desktop session ของแต่ละดิสโทร</p></div>
-          <div class="table-scroll">
-            <table>
-              <thead><tr><th>รายการ</th><th>รายละเอียด</th></tr></thead>
-              <tbody>
-                <tr><td>ระบบปฏิบัติการ</td><td>Linux desktop ที่มี WebKitGTK 4.1 และ GTK3</td></tr>
-                <tr><td>Media / audio</td><td>GStreamer และ PipeWire สำหรับฟังก์ชันที่เกี่ยวข้อง</td></tr>
-                <tr><td>Credential wallet</td><td>Secret Service หรือ KWallet สำหรับ restore แบบ persistent; ถ้าใช้ไม่ได้จะเป็น session-only</td></tr>
-                <tr><td>สถาปัตยกรรม</td><td>release ปัจจุบันเตรียมสำหรับ x86_64; ตรวจ artifact ของ release ทุกครั้ง</td></tr>
-                <tr><td>ข้อมูลในเครื่อง</td><td>ประวัติข้อความเก็บใน local SQLite จนกว่าจะสั่งล้าง และไม่ใช่การลบข้อความจาก LINE</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
+  <section class="section install-section" id="install">
+    <div class="container">
+      <div class="section-heading"><div><p class="eyebrow">Install guide</p><h2>ติดตั้งและเปิดใช้งาน</h2></div><p>ตัวอย่างคำสั่งสำหรับไฟล์ที่ดาวน์โหลดแล้ว ให้เปิด Terminal ในโฟลเดอร์ที่เก็บไฟล์ก่อน</p></div>
+      <div class="install-layout">
+        <div class="install-options"><h3>เลือกวิธีติดตั้ง</h3><div class="install-choice"><button type="button" class="install-tab selected" data-install-tab="AppImage" aria-pressed="true">AppImage <span>เปิดใช้งานโดยตรง</span></button><button type="button" class="install-tab" data-install-tab="deb" aria-pressed="false">DEB <span>Debian / Ubuntu</span></button><button type="button" class="install-tab" data-install-tab="rpm" aria-pressed="false">RPM <span>Fedora</span></button><button type="button" class="install-tab" data-install-tab="flatpak" aria-pressed="false">Flatpak <span>ติดตั้ง bundle</span></button></div></div>
+        <div class="install-terminal"><div class="terminal-top"><span>Terminal · <span id="install-terminal-label">AppImage</span></span><button type="button" id="copy-install-command" aria-label="คัดลอกคำสั่งติดตั้ง">คัดลอกคำสั่ง</button></div><pre><code id="install-command">chmod +x Liney-*-linux-x86_64.AppImage
+./Liney-*-linux-x86_64.AppImage</code></pre><p id="install-description">ดาวน์โหลด AppImage จากด้านบนแล้วเปิด Terminal ในโฟลเดอร์ดาวน์โหลด</p></div>
+      </div>
+      <div class="install-steps"><article><span>01</span><h3>ดาวน์โหลด</h3><p>เลือกแพ็กเกจและสถาปัตยกรรมให้ตรงกับเครื่อง</p></article><article><span>02</span><h3>ติดตั้ง</h3><p>ใช้คำสั่งตามแพ็กเกจ หรือเปิดไฟล์ผ่านตัวจัดการแพ็กเกจของดิสโทร</p></article><article><span>03</span><h3>เข้าสู่ระบบ</h3><p>เปิด Liney อ่านคำเตือน จากนั้นล็อกอินผ่าน QR หรือโหมดที่รองรับ</p></article></div>
+    </div>
+  </section>
 
-      <section class="section section-muted" aria-labelledby="faq-title">
-        <div class="container">
-          <div class="section-heading"><div><p class="eyebrow">Questions</p><h2 id="faq-title">คำถามที่พบบ่อย</h2></div></div>
-          <div class="faq-list">
-            <details><summary>Liney เป็นแอป Official ของ LINE หรือไม่?</summary><p>ไม่ใช่ Liney เป็นโปรเจกต์อิสระ ไม่ได้สังกัด ได้รับอนุญาต หรือรับรองโดย LY Corporation และไม่ได้ใช้ official branding หรือ SDK ในฐานะผลิตภัณฑ์ของ LINE</p></details>
-            <details><summary>ทำไมต้องอ่านประกาศก่อน Login?</summary><p>เพราะการใช้ implementation ที่ไม่เป็นทางการอาจไม่สอดคล้องหรืออาจขัดกับ TOS ของ LINE และมีความเสี่ยงต่อบัญชี ผู้ใช้ต้องตัดสินใจด้วยตนเองก่อนดำเนินการต่อ</p></details>
-            <details><summary>Liney เก็บรหัสผ่านหรือส่งผ่านเซิร์ฟเวอร์ของ Liney ไหม?</summary><p>Liney Desktop ส่ง credential จากเครื่องผู้ใช้ไปตาม flow ของ LINEJS และไม่ตั้งใจเก็บ password ถาวร ส่วน Liney Web Public ใช้ QR Code เท่านั้นและประมวลผล session ผ่าน Public Home Runner แยกต่อ browser โดยไม่เปิด email/password login บนเว็บ</p></details>
-            <details><summary>Logout ลบประวัติข้อความด้วยหรือไม่?</summary><p>ไม่ การ logout ล้าง session และ credential ส่วนประวัติในเครื่องต้องล้างผ่านคำสั่งล้างประวัติแยกต่างหาก การล้าง local history ไม่ได้ลบข้อความบน LINE</p></details>
-            <details><summary>มี video call หรือ group call แล้วหรือยัง?</summary><p>ยังไม่โฆษณาเป็นฟีเจอร์พร้อมใช้ ขอบเขตเสียง 1:1 จะเปิดเมื่อผ่าน live validation จริงบนระบบเป้าหมาย ส่วน video, group call และ LiveTalk ยังไม่เปิดใช้งาน</p></details>
-            <details><summary>แจ้งปัญหาอย่างไรให้ปลอดภัย?</summary><p>ส่งรายละเอียดที่ทำซ้ำได้, เวอร์ชัน, ดิสโทร และ log ที่ redacted เท่านั้น ห้ามแนบ password, QR, PIN, token, session file, auth.json หรือ linejs-session.json</p></details>
-          </div>
-        </div>
-      </section>
-    </main>
+  <section class="section section-muted" id="requirements">
+    <div class="container">
+      <div class="section-heading"><div><p class="eyebrow">Compatibility</p><h2>ข้อกำหนดและข้อจำกัด</h2></div><p>Liney ยังอยู่ระหว่างพัฒนา ระบบบางส่วนขึ้นอยู่กับความสามารถของ Linux Desktop และโปรโตคอล LINEJS</p></div>
+      <div class="requirement-grid"><article><h3>Linux Desktop</h3><p>แอปใช้ WebKitGTK 4.1 และ GTK3 บน Linux; รองรับการทำงานร่วมกับ Wayland / X11 ตามความสามารถของระบบ</p></article><article><h3>Audio / Capture</h3><p>ฟังก์ชันเสียงและแชร์หน้าจอใช้ Native helper ของ Liney ไม่จำเป็นต้องติดตั้ง FFmpeg, GStreamer หรือ PipeWire command-line tools ทุกกรณี</p></article><article><h3>Credential wallet</h3><p>ใช้ Secret Service / KWallet หากมี ถ้าไม่พร้อมจะใช้ session-only แทนการบันทึก credential แบบ plaintext</p></article><article><h3>Supported platforms</h3><p>เผยแพร่สำหรับ Linux x86_64 และ aarch64 ตามไฟล์ใน Release เท่านั้น Windows และ macOS ยังไม่มีรุ่นที่รองรับ</p></article></div>
+    </div>
+  </section>
+
+  <section class="section" id="faq">
+    <div class="container faq-layout"><div><p class="eyebrow">FAQ</p><h2>คำถามที่พบบ่อย</h2><p class="faq-aside">หากมีปัญหา โปรดส่งเวอร์ชัน ดิสโทร และ log ที่ลบข้อมูลส่วนตัวแล้วผ่าน GitHub Issues</p><a class="text-link" href="https://github.com/Cytech-Team/Liney/issues" target="_blank" rel="noopener noreferrer">เปิด Issues ↗</a></div><div class="faq-list">
+      <details><summary>Liney เป็นแอปของ LINE อย่างเป็นทางการหรือไม่?</summary><p>ไม่ใช่ Liney พัฒนาอย่างอิสระและไม่ได้รับการรับรองจาก LY Corporation การใช้โปรโตคอลไม่เป็นทางการอาจขัดกับข้อกำหนดบริการและมีความเสี่ยงต่อบัญชี <a href="notice.html">อ่าน Safety Notice</a></p></details>
+      <details><summary>ทำไมยังติดตั้งผ่าน yay / paru ไม่ได้?</summary><p>ณ วันที่ตรวจสอบ ยังไม่พบแพ็กเกจ liney บน AUR แม้ Repository มี PKGBUILD แล้ว ให้ใช้ไฟล์ AppImage หรือรูปแบบอื่นที่มีใน GitHub Releases ก่อน</p></details>
+      <details><summary>Liney Lite หรือ Windows / macOS มีให้ดาวน์โหลดไหม?</summary><p>ยังไม่มี Liney Lite เป็นเพียงแนวคิดที่อยู่ระหว่างพิจารณา ปัจจุบันโครงการเน้นการพัฒนาและปรับปรุงรุ่น Linux</p></details>
+      <details><summary>โทรเสียงและวิดีโอคอลใช้ได้ครบหรือยัง?</summary><p>มีส่วนการโทร 1:1 ในโค้ด แต่ความเสถียรต้องผ่านการทดสอบกับบัญชีจริงต่อ การรับสายและวิดีโอคอลยังเป็นฟีเจอร์ทดลอง ไม่รับประกันว่าใช้ได้ทุกกรณี</p></details>
+      <details><summary>Liney เก็บข้อมูลไว้ที่ไหน?</summary><p>แอป Desktop ใช้โฟลเดอร์ <code>~/.local/share/liney/</code> เพื่อเก็บข้อมูลและประวัติข้อความใน SQLite โดยไม่มี message relay ส่วนกลางของ Liney สำหรับแอป Desktop</p></details>
+      <details><summary>Liney Web กับ Desktop เหมือนกันไหม?</summary><p>Liney Web เป็นช่องทางทดลองแยกต่างหากและมีข้อจำกัดต่างจาก Desktop ไม่ควรมองว่าทุกความสามารถบน Desktop ใช้ได้บนเว็บด้วย <a href="app.html">ดู Liney Web</a></p></details>
+    </div></div>
+  </section>
+
+  <section class="section section-muted"><div class="container"><div class="notice-strip"><div class="notice-mark" aria-hidden="true">!</div><div><strong>อ่านก่อนใช้งานกับบัญชี LINE จริง</strong><span>Liney ใช้ไลบรารีและการเชื่อมต่อที่ไม่เป็นทางการ อาจถูกจำกัดการใช้งานเมื่อบริการ LINE มีการเปลี่ยนแปลงหรือบังคับใช้ข้อกำหนด</span></div><a class="text-link" href="notice.html">ข้อควรรู้ →</a></div></div></section>
+</main>
 
     <footer class="footer"><div class="container footer-grid"><div><a class="footer-brand" href="index.html"><img src="assets/liney-mark.svg" alt="">Liney</a><p>© <span data-current-year></span> Cytech Team Development. ซอฟต์แวร์อิสระสำหรับ Linux</p><p class="footer-contact">ติดต่อ: <a class="text-link" data-contact-email href="mailto:namnarak@namnarak.in.th">namnarak@namnarak.in.th</a></p></div><nav class="footer-nav" aria-label="ลิงก์เอกสาร"><a href="notice.html">Safety Notice</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="license.html">License</a><a data-repo-link href="download.html">GitHub</a></nav></div></footer>
   </body>

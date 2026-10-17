@@ -33,8 +33,23 @@ window.LINEY_SITE_CONFIG = {
 };
 ```
 
-The repository is currently private, so leave those URLs empty until they are
-intended to be visible to public website visitors.
+The repository is public. Keep the repository and release URL pointed at Cytech-Team/Liney so all buttons resolve to the real project.
+
+## Published packages and feature status
+
+The landing page and download guide must describe features present in current source.
+Calls (especially incoming/video), Album and Note have components that still require
+live verification and must not be described as fully validated. Liney Lite and
+Windows/macOS are only ideas under consideration.
+
+release.js reads GitHub's *published* releases/latest API and matches assets by
+exact filename, Linux architecture and format. It never invents download URLs for
+missing artifacts; if the API is unavailable, users are sent to GitHub Releases.
+AUR cannot be promoted before an actual AUR listing exists. GitHub's Flatpak bundle
+is not an official listing on Flathub.
+
+For local previews run the build and inspect both x86_64 and aarch64 download states.
+Browser-side GitHub API reads do not involve LINE credentials.
 
 ## Local preview
 
