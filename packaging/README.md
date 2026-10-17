@@ -14,7 +14,7 @@ AUR publishing requires a separate AUR account with an uploaded SSH public key; 
 
 ```sh
 cp release/Liney-0.1.1-linux-x86_64.deb packaging/flatpak/Liney-release.deb
-flatpak-builder --user --force-clean --repo=flatpak-repo flatpak-build packaging/flatpak/com.cyoriasmp.Liney.yml
+flatpak-builder --user --install-deps-from=flathub --force-clean --repo=flatpak-repo flatpak-build packaging/flatpak/com.cyoriasmp.Liney.yml
 flatpak build-bundle flatpak-repo release/Liney-0.1.1-linux-x86_64.flatpak com.cyoriasmp.Liney --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
 ```
 

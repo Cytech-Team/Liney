@@ -116,7 +116,7 @@ jobs:
           set -euo pipefail
           version=$(node -p 'require("./package.json").version')
           cp "release-assets/Liney-${version}-linux-x86_64.deb" packaging/flatpak/Liney-release.deb
-          flatpak-builder --user --force-clean --repo=flatpak-repo flatpak-build packaging/flatpak/com.cyoriasmp.Liney.yml
+          flatpak-builder --user --install-deps-from=flathub --force-clean --repo=flatpak-repo flatpak-build packaging/flatpak/com.cyoriasmp.Liney.yml
           mkdir -p release
           flatpak build-bundle flatpak-repo "release/Liney-${version}-linux-x86_64.flatpak" com.cyoriasmp.Liney \
             --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
