@@ -68,7 +68,7 @@ import { LineChatManageModal } from "./components/LineChatManageModal";
 import { ImageViewerOverlay } from "./components/ImageViewerOverlay";
 import { EngineRequestError, lineyEngine } from "./lib/engine";
 import { callMessagePreview, liveMessagePreview, notificationSenderName, officialLineMessageUrl } from "./lib/message-presentation";
-import { notificationAvatarUrl, prepareNotificationAvatar } from "./lib/notification-avatar";
+import { notificationAvatarUrl, prepareNotificationArtwork } from "./lib/notification-avatar";
 import { MarketingSite, type MarketingView } from "./marketing/MarketingSite";
 import {
   compactTimelineRooms,
@@ -618,19 +618,22 @@ async function notifyDesktop(
   soundEnabled: boolean,
   target: { chatId: string; messageId: string },
   onFallbackClick: () => void,
-  avatarUrl?: string,
+  avatars?: { senderAvatarUrl?: string; chatAvatarUrl?: string; isGroup: boolean },
 ): Promise<void> {
   if (!enabled) return;
   try {
     if (lineyEngine.isNative) {
-      const avatarKey = await prepareNotificationAvatar(avatarUrl);
+      const avatarKey = await prepareNotificationArtwork(
+        avatars?.senderAvatarUrl,
+        avatars?.isGroup ? avatars.chatAvatarUrl : undefined,
+      );
       await invoke("notify_message", { title, body, chatId: target.chatId, messageId: target.messageId, sound: soundEnabled, avatarKey });
       return;
     }
     if (typeof Notification === "undefined") return;
     if (Notification.permission === "default") await Notification.requestPermission();
     if (Notification.permission !== "granted") return;
-    const notification = new Notification(title, { body, icon: notificationAvatarUrl(avatarUrl) });
+    const notification = new Notification(title, { body, icon: notificationAvatarUrl(avatars?.senderAvatarUrl || avatars?.chatAvatarUrl) });
     notification.onclick = () => { window.focus(); onFallbackClick(); notification.close(); };
   } catch {
     // Notification availability is owned by the desktop environment.
@@ -1573,8 +1576,12 @@ function MainApp() {
             return { ...current, [chatId]: [...existing, message] };
           });
           if (!raw.isMine && !isChatActuallyVisible(chatId)) {
-            const notificationKey = `${chatId}:${raw.id}:${raw.createdTime}:${raw.text}`;
+            // A Flex/Rich message may arrive twice with different text previews.
+            // The server message ID, not the rendered body, owns the notification.
             const now = Date.now();
+            const notificationKey = eventMessageId
+              ? `${chatId}:${eventMessageId}`
+              : `${chatId}:${raw.createdTime || now}:${raw.senderId || ""}:${contentType}:${raw.text || ""}`;
             for (const [key, at] of notificationDedupRef.current) {
               if (now - at > 60_000) notificationDedupRef.current.delete(key);
             }
@@ -1587,9 +1594,15 @@ function MainApp() {
                 settingsRef.current.notificationSound,
                 { chatId, messageId: message.id },
                 () => jumpToNotification(chatId, message.id),
-                chatKind === "dm"
-                  ? (raw.senderAvatarUrl || knownChat?.avatarUrl)
-                  : (knownChat?.avatarUrl || raw.senderAvatarUrl),
+                {
+                  senderAvatarUrl: raw.senderAvatarUrl
+                    || (raw.senderId
+                      ? (liveFriendsRef.current ?? []).find((friend) => friend.id === raw.senderId)?.avatarUrl
+                      : undefined)
+                    || (chatKind === "dm" ? knownChat?.avatarUrl : undefined),
+                  chatAvatarUrl: knownChat?.avatarUrl,
+                  isGroup: chatKind === "group" || chatKind === "openchat",
+                },
               );
             }
           }

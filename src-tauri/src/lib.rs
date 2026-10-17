@@ -177,11 +177,23 @@ fn notify_message(
                     // toast closes, __closed ends the wait and frees the thread.
                     .timeout(notify_rust::Timeout::Milliseconds(8_000))
                     .action("default", "เปิดใน Liney");
+                // Use a dedicated round app icon on the LEFT, separate from
+                // the sender/group artwork shown as the content image on the RIGHT.
+                // Resolve through Tauri resources so AppImage, deb/rpm and native
+                // builds can all use the same image without an icon-theme install.
+                let round_icon = app
+                    .path()
+                    .resolve("branding/liney-notification.png", tauri::path::BaseDirectory::Resource)
+                    .ok()
+                    .filter(|path| path.is_file());
+                if let Some(icon) = round_icon {
+                    notification.icon(icon.to_string_lossy().as_ref());
+                } else {
+                    notification.icon("liney");
+                }
                 if let Some(ref key) = avatar_key {
                     if let Some(path) = notification_avatar::cached_avatar_path(&app, key) {
-                        // Icon is the small profile picture in KDE/dunst/swaync.
-                        // image_path is a separate large image hint, not the avatar.
-                        notification.icon(path.to_string_lossy().as_ref());
+                        notification.image_path(path.to_string_lossy().as_ref());
                     }
                 }
                 if sound {

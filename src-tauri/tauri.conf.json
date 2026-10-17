@@ -52,7 +52,8 @@
       "../README.md": "README.md",
       "../LICENSE": "LICENSE",
       "../native/vendor/libwayshot-liney/LICENSE-BSD": "licenses/libwayshot-LICENSE-BSD",
-      "../branding/liney-logo.jpg": "branding/liney-logo.jpg"
+      "../branding/liney-logo.jpg": "branding/liney-logo.jpg",
+      "icons/notification.png": "branding/liney-notification.png"
     },
     "icon": [
       "icons/32x32.png",
