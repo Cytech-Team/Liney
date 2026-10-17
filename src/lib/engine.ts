@@ -27,34 +27,15 @@ type Pending = {
   timer: ReturnType<typeof setTimeout>;
 };
 
-const WEB_CONNECTOR_PAGE_SOURCE = "liney-web-app";
-const WEB_CONNECTOR_SOURCE = "liney-connector";
-const WEB_CONNECTOR_REQUEST = "liney.connector.request";
-const WEB_CONNECTOR_RESPONSE = "liney.connector.response";
+// Browser-side Liney uses localhost directly; no extension or remote runner.
+const LOCAL_ENGINE_URL = "http://127.0.0.1:39211/liney-runner";
+const LOCAL_TOKEN_KEY = "liney.web.localEngineToken";
 
-type WebConnectorError = {
-  message?: string;
-  code?: string;
-  retryable?: boolean;
-};
-
-type WebConnectorResponse = {
-  source?: string;
-  type?: string;
-  id?: string;
+type LocalResult<T> = {
   ok?: boolean;
-  result?: unknown;
-  error?: WebConnectorError | string;
+  result?: T;
+  error?: { message?: string; code?: string; retryable?: boolean };
 };
-
-
-declare global {
-  interface Window {
-    lineyConnector?: {
-      request<T = unknown>(method: string, params?: Record<string, unknown>, timeout?: number): Promise<T>;
-    };
-  }
-}
 
 class LineyEngine {
   private child: Child | null = null;
@@ -67,6 +48,29 @@ class LineyEngine {
   private webStarted = false;
   private webEventCursor = 0;
   private webEventTimer: ReturnType<typeof setInterval> | null = null;
+
+  private localAccessToken = "";
+
+  setLocalToken(token: string): void {
+    const value = token.trim();
+    if (!/^[A-Za-z0-9_-]{48,160}$/.test(value)) {
+      throw new EngineRequestError("กรอก Local Engine token ที่แสดงจากเครื่องนี้", "LOCAL_TOKEN_INVALID");
+    }
+    this.localAccessToken = value;
+    // Per-tab session storage only. No token or LINE data is sent to Cloudflare.
+    try { sessionStorage.setItem(LOCAL_TOKEN_KEY, value); } catch { /* private browsing */ }
+  }
+
+  hasLocalToken(): boolean {
+    if (this.isNative) return true;
+    if (this.localAccessToken) return true;
+    try { return Boolean(sessionStorage.getItem(LOCAL_TOKEN_KEY)); } catch { return false; }
+  }
+
+  private readLocalToken(): string {
+    if (this.localAccessToken) return this.localAccessToken;
+    try { return sessionStorage.getItem(LOCAL_TOKEN_KEY) || ""; } catch { return ""; }
+  }
 
   get isNative() {
     return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -88,11 +92,12 @@ class LineyEngine {
   private async startWebConnector(): Promise<boolean> {
     if (this.webStarted) return true;
     try {
-      // Old connector builds proxy to the maintainer's Home Server.
-      // Require the new, locally-enforced protocol before any auth or LINE RPC.
-      const transport = await this.webRequest<{ mode?: string; transport?: string }>("connector.transport", {}, 6_000);
-      if (transport.mode !== "local-device" || transport.transport !== "loopback") {
-        throw new EngineRequestError("Update Liney Local Connector; remote runner versions are not supported", "LOCAL_CONNECTOR_REQUIRED", false);
+      if (!this.hasLocalToken()) {
+        throw new EngineRequestError("ต้องเปิด Local Engine บนเครื่องนี้และกรอก token ก่อน ไม่จำเป็นต้องใช้ Extension", "LOCAL_TOKEN_REQUIRED");
+      }
+      const health = await this.localFetch<{ mode?: string; transport?: string }>("/health", undefined, 6_000);
+      if (health.mode !== "local-device" || health.transport !== "loopback") {
+        throw new EngineRequestError("ต้องใช้ Liney Local Engine ที่รันบนเครื่องนี้เท่านั้น", "LOCAL_ONLY");
       }
       const capabilities = await this.webRequest<Record<string, unknown>>("capabilities", {}, 8_000);
       this.webStarted = true;
@@ -100,75 +105,73 @@ class LineyEngine {
       this.startWebEventPolling();
       this.emit({
         type: "engine.ready",
-        engine: "liney-connector",
-        linejsVersion: String(capabilities.linejsVersion ?? "connector"),
-        device: String(capabilities.device ?? "WEBEXT"),
+        engine: "liney-local-engine",
+        linejsVersion: String(capabilities.linejsVersion ?? "local"),
+        device: String(capabilities.device ?? "DESKTOPWIN"),
         clientIdentity: capabilities.clientIdentity,
       });
       return true;
     } catch (error) {
       this.webStarted = false;
       this.started = false;
-      this.emit({
-        type: "engine.error",
-        message: error instanceof Error ? error.message : String(error),
-      });
+      this.emit({ type: "engine.error", message: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }
 
-  private async webRequest<T = unknown>(method: string, params: Record<string, unknown> = {}, timeout = 15_000): Promise<T> {
+  private async localFetch<T>(path: string, requestBody?: Record<string, unknown>, timeout = 15_000): Promise<T> {
     if (typeof window === "undefined") {
-      throw new EngineRequestError("Liney Web runtime requires a browser window", "CONNECTOR_UNAVAILABLE", true);
+      throw new EngineRequestError("Web browser required", "LOCAL_ENGINE_UNAVAILABLE");
     }
-    if (window.lineyConnector?.request) return window.lineyConnector.request<T>(method, params, timeout);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.max(1000, timeout));
+    try {
+      const response = await fetch(LOCAL_ENGINE_URL + path, {
+        method: requestBody ? "POST" : "GET",
+        mode: "cors",
+        credentials: "omit",
+        cache: "no-store",
+        // Chromium's Local Network Access prompt checks loopback permission;
+        // this also opts local HTTP out of public-origin mixed-content blocking.
+        ...({ targetAddressSpace: "loopback" } as RequestInit),
+        headers: path === "/health" ? {} : {
+          ...(requestBody ? { "Content-Type": "application/json" } : {}),
+          Authorization: "Bearer " + this.readLocalToken(),
+        },
+        body: requestBody ? JSON.stringify(requestBody) : undefined,
+        signal: controller.signal,
+      });
+      const payload = await response.json() as LocalResult<T> & T;
+      if (!response.ok || payload.ok === false) {
+        throw new EngineRequestError(
+          String(payload.error?.message || "Local Engine rejected request"),
+          String(payload.error?.code || "LOCAL_ENGINE_ERROR"),
+          response.status >= 500,
+        );
+      }
+      return payload.result !== undefined ? payload.result : payload as T;
+    } catch (error) {
+      if (error instanceof EngineRequestError) throw error;
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new EngineRequestError("Local Engine ตอบกลับไม่ทันเวลา", "TIMEOUT", true);
+      }
+      throw new EngineRequestError(
+        "ไม่พบ Local Engine ที่ 127.0.0.1:39211 หรือ Chrome ยังไม่อนุญาต Local network; เปิด Engine บนเครื่องนี้ก่อน",
+        "LOCAL_ENGINE_UNAVAILABLE",
+        true,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
-    const id = crypto.randomUUID();
-    const targetOrigin = window.location.origin;
-    const payload = {
-      source: WEB_CONNECTOR_PAGE_SOURCE,
-      type: WEB_CONNECTOR_REQUEST,
-      id,
-      method,
-      params,
-    };
-    const promise = new Promise<T>((resolve, reject) => {
-      const timer = window.setTimeout(() => {
-        window.removeEventListener("message", onMessage);
-        reject(new EngineRequestError(
-          "Liney Web requires the local Liney Connector and an engine running on your own device. No remote server is used.",
-          "LOCAL_ENGINE_UNAVAILABLE",
-          true,
-        ));
-      }, timeout);
-
-      const onMessage = (event: MessageEvent<WebConnectorResponse>) => {
-        if (event.source !== window || event.origin !== targetOrigin) return;
-        const data = event.data;
-        if (data?.source !== WEB_CONNECTOR_SOURCE || data.type !== WEB_CONNECTOR_RESPONSE || data.id !== id) return;
-        window.clearTimeout(timer);
-        window.removeEventListener("message", onMessage);
-        if (data.ok) {
-          resolve(data.result as T);
-          return;
-        }
-        const rawError = data.error;
-        if (rawError && typeof rawError === "object") {
-          reject(new EngineRequestError(
-            String(rawError.message ?? "Liney Connector request failed"),
-            String(rawError.code ?? "CONNECTOR_ERROR"),
-            Boolean(rawError.retryable),
-          ));
-        } else {
-          reject(new EngineRequestError(String(rawError ?? "Liney Connector request failed"), "CONNECTOR_ERROR"));
-        }
-      };
-
-      window.addEventListener("message", onMessage);
-    });
-
-    window.postMessage(payload, targetOrigin);
-    return promise;
+  private async webRequest<T = unknown>(method: string, params: Record<string, unknown> = {}, timeout = 15_000): Promise<T> {
+    if (!this.hasLocalToken()) throw new EngineRequestError("กรอก Local Engine token ก่อน", "LOCAL_TOKEN_REQUIRED");
+    if (method === "connector.events") {
+      const after = Number(params.after ?? 0);
+      return this.localFetch<T>("/events?after=" + encodeURIComponent(String(Number.isFinite(after) ? after : 0)), undefined, timeout);
+    }
+    return this.localFetch<T>("/rpc", { method, params, timeout }, timeout);
   }
 
   private startWebEventPolling() {

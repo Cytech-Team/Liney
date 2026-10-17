@@ -11,6 +11,14 @@ const ROOT = resolve(__dirname, "..");
 const PORT = Number(process.env.LINEY_RUNNER_PORT || 39211);
 const HOST = process.env.LINEY_RUNNER_HOST || "127.0.0.1";
 const LOCAL_ONLY = process.env.LINEY_LOCAL_ONLY === "1";
+const LOCAL_WEB_ORIGINS = new Set([
+  "https://liney.namnarak.in.th",
+  "https://liney.pages.dev",
+]);
+if (process.env.LINEY_LOCAL_DEV_ORIGIN && /^http:\/\/(?:localhost|127\.0\.0\.1):\d{2,5}$/.test(process.env.LINEY_LOCAL_DEV_ORIGIN)) {
+  LOCAL_WEB_ORIGINS.add(process.env.LINEY_LOCAL_DEV_ORIGIN);
+}
+
 if (LOCAL_ONLY && !["127.0.0.1", "localhost", "::1"].includes(HOST)) {
   console.error("Local Engine must listen on loopback only");
   process.exit(1);
@@ -525,6 +533,26 @@ function sanitizePublicRpc(session, method, rawParams) {
 }
 
 const server = http.createServer(async (req, res) => {
+  if (LOCAL_ONLY) {
+    const origin = String(req.headers.origin || "");
+    const host = String(req.headers.host || "").toLowerCase();
+    if (!["127.0.0.1", "localhost", "[::1]"].some((name) => host === name + ":" + PORT)) {
+      return sendJson(res, 403, { ok: false, error: { code: "BAD_HOST", message: "localhost only" } });
+    }
+    if (origin && !LOCAL_WEB_ORIGINS.has(origin)) {
+      return sendJson(res, 403, { ok: false, error: { code: "BAD_ORIGIN", message: "Origin not allowed" } });
+    }
+    if (LOCAL_WEB_ORIGINS.has(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+      res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Authorization,Content-Type");
+      res.setHeader("Access-Control-Allow-Private-Network", "true");
+      res.setHeader("Access-Control-Max-Age", "600");
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    }
+  }
+
   if (req.method === "OPTIONS") return sendJson(res, 204, {});
   const url = new URL(req.url || "/", `http://${req.headers.host || "liney-runner"}`);
   const path = stripPrefix(url.pathname);
@@ -532,7 +560,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && (path === "/" || path === "/health")) {
       return sendJson(res, 200, {
         ok: true,
-        name: "Liney Home Runner",
+        name: LOCAL_ONLY ? "Liney Local Engine" : "Liney Home Runner",
+        mode: LOCAL_ONLY ? "local-device" : "hosted",
+        transport: LOCAL_ONLY ? "loopback" : "remote",
         prefix: PREFIX || "/",
         status: privateBridge.status(),
         public: publicSummary(),

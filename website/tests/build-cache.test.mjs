@@ -6,7 +6,7 @@ import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
 const dist = path.join(root, "dist");
-const publicPages = ["index.html", "features.html", "technology.html", "roadmap.html", "download.html", "notice.html", "privacy.html", "terms.html", "license.html", "404.html"];
+const publicPages = ["index.html", "features.html", "technology.html", "roadmap.html", "compatibility.html", "download.html", "notice.html", "privacy.html", "terms.html", "license.html", "404.html"];
 const sourceAssets = ["site-config.js", "site.js", "theme-init.js", "release.js", "styles.css", "theme.css"];
 
 test("all public HTML pages reference identical hash-versioned assets", () => {

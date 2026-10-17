@@ -5,7 +5,7 @@ import path from "node:path";
 
 const dist = path.resolve(import.meta.dirname,"../dist");
 const publicPages = [
-  "index.html", "features.html", "technology.html", "roadmap.html",
+  "index.html", "features.html", "technology.html", "roadmap.html", "compatibility.html",
   "download.html", "notice.html", "privacy.html", "terms.html",
   "license.html", "404.html",
 ];

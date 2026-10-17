@@ -1,66 +1,75 @@
-# Liney Web: Device-First (No Hosted LINE Engine)
+# Liney Web: Local-first without extensions
 
-## Non-negotiable default
+Liney Web is static React/PWA assets delivered by Cloudflare Pages. The LINEJS
+protocol engine, authenticated RPC, E2EE, SQLite and LINE account credentials
+run on the user's OWN machine. No Home Server or Cloudflare Workers execute
+the user's LINE session.
 
-Liney Web must never auto-create a session on Cytech's Home Server or on
-Cloudflare Workers. Cloudflare Pages distributes static UI/PWA assets only.
-All LINEJS processing, LINE authentication, E2EE keys, chat history, session
-storage and outgoing LINE requests run on the user's OWN machine.
+## What runs on the device?
 
-## Tested architecture for devices that permit a local helper
-
-Browser / PWA (served as static assets by Cloudflare Pages)
+Chrome / Chromium / PWA (static web client)
   |
-  | Local Chrome extension content bridge
+  | HTTPS page -> allowed loopback-network request
+  | HTTP http://127.0.0.1:39211/liney-runner
+  | Origin verified, explicit bearer token, CORS allowlist
   v
-Liney Connector (Chrome extension; validates page origin)
+Liney local process (Node launcher + LINEJS native engine)
   |
-  | Authenticated localhost HTTP over 127.0.0.1, never the public internet
-  v
-Liney local engine process (Bun-compiled LINEJS / SQLite / E2EE)
-  |
-  v
-LINE services directly
+  +--> LOCAL SQLite, auth credentials and E2EE keys
+  +--> LINE services directly
 
-On Linux and ChromeOS with Crostini enabled:
-- Run bash scripts/start-local-web-engine.sh from the repo, or package
-  the bundled local sidecar + launcher for supported architectures.
-- Extension settings accept ONLY http://127.0.0.1, localhost or IPv6 loopback.
-- Local runner binds 127.0.0.1, rejects public sessions, requires a unique
-  strong private token, and disables wildcard CORS responses.
-- Credentials, message DB, E2EE keys and data remain in
-  ~/.local/share/liney-web; local runner token at
-  ~/.config/liney-web/runner.token (0600 permissions).
-- Desktop Tauri mode continues using its bundled on-device engine.
+**No Chrome Extension required.** This does still require permission to start
+a local process and, on recent Chrome, to allow the webpage to contact
+loopback. The webpage cannot bypass ChromeOS Workspace Admin policies.
 
-## Chromebook / browser limitations
+## Setup (Linux / Linux-enabled ChromeOS)
 
-A standard PWA CAN render UI, cache assets for offline access and store app
-data in IndexedDB/OPFS, but CANNOT transparently run the existing Node/Bun
-LINEJS engine, bypass CORS or use raw TCP/UDP. Installing a Chrome extension
-does not by itself port LINEJS from Node/Bun to browser runtime.
+1. Obtain Liney's matching local engine binary for the device architecture.
+2. Start `bash scripts/start-local-web-engine.sh` on THAT user's device.
+3. Retrieve its locally generated token with
+   `bash scripts/start-local-web-engine.sh --show-token`.
+4. Open `https://liney.namnarak.in.th/compatibility.html`. Click the
+   Local Engine probe and allow Chrome's loopback-network request.
+5. Open `https://liney.namnarak.in.th/app`, paste the token into the Web App
+   login UI and click Connect Local Engine.
+6. Scan LINE's QR on the phone, then confirm actual chat send/receive on a
+   test account before treating the device configuration as supported.
 
-- Admin-locked Chromebook that blocks both extensions and Linux development
-  environment: full LINE Web chat is not supported by this architecture.
-- Admin-approved Chrome extension + Linux helper: technically feasible when
-  the device's actual policies and localhost forwarding permit it.
-- Enterprise Isolated Web Apps (IWA) with Direct Sockets may eventually
-  support fully device-side connections without a helper, but this requires
-  a separate engine port and admin-approved IWA installation.
-- Closing the PWA does not guarantee notifications; service workers are
-  suspended by browsers. Full background chat requires an allowed native
-  or other device-local long-running component.
+The token is stored in browser `sessionStorage` for that tab, not in any
+Cloudflare database or public server. It only authenticates requests to
+loopback. Clearing the tab session may require entry again.
 
-## Public web release gate
+The local process binds `127.0.0.1` only, disables public sessions, and accepts
+CORS only from the Liney public origin (plus explicitly configured localhost
+development origins), with Host header validation and bearer auth.
 
-1. Confirm local engine ping / capabilities through localhost with token.
-2. Install the connector and verify the QR flow on a non-production test
-   LINE account.
-3. Confirm fetch chat list, text send, text receive and session recovery on
-   actual supported Chromium/Linux and managed Chromebook configurations.
-4. Check no outgoing network requests to maintainer-owned runner endpoints.
-5. Only then describe the Web App as live-supported. Static app shell being
-   deployed does not prove real chat works.
+## Compatibility diagnostics
 
-No cloud LINE storage, no remote fallback, no public proxy, no central LINE
-credentials. Chrome/Workspace Admin can still delete or restrict local data.
+The static page `/compatibility.html` checks HTTPS, IndexedDB
+read/write/delete, OPFS file write/read/delete, Web Crypto, service-worker
+availability, storage quota and optional localhost connectivity. It does not
+expose secrets or hardware identifiers to a maintainer server; sharing a
+redacted report is optional. The local network probe only runs on click.
+
+The website cannot enumerate every Workspace/ChromeOS policy. A denial of
+loopback access cannot always be distinguished from an engine not running.
+
+## ChromeOS limitations
+
+ChromeOS that blocks the Linux environment/native helpers cannot run the
+existing LINEJS engine. A static PWA alone cannot open unrestricted TCP.
+Managed Chromebooks may restrict storage, loopback-network permission, PWA
+installation, native apps or ephemeral profiles.
+
+## Invitation codes
+
+Invitation codes including one-use and expiring codes are only a design at
+present. Secure redemption would need Cloudflare Worker + D1 or another
+authorization service for beta-access metadata, NOT for LINE traffic.
+Browser-only code checks are NOT secure download gating.
+
+## Release caveat
+
+The local runner health, bearer auth, CORS and ping have been smoke-tested.
+QR login, message send and receive on a real LINE account still require
+end-to-end testing. Static PWA compatibility does not certify live chat.

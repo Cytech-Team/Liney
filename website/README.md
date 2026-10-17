@@ -72,26 +72,39 @@ Mobile navigation uses site.js and download metadata uses release.js.
 Test pages at desktop/mobile widths and run `bun run test:website` to check
 links, anchors, theme persistence, cached asset hashes and built pages.
 
-## Liney Web (device-local compute)
+## Device capability check
 
-The experimental /app route uses a LOCAL connector and LINEJS Engine on the
-visitor's device. It does not create a Home Server public session or invoke
-Cloudflare Workers for LINE traffic. Cloudflare Pages supplies only the PWA UI.
-Without a working extension and local Engine, the browser cannot log in.
+`compatibility.html` is a static, client-side diagnostic available on Cloudflare
+Pages. It tests real local IndexedDB/OPFS read/write/delete, Web Crypto,
+secure context, basic PWA support, storage quota and persistence state.
+`Local Engine` is only probed after a user explicitly clicks the connection
+button; modern Chrome may request Loopback Network permission. Results remain
+in browser memory; copying a redacted report is optional and user-initiated.
+No LINE account, token, machine identifier or Workspace policy is collected.
+A regular website cannot enumerate every ChromeOS Enterprise policy; statuses
+indicate unavailable, available, or unverified rather than guessing.
 
-On Linux or Chromebook with a permitted Linux environment:
+**Invite codes are not currently implemented.** One-time/revocable codes
+require a server-side authorization service (e.g. Cloudflare Worker + D1)
+that handles only invite metadata, never LINE traffic or credentials.
+A client-only code field must not be described as secure download protection.
 
-1. Build or install the corresponding Liney Engine on the same device.
-2. Start bash scripts/start-local-web-engine.sh; this uses localhost only.
-3. Install the extensions/liney-connector v0.3.0 unpacked in Chrome/Chromium,
-   enable the local connection, and provide its unique local token.
-4. Open https://liney.namnarak.in.th/app, verify the connector, then QR-login.
+## Liney Web (device-local compute, no extension)
 
-In managed/locked Chromebooks without extension or local process permissions,
-LINEJS cannot currently run through a plain PWA. Do not claim all
-Chromebooks are supported. Real QR and message send/receive must be validated
-on a dedicated test account before advertising live Web chat support.
-See docs/WEB_APP_MODE.md in the repository.
+The experimental `/app` route uses browser `fetch()` to the Liney Engine
+running on the visitor's device via `127.0.0.1`. A locally generated
+bearer token is entered on the login page and stored in that tab's session
+storage. Recent Chrome can prompt to allow Loopback Network Access.
+
+Cloudflare Pages provides static UI/PWA and updates only.
+No maintainer Home Server or Cloudflare Worker runs LINEJS per user.
+Devices with no permission to run a local helper are not supported yet.
+
+Use `compatibility.html` to verify browser features, local storage and
+loopback reachability; this diagnostic does not report hardware identifiers
+or account tokens. It cannot enumerate all Google Workspace policies.
+The invitation-code idea has not been implemented or made public.
+See `docs/WEB_APP_MODE.md` in the repository for details.
 
 ## Published packages and feature status
 

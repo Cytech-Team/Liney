@@ -1050,7 +1050,8 @@ function MainApp() {
       } catch (error) {
         setEngineState("error");
         if (isLineyWebAppRoute()) setAuthError(error instanceof Error ? error.message : String(error));
-        scheduleReconnect();
+        // Avoid hammering a browser without a configured on-device token.
+        if (!isLineyWebAppRoute() || lineyEngine.hasLocalToken()) scheduleReconnect();
       } finally {
         connectInFlight = false;
       }
@@ -3520,6 +3521,19 @@ function MainApp() {
       onPasswordChange={setAuthPassword}
       onStart={startQrLogin}
       onPasswordLogin={startPasswordLogin}
+      onConnectLocalEngine={async (token) => {
+        try {
+          lineyEngine.setLocalToken(token);
+          setEngineState("starting");
+          setAuthError("");
+          await lineyEngine.start();
+          // Let the normal startup path reload real LINE session state.
+          window.location.reload();
+        } catch (error) {
+          setEngineState("error");
+          setAuthError(error instanceof Error ? error.message : String(error));
+        }
+      }}
       onLogout={logout}
       onClose={() => {
         keyImportDialogOpenRef.current = false;
@@ -5632,6 +5646,7 @@ function AuthModal({
   onPasswordChange,
   onStart,
   onPasswordLogin,
+  onConnectLocalEngine,
   onLogout,
   onClose,
 }: {
@@ -5657,10 +5672,13 @@ function AuthModal({
   onPasswordChange: (value: string) => void;
   onStart: () => void;
   onPasswordLogin: () => void;
+  onConnectLocalEngine: (token: string) => Promise<void>;
   onLogout: () => void | Promise<void>;
   onClose: () => void;
 }) {
   const [riskAcknowledged, setRiskAcknowledged] = useState(false);
+  const [localToken, setLocalToken] = useState("");
+  const [connectingLocal, setConnectingLocal] = useState(false);
   const canLogin = engineState === "ready" && !authBusy && riskAcknowledged;
   const isWebRuntime = !lineyEngine.isNative && typeof window !== "undefined" && window.location.pathname === "/app";
 
@@ -5673,7 +5691,7 @@ function AuthModal({
         <h2>{keyImportMode ? "รับคีย์ E2EE จากมือถือ" : authenticated ? (profileName || "เชื่อม LINE แล้ว") : "เชื่อมบัญชี LINE"}</h2>
         <p className="auth-copy">{keyImportMode
           ? "สแกนด้วยมือถือที่มีคีย์เดิม โดยใช้บัญชีเดียวกับ Desktop"
-          : authenticated ? "บัญชีนี้เชื่อมต่อกับ Liney แล้ว" : isWebRuntime ? "Liney Web ต้องมี Liney Connector และ Engine บนเครื่องของคุณเอง ใช้ QR Code โดยไม่ส่งข้อมูลผ่านเซิร์ฟเวอร์ของผู้พัฒนา" : "ต้องเข้าสู่ระบบก่อนจึงจะใช้แชตและฟีเจอร์ของ Liney ได้"}</p>
+          : authenticated ? "บัญชีนี้เชื่อมต่อกับ Liney แล้ว" : isWebRuntime ? "Liney Web ใช้ Local Engine ในเครื่องคุณ เชื่อมต่อผ่าน localhost โดยตรง ไม่ต้องใช้ Extension และไม่พึ่งเซิร์ฟเวอร์ผู้พัฒนา" : "ต้องเข้าสู่ระบบก่อนจึงจะใช้แชตและฟีเจอร์ของ Liney ได้"}</p>
 
         {authenticated ? (
           keyImportMode ? (
@@ -5718,6 +5736,27 @@ function AuthModal({
           )
         ) : (
           <>
+            {isWebRuntime && engineState !== "ready" ? (
+              <div className="auth-local-engine-setup">
+                <strong>เชื่อม Local Engine — ไม่ใช้ Extension</strong>
+                <p>เปิด Engine ที่เครื่องนี้ก่อน แล้วคัดลอก token จากไฟล์ <code>~/.config/liney-web/runner.token</code> มาใส่ที่นี่ แอปจะส่งคำสั่งเฉพาะไป <code>127.0.0.1</code> ของเครื่องคุณ</p>
+                <label className="auth-field">
+                  <span>Local Engine token (เก็บเฉพาะใน Session ของแท็บนี้)</span>
+                  <input type="password" autoComplete="off" spellCheck={false} value={localToken}
+                    onChange={(event) => setLocalToken(event.currentTarget.value)}
+                    placeholder="วาง Local Engine token" />
+                </label>
+                <button type="button" className="auth-primary" disabled={connectingLocal || !localToken.trim()}
+                  onClick={async () => {
+                    setConnectingLocal(true);
+                    try { await onConnectLocalEngine(localToken); }
+                    finally { setConnectingLocal(false); }
+                  }}>
+                  {connectingLocal ? "กำลังเชื่อม..." : "เชื่อม Engine บนเครื่องนี้"}
+                </button>
+                <a href="/compatibility.html" target="_blank" rel="noopener noreferrer">ตรวจความพร้อม Chromebook / เบราว์เซอร์ ↗</a>
+              </div>
+            ) : null}
             <div className="auth-mode-switch" role="tablist" aria-label="วิธีเข้าสู่ระบบ">
               <button type="button" role="tab" aria-selected={authMode === "qr"} className={authMode === "qr" ? "active" : ""} disabled={authBusy} onClick={() => onModeChange("qr")}>
                 <QrCode size={15}/> QR Code
@@ -5781,7 +5820,7 @@ function AuthModal({
         ) : null}
         <div className="auth-footnote">
           {isWebRuntime
-            ? <>Client: {clientIdentity?.displayName || "Liney-Website"} · Engine ทำงานบนเครื่องผู้ใช้ผ่าน Local Connector · Credential และฐานข้อมูลอยู่ในเครื่องผู้ใช้ · ไม่ใช้ Home Server หรือ Cloudflare Workers ประมวลผล LINE</>
+            ? <>Client: {clientIdentity?.displayName || "Liney-Website"} · Engine ทำงานบนเครื่องผู้ใช้ผ่าน localhost โดยตรง (ไม่ใช้ Extension) · Credential และฐานข้อมูลอยู่ในเครื่องผู้ใช้ · ไม่ใช้ Home Server หรือ Cloudflare Workers ประมวลผล LINE</>
             : <>Client: {clientIdentity?.displayName || "Liney-Linux"} · Credential: {storageMode === "wallet" ? "Wallet / Secret Service" : storageMode === "encrypted-file" ? "Encrypted local fallback (AES-256-GCM · ย้ายเข้า Wallet อัตโนมัติเมื่อพร้อม)" : "session-only (ไม่ persist credential)"} · E2EE storage อยู่ที่ ~/.local/share/liney · ไม่มี Liney server กลาง</>}
         </div>
       </motion.section>

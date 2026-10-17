@@ -7,18 +7,18 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 const dist = path.join(root, "dist");
 const files = [
   "404.html", "app.html", "download.html", "index.html",
-  "features.html", "technology.html", "roadmap.html", "license.html",
+  "features.html", "technology.html", "roadmap.html", "compatibility.html", "license.html",
   "LICENSE.txt", "notice.html", "privacy.html", "robots.txt", "sitemap.xml",
   "site-config.js", "site.js", "theme-init.js", "release.js",
   "liney-manifest.webmanifest", "liney-app-sw.js",
-  "styles.css", "theme.css", "terms.html", "favicon.svg",
+  "styles.css", "theme.css", "compatibility.css", "compatibility.js", "terms.html", "favicon.svg",
   "icons.svg", "liney-logo.png", "liney-icon-192.png", "liney-mark.svg",
 ];
 const directories = ["assets", "app-assets", "api"];
 const versioned = [
   "site-config.js", "site.js", "theme-init.js", "release.js",
   "liney-manifest.webmanifest", "liney-app-sw.js",
-  "styles.css", "theme.css",
+  "styles.css", "theme.css", "compatibility.css", "compatibility.js",
 ];
 
 rmSync(dist, { recursive: true, force: true });

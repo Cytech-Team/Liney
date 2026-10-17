@@ -55,8 +55,10 @@ test('Web browser bundle does not contain Home Runner URL or cloud LINE API',()=
  const bundle=fs.readFileSync(new URL('../website/app-assets/'+matches[0][1],import.meta.url),'utf8');
  assert.doesNotMatch(bundle,/cdn\.cytechteam\.site\/liney-runner/);
  assert.doesNotMatch(source,/homeRunnerConfig|DEFAULT_HOME_RUNNER_URL/);
- assert.match(source,/connector\.transport/);
- assert.match(bundle,/connector\.transport/);
+ assert.match(source,/LOCAL_ENGINE_URL/);
+ assert.match(source,/targetAddressSpace/);
+ assert.match(bundle,/127\.0\.0\.1:39211/);
+ assert.doesNotMatch(bundle,/liney\.connector\.request/);
 });
 test('Extension permission set does not grant access to maintainer servers',()=>{
  const m=JSON.parse(fs.readFileSync(new URL('../extensions/liney-connector/manifest.json',import.meta.url)));
