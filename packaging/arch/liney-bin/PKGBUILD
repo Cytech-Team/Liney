@@ -6,6 +6,8 @@ pkgdesc='Unofficial LINE desktop client for Linux (prebuilt portable release)'
 arch=('x86_64' 'aarch64')
 url='https://github.com/Cytech-Team/Liney'
 license=('MIT')
+# Bun --compile appends runtime data to ELF: stripping corrupts liney-engine.
+options=('!strip')
 provides=('liney')
 conflicts=('liney')
 depends=('webkit2gtk-4.1' 'gtk3' 'libappindicator' 'alsa-lib' 'pipewire')
