@@ -84,13 +84,21 @@ if command -v dpkg-deb >/dev/null 2>&1; then
   dpkg-deb --contents "$DEB_OUT" | grep -q 'usr/bin/liney-screen-x11'
 fi
 
+# Do not let a release smoke test restore the developer's actual LINE
+# credentials/session. The engine initializes authentication at startup.
 ENGINE_SMOKE="$TMPDIR/liney-engine-smoke.log"
+SMOKE_HOME=$(mktemp -d "$TMPDIR/liney-smoke-XXXXXX")
+mkdir -p "$SMOKE_HOME/data" "$SMOKE_HOME/config"
 rm -f "$ENGINE_SMOKE"
 set +e
 (printf '%s\n' '{"id":"release-smoke","version":1,"method":"ping","params":{}}'; sleep 1) \
-  | timeout 4 "$PORTABLE/liney-engine" > "$ENGINE_SMOKE" 2>&1
+  | env HOME="$SMOKE_HOME" LINEY_DATA_DIR="$SMOKE_HOME/data" \
+      XDG_CONFIG_HOME="$SMOKE_HOME/config" \
+      DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent \
+      timeout 4 "$PORTABLE/liney-engine" > "$ENGINE_SMOKE" 2>&1
 ENGINE_SMOKE_STATUS=$?
 set -e
+rm -rf "$SMOKE_HOME"
 if [ "$ENGINE_SMOKE_STATUS" -ne 0 ] && [ "$ENGINE_SMOKE_STATUS" -ne 124 ]; then
   cat "$ENGINE_SMOKE" >&2
   exit "$ENGINE_SMOKE_STATUS"
