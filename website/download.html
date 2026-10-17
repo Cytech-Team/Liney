@@ -44,15 +44,17 @@
       <section class="section section-muted" aria-labelledby="formats-title">
         <div class="container">
           <div class="section-heading">
-            <div><p class="eyebrow">Linux packages</p><h2 id="formats-title">รูปแบบที่เตรียมไว้</h2></div>
-            <p>ลิงก์ด้านล่างจะเปิดหน้า release ของ repository เมื่อเว็บไซต์ถูก deploy บน GitHub Pages</p>
+            <div><p class="eyebrow">Linux packages</p><h2 id="formats-title">Liney v0.1.1 — Linux packages</h2></div>
+            <p>ดาวน์โหลดแพ็กเกจ Developer Preview พร้อมตรวจสอบ SHA-256 ได้จาก GitHub Releases</p>
           </div>
           <div class="download-grid">
             <article class="download-card"><span class="format">APPIMAGE</span><h3>AppImage</h3><p>ไฟล์ portable สำหรับทดลองใช้โดยไม่ต้องติดตั้งลงระบบ</p><a class="button secondary" data-release-link data-unconfigured-label="รอตั้งค่า Releases" href="download.html">ดู release</a></article>
             <article class="download-card"><span class="format">DEB</span><h3>Debian / Ubuntu</h3><p>แพ็กเกจสำหรับระบบที่ใช้ Debian package manager</p><a class="button secondary" data-release-link data-unconfigured-label="รอตั้งค่า Releases" href="download.html">ดู release</a></article>
             <article class="download-card"><span class="format">RPM</span><h3>Fedora / RPM</h3><p>แพ็กเกจ RPM สำหรับดิสโทรที่รองรับรูปแบบนี้</p><a class="button secondary" data-release-link data-unconfigured-label="รอตั้งค่า Releases" href="download.html">ดู release</a></article>
+            <article class="download-card"><span class="format">FLATPAK</span><h3>Flatpak</h3><p>ไฟล์ <code>.flatpak</code> สำหรับติดตั้งบนระบบที่มี Flatpak Runtime</p><a class="button secondary" data-release-link href="download.html">ดู release</a></article>
             <article class="download-card"><span class="format">ARCH</span><h3>Arch package</h3><p>แพ็กเกจ <code>pkg.tar.zst</code> ที่ build จาก binary ชุดเดียวกับ release</p><a class="button secondary" data-release-link data-unconfigured-label="รอตั้งค่า Releases" href="download.html">ดู release</a></article>
             <article class="download-card"><span class="format">TAR.GZ</span><h3>Portable archive</h3><p>tar archive สำหรับระบบที่ต้องการจัดวางไฟล์ด้วยตนเอง</p><a class="button secondary" data-release-link data-unconfigured-label="รอตั้งค่า Releases" href="download.html">ดู release</a></article>
+            <article class="download-card"><span class="format">AUR</span><h3>yay / paru</h3><p>มี PKGBUILD <code>liney</code> และ <code>liney-bin</code> แล้ว โดยยังรอเผยแพร่ขึ้น AUR</p><a class="button secondary" data-repo-link href="download.html">ดูซอร์สแพ็กเกจ</a></article>
             <article class="download-card"><span class="format">SOURCE</span><h3>Source code</h3><p>ดู source, license และ workflow ที่ใช้สร้าง artifact ทั้งหมด</p><a class="button secondary" data-repo-link href="download.html">ดู repository</a></article>
           </div>
           <div class="callout warning"><p><strong>อย่าดาวน์โหลดไฟล์จาก mirror ที่ไม่ทราบที่มา</strong></p><p>ตรวจชื่อ artifact, SHA256 และ SBOM ใน release ให้ตรงกับไฟล์ที่ดาวน์โหลด และอย่าใส่ credential ลงใน bug report หรือ issue</p></div>
