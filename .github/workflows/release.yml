@@ -121,7 +121,7 @@ jobs:
           flatpak build-bundle flatpak-repo "release/Liney-${version}-linux-x86_64.flatpak" com.cyoriasmp.Liney \
             --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
           test -s "release/Liney-${version}-linux-x86_64.flatpak"
-          sha256sum "release/Liney-${version}-linux-x86_64.flatpak" > "release/Liney-${version}-linux-x86_64.flatpak.sha256"
+          (cd release && sha256sum "Liney-${version}-linux-x86_64.flatpak" > "Liney-${version}-linux-x86_64.flatpak.sha256")
       - uses: actions/upload-artifact@v4
         with:
           name: liney-flatpak-x86_64
