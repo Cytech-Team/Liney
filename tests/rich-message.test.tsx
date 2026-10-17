@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { RichMessage } from "./RichMessage";
+import { RichMessage } from "../src/components/RichMessage";
 
 describe("RichMessage missing artwork", () => {
   test("offers a compact fallback, image retry and the official LINE client", () => {
