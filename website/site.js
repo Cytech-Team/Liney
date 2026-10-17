@@ -147,5 +147,97 @@
     else desktop.addListener(closeForDesktop);
   }
 
+  function setupThemeControl() {
+    var shell = document.querySelector('.nav-shell');
+    if (!shell || shell.querySelector('.theme-picker')) return;
+    var root = document.documentElement;
+    var key = 'liney.site.theme';
+    var valid = ['system', 'light', 'dark'];
+    var mode = root.getAttribute('data-theme-preference') || 'system';
+    var media = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+    var picker = document.createElement('div');
+    picker.className = 'theme-picker';
+    var trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'theme-trigger';
+    trigger.setAttribute('aria-label', 'เลือกธีมเว็บไซต์');
+    trigger.setAttribute('aria-haspopup', 'true');
+    trigger.setAttribute('aria-expanded', 'false');
+    var icon = document.createElement('span');
+    icon.className = 'theme-current-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    var text = document.createElement('span');
+    text.className = 'theme-current-label';
+    trigger.appendChild(icon);
+    trigger.appendChild(text);
+    picker.appendChild(trigger);
+    var menu = document.createElement('div');
+    menu.className = 'theme-menu';
+    menu.hidden = true;
+    menu.setAttribute('role', 'group');
+    menu.setAttribute('aria-label', 'เลือกธีม');
+    var labels = { system: 'ตามระบบ', light: 'สว่าง', dark: 'มืด' };
+    var symbols = { system: '◐', light: '☼', dark: '☾' };
+    var buttons = {};
+    valid.forEach(function (choice) {
+      var option = document.createElement('button');
+      option.type = 'button';
+      option.className = 'theme-option';
+      option.setAttribute('data-theme-option', choice);
+      option.textContent = symbols[choice] + '  ' + labels[choice];
+      option.addEventListener('click', function () {
+        applyTheme(choice, true);
+        setOpen(false);
+        trigger.focus();
+      });
+      menu.appendChild(option);
+      buttons[choice] = option;
+    });
+    picker.appendChild(menu);
+    shell.appendChild(picker);
+
+    function applyTheme(next, persist) {
+      mode = valid.indexOf(next) !== -1 ? next : 'system';
+      var resolved = mode === 'system' ? (media && media.matches ? 'dark' : 'light') : mode;
+      root.setAttribute('data-theme-preference', mode);
+      root.setAttribute('data-theme', resolved);
+      root.style.colorScheme = resolved;
+      var meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute('content', resolved === 'dark' ? '#101815' : '#f6f7f2');
+      if (persist) {
+        try { window.localStorage.setItem(key, mode); } catch (_) { /* storage disabled */ }
+      }
+      icon.textContent = symbols[mode];
+      text.textContent = labels[mode];
+      valid.forEach(function (choice) {
+        buttons[choice].setAttribute('aria-pressed', choice === mode ? 'true' : 'false');
+      });
+    }
+    function setOpen(open) {
+      menu.hidden = !open;
+      trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+      picker.classList.toggle('is-open', open);
+    }
+    trigger.addEventListener('click', function () { setOpen(menu.hidden); });
+    document.addEventListener('click', function (event) {
+      if (!picker.contains(event.target)) setOpen(false);
+    });
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape' && !menu.hidden) {
+        setOpen(false);
+        trigger.focus();
+      }
+    });
+    if (media) {
+      var onChange = function () {
+        if (mode === 'system') applyTheme('system', false);
+      };
+      if (media.addEventListener) media.addEventListener('change', onChange);
+      else if (media.addListener) media.addListener(onChange);
+    }
+    applyTheme(mode, false);
+  }
+
+  setupThemeControl();
   setupMobileNavigation();
 })();

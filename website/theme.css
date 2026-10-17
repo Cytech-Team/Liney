@@ -1,0 +1,262 @@
+/* Liney website theme layer: independent of the Liney Desktop and Web App runtimes. */
+.theme-picker { position: relative; z-index: 65; flex: 0 0 auto; }
+.theme-trigger {
+  display: inline-flex; align-items: center; justify-content: center; gap: .4rem;
+  padding: .54rem .7rem; min-height: 41px; min-width: 93px;
+  border: 1px solid #ceddce; border-radius: .7rem;
+  background: #fffefa; color: #274d37; font-size: .82rem; font-weight: 800;
+}
+.theme-trigger:hover, .theme-trigger[aria-expanded="true"] { background: #e8f7ec; border-color: #93c5aa; }
+.theme-current-icon { font-size: 1.25rem; font-family: ui-sans-serif, system-ui, sans-serif; line-height: 1; }
+.theme-menu {
+  position: absolute; top: calc(100% + .6rem); right: 0; display: grid;
+  gap: .3rem; padding: .4rem; min-width: 164px;
+  border: 1px solid #ccdfd0; border-radius: .85rem;
+  background: #fffefa; box-shadow: 0 18px 45px rgba(19,50,27,.16);
+}
+.theme-menu[hidden] { display: none !important; }
+.theme-option {
+  width: 100%; padding: .67rem .85rem;
+  border: 1px solid transparent; border-radius: .55rem;
+  background: transparent; color: #2c4d37; text-align: left; font-size: .87rem;
+}
+.theme-option:hover { background: #eaf7ed; }
+.theme-option[aria-pressed="true"] { background: #d9f7e2; border-color: #b4dcc1; font-weight: 850; color: #0c7342; }
+.site-nav { margin-left: auto; }
+@media (max-width: 990px) {
+  .theme-trigger { min-width: 42px; padding: .5rem; }
+  .theme-current-label { display: none; }
+}
+@media (max-width: 720px) {
+  .nav-shell > .brand { order: 0; }
+  .nav-shell > .theme-picker { order: 1; margin-left: auto; }
+  .nav-shell > .nav-toggle { order: 2; }
+  .nav-shell > .site-nav { order: 3; margin-left: 0; }
+  .theme-trigger { min-width: 43px; min-height: 43px; }
+}
+
+/* Intentional, full-site dark palette. No dark-mode overlays or color inversion. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #101815;
+  --paper: #17241c;
+  --ink: #edf8f0;
+  --subtle: #9caf9f;
+  --muted: #b0c2b5;
+  --green: #55eda3;
+  --green-deep: #66e3a5;
+  --green-soft: #213e2d;
+  --border: #344b3a;
+  --shadow: 0 26px 65px rgba(0,0,0,.26);
+  background: var(--bg); color: var(--ink);
+}
+:root[data-theme="dark"] body { background: var(--bg); }
+:root[data-theme="dark"] a:focus-visible,
+:root[data-theme="dark"] button:focus-visible,
+:root[data-theme="dark"] select:focus-visible,
+:root[data-theme="dark"] summary:focus-visible { outline-color: #85fabb; }
+:root[data-theme="dark"] .site-header { background: rgba(16,24,20,.94); border-bottom-color: #2b4334; }
+:root[data-theme="dark"] .brand-name { color: #f4fff7; }
+:root[data-theme="dark"] .brand-note { color: #a1bba8; border-left-color: #476551; }
+:root[data-theme="dark"] .site-nav a { color: #c4d9cb; }
+:root[data-theme="dark"] .site-nav a:hover,
+:root[data-theme="dark"] .site-nav a[aria-current="page"]:not(.nav-cta) { color: #adffd1; background: #213b2d; }
+:root[data-theme="dark"] .site-nav .nav-cta { background: #64e7a3; color: #123222; }
+:root[data-theme="dark"] .site-nav .nav-cta:hover,
+:root[data-theme="dark"] .site-nav .nav-cta[aria-current="page"] { background: #96f9c4; color: #103322; }
+:root[data-theme="dark"] .nav-toggle { background: #203126; border-color: #3b5945; }
+:root[data-theme="dark"] .nav-toggle span { background: #d9efe0; }
+:root[data-theme="dark"] .theme-trigger { color: #daf5e4; background: #203127; border-color: #41604b; }
+:root[data-theme="dark"] .theme-trigger:hover,
+:root[data-theme="dark"] .theme-trigger[aria-expanded="true"] { background: #2d4e39; }
+:root[data-theme="dark"] .theme-menu { background: #1a2b21; border-color: #41614d; box-shadow: 0 18px 48px rgba(0,0,0,.45); }
+:root[data-theme="dark"] .theme-option { color: #d4f1df; }
+:root[data-theme="dark"] .theme-option:hover { background: #2a4634; }
+:root[data-theme="dark"] .theme-option[aria-pressed="true"] { background: #29523b; border-color: #47825b; color: #bcffd6; }
+:root[data-theme="dark"] .button-dark { background: #67eda9; color: #103421; border-color: #67eda9; }
+:root[data-theme="dark"] .button-dark:hover { background: #a0ffd0; color: #103421; border-color: #a0ffd0; }
+:root[data-theme="dark"] .button-outline { background: #1c2c23; border-color: #4b7055; color: #e2f9e9; }
+:root[data-theme="dark"] .button-outline:hover { background: #2e4b39; }
+:root[data-theme="dark"] .button-light { background: #ecfff3; border-color: #ecfff3; color: #163326; }
+:root[data-theme="dark"] .section-index { color: #8af6bd; }
+:root[data-theme="dark"] .section-heading h2 em,
+:root[data-theme="dark"] .architecture-copy h2 em,
+:root[data-theme="dark"] .download-promo h2 em,
+:root[data-theme="dark"] .download-intro h1 em,
+:root[data-theme="dark"] .faq-layout h2 em { color: #78edab; }
+:root[data-theme="dark"] .fine-print { color: #b1c7b8; }
+:root[data-theme="dark"] .fine-print a,
+:root[data-theme="dark"] .text-link { color: #8bffc2; }
+:root[data-theme="dark"] .status.ready { background: #264b32; color: #acffd0; }
+:root[data-theme="dark"] .status.preview { background: #4a3924; color: #ffe0a0; }
+:root[data-theme="dark"] .status.verify { background: #293954; color: #c4deff; }
+:root[data-theme="dark"] .status.idea { background: #313b35; color: #d0e1d4; }
+
+/* Hero + deliberately dark mock application */
+:root[data-theme="dark"] .hero {
+  background: radial-gradient(circle at 76% 33%, #193d2c 0, #111d17 46%, #101815 79%);
+}
+:root[data-theme="dark"] .hero h1 em { color: #7bf3b3; }
+:root[data-theme="dark"] .kicker { color: #a6e3b9; }
+:root[data-theme="dark"] .hero-subtitle { color: #b7cbbb; }
+:root[data-theme="dark"] .mini-avatar { color: #b9ffd8; background: #244532; border-color: #427952; }
+:root[data-theme="dark"] .hero-footnote small { color: #a4bba9; }
+:root[data-theme="dark"] .show-disc-one { background: #2a6845; }
+:root[data-theme="dark"] .show-disc-two { border-color: #6beaaa44; }
+:root[data-theme="dark"] .mock-app {
+  background: #1a2a20; border-color: #537d5d;
+  box-shadow: 12px 25px 0 -4px #336847, 0 42px 85px #0008;
+}
+:root[data-theme="dark"] .mock-toolbar { color: #c4e5cf; border-bottom-color: #364d3c; }
+:root[data-theme="dark"] .mock-sidebar { background: #1b2c22; border-right-color: #344e3e; }
+:root[data-theme="dark"] .mock-sidebar-brand { color: #f0fff4; }
+:root[data-theme="dark"] .mock-filter { background: #293d30; color: #aec6b2; }
+:root[data-theme="dark"] .mock-chat.active { background: #2b543b; }
+:root[data-theme="dark"] .mock-chat b { color: #eaf7ed; }
+:root[data-theme="dark"] .mock-chat small { color: #b0c4b3; }
+:root[data-theme="dark"] .mock-chat time { color: #a1c9a9; }
+:root[data-theme="dark"] .mock-sidebar-bottom { color: #b0dfbd; border-top-color: #354d3c; }
+:root[data-theme="dark"] .mock-thread-head { border-bottom-color: #38513f; }
+:root[data-theme="dark"] .mock-thread-head b { color: #ecffef; }
+:root[data-theme="dark"] .mock-thread-head small { color: #b3c7b5; }
+:root[data-theme="dark"] .mock-thread-controls { color: #85d9a2; }
+:root[data-theme="dark"] .mock-messages { background: #19271e; }
+:root[data-theme="dark"] .mock-date { background: #2c4331; color: #d3e8d8; }
+:root[data-theme="dark"] .mock-bubble.incoming { background: #334637; color: #edf8ee; }
+:root[data-theme="dark"] .mock-bubble.outgoing { background: #328655; color: #f7fff9; }
+:root[data-theme="dark"] .mock-time { color: #acbfb0; }
+:root[data-theme="dark"] .mock-compose { border-top-color: #344e3b; color: #bed8c4; }
+:root[data-theme="dark"] .mock-compose span:first-child { color: #a8e4ba; }
+:root[data-theme="dark"] .floating-chip { background: #253c2c; border-color: #477e54; color: #e6ffed; box-shadow: 0 14px 38px #0007; }
+:root[data-theme="dark"] .chip-icon { background: #315a3b; color: #abffd4; }
+:root[data-theme="dark"] .mock-caption { color: #c4ddc8; }
+:root[data-theme="dark"] .hero-edge { border-top-color: #34503b; }
+:root[data-theme="dark"] .edge-inner { color: #a8c2af; }
+:root[data-theme="dark"] .ticker { background: #09150e; border-block: 1px solid #284732; }
+
+/* Feature bento, architecture, download promotion and roadmap */
+:root[data-theme="dark"] .features { background: #121f18; }
+:root[data-theme="dark"] .bento-card { border-color: #385643; }
+:root[data-theme="dark"] .bento-card h3 { color: #f1fff4; }
+:root[data-theme="dark"] .bento-card p { color: #c6dccb; }
+:root[data-theme="dark"] .feature-number { color: #add4b7; }
+:root[data-theme="dark"] .bento-chat { background: #1e4530; }
+:root[data-theme="dark"] .bento-official { background: #24384c; border-color: #395369; }
+:root[data-theme="dark"] .bento-calls { background: #403528; border-color: #5b4835; }
+:root[data-theme="dark"] .bento-album { background: #3c2e49; border-color: #584164; }
+:root[data-theme="dark"] .bento-native { background: #293c31; }
+:root[data-theme="dark"] .bento-local { background: #07170f; border-color: #355b43; }
+:root[data-theme="dark"] .bento-local p { color: #c2ddc9; }
+:root[data-theme="dark"] .mini-conversation { background: #213e2b; box-shadow: 0 12px 30px #061a0e80; }
+:root[data-theme="dark"] .mini-conversation-row { color: #effff2; }
+:root[data-theme="dark"] .mini-conversation-reply { color: #072a17; background: #91ebae; }
+:root[data-theme="dark"] .oa-mock { background: #1b3042; border-color: #41617b; box-shadow: 0 13px 29px #050c1a65; }
+:root[data-theme="dark"] .oa-mock b { color: #edfbff; }
+:root[data-theme="dark"] .oa-mock div span { color: #c2d9e7; }
+:root[data-theme="dark"] .oa-mark { background: #375678; color: #deedff; }
+:root[data-theme="dark"] .oa-lines i { background: #355775; }
+:root[data-theme="dark"] .oa-lines i:first-child { background: #527da3; }
+:root[data-theme="dark"] .call-orb { background: #644b32; }
+:root[data-theme="dark"] .call-orb > div { background: #f0ca8b; color: #272217; }
+:root[data-theme="dark"] .orb-ring { border-color: #947653; }
+:root[data-theme="dark"] .album-art span { border-color: #392a43; }
+:root[data-theme="dark"] .platform-tags span { background: #1c3627; color: #c9efcf; border-color: #4c7153; }
+:root[data-theme="dark"] .local-art { background: #315f40; border-color: #5b9c6b; box-shadow: 0 0 0 18px #254831, 0 0 0 40px #1c3c29; }
+:root[data-theme="dark"] .architecture-section { background: #0b1610; }
+:root[data-theme="dark"] .architecture-copy p { color: #bed2c3; }
+:root[data-theme="dark"] .architecture-diagram { background: #14271b; border-color: #416149; }
+:root[data-theme="dark"] .diagram-node { background: #294532; }
+:root[data-theme="dark"] .diagram-node span { color: #a0edbb; }
+:root[data-theme="dark"] .diagram-node b { color: #f0fff1; }
+:root[data-theme="dark"] .diagram-node small { color: #c0d7c5; }
+:root[data-theme="dark"] .diagram-destination { background: #256d45; }
+:root[data-theme="dark"] .download-promo { background: linear-gradient(110deg,#244f36,#19402d); }
+:root[data-theme="dark"] .download-promo .section-index { color: #a8f8c5; }
+:root[data-theme="dark"] .download-promo p { color: #c4e1c8; }
+:root[data-theme="dark"] .download-glyph { background: #0d2517; box-shadow: 15px 18px 0 #387856; }
+:root[data-theme="dark"] .version-sticker { background: #1a3022; border-color: #518261; box-shadow: 0 15px 40px #04150988; }
+:root[data-theme="dark"] .version-sticker span { color: #a0dab1; }
+:root[data-theme="dark"] .version-sticker b { color: #effff2; }
+:root[data-theme="dark"] .version-sticker small { color: #b8d1be; }
+:root[data-theme="dark"] .roadmap-section { background: #132017; }
+:root[data-theme="dark"] .roadmap-list { border-top-color: #3b5541; }
+:root[data-theme="dark"] .roadmap-list article { border-bottom-color: #3b5541; }
+:root[data-theme="dark"] .roadmap-count { color: #98bca2; }
+:root[data-theme="dark"] .final-cta { background: #1b3021; }
+:root[data-theme="dark"] .final-cta h2 span { color: #7af0b0; }
+:root[data-theme="dark"] .disclaimer-band { background: #263524; border-top-color: #445541; }
+:root[data-theme="dark"] .disclaimer-band p { color: #d5e3cf; }
+:root[data-theme="dark"] .disclaimer-band a { color: #a4ffd0; }
+:root[data-theme="dark"] .site-footer { background: #08150d; }
+:root[data-theme="dark"] .footer-column a { color: #c1d7c6; }
+:root[data-theme="dark"] .footer-bottom { color: #adc3b3; border-top-color: #354a3a; }
+
+/* Downloads */
+:root[data-theme="dark"] .download-landing { background: radial-gradient(circle at 74% 23%,#254f35 0,#15291e 48%,#111d16 85%); border-bottom-color: #35563f; }
+:root[data-theme="dark"] .download-intro p { color: #c1d8c9; }
+:root[data-theme="dark"] .latest-tile { background: #0b2115; box-shadow: 12px 20px 0 #376a48; }
+:root[data-theme="dark"] .latest-tile-title { color: #b2f3c9; }
+:root[data-theme="dark"] .latest-tile > span:nth-last-child(2) { color: #cee0d1; }
+:root[data-theme="dark"] .latest-status { color: #a9f7c3; }
+:root[data-theme="dark"] .packages-section { background: #132018; }
+:root[data-theme="dark"] .arch-picker { background: #203729; border-color: #44624b; }
+:root[data-theme="dark"] .arch-picker label { color: #baefc7; }
+:root[data-theme="dark"] .arch-picker select { color: #f2fff4; background: #11251a; border-color: #466c51; }
+:root[data-theme="dark"] .arch-picker small { color: #aec9b5; }
+:root[data-theme="dark"] .package-card { background: #1c2e22; border-color: #3a5741; }
+:root[data-theme="dark"] .package-card.package-featured { background: #214b31; border-color: #518a62; }
+:root[data-theme="dark"] .package-card.package-aur { background: #292f2b; }
+:root[data-theme="dark"] .package-label { color: #b7d3c0; }
+:root[data-theme="dark"] .package-symbol { color: #98f5b6; }
+:root[data-theme="dark"] .package-icon { background: #2e5a39; color: #befacc; }
+:root[data-theme="dark"] .package-featured .package-icon { background: #65ef9f; color: #112b19; }
+:root[data-theme="dark"] .package-card p { color: #bdcfbf; }
+:root[data-theme="dark"] .package-card-foot > span { color: #b9d6c1; }
+:root[data-theme="dark"] .checksum-banner { background: #203628; border-color: #4b6951; }
+:root[data-theme="dark"] .checksum-banner p { color: #d0dfd1; }
+:root[data-theme="dark"] .checksum-banner a { color: #a5ffd1; }
+:root[data-theme="dark"] .checksum-symbol { color: #b4ffd4; border-color: #79e9a9; }
+:root[data-theme="dark"] .install-section { background: #18281e; }
+:root[data-theme="dark"] .install-chooser { background: #213528; border-color: #476349; }
+:root[data-theme="dark"] .install-hint { color: #baebc7; }
+:root[data-theme="dark"] .install-tab { background: #182a1e; color: #e4f8e9; }
+:root[data-theme="dark"] .install-tab span { color: #b4c9b9; }
+:root[data-theme="dark"] .install-tab:hover,
+:root[data-theme="dark"] .install-tab.selected { background: #2c5a39; border-color: #77ad81; }
+:root[data-theme="dark"] .install-terminal { background: #080f0b; }
+:root[data-theme="dark"] .install-reminder { background: #233729; border-color: #4b624a; }
+:root[data-theme="dark"] .install-reminder p { color: #c0d4c1; }
+:root[data-theme="dark"] .compatibility-section { background: #111e16; }
+:root[data-theme="dark"] .compat-grid article { border-top-color: #72eda5; }
+:root[data-theme="dark"] .compat-grid span { color: #a7d8b5; }
+:root[data-theme="dark"] .compat-grid p { color: #c3d8c9; }
+:root[data-theme="dark"] .faq-section { background: #1a2d20; }
+:root[data-theme="dark"] .faq-list details { background: #24392a; border-color: #4a624f; }
+:root[data-theme="dark"] .faq-list summary { color: #eaffef; }
+:root[data-theme="dark"] .faq-list details p { color: #cfdfd1; }
+:root[data-theme="dark"] .faq-list details a { color: #a2ffcc; }
+
+/* Privacy / Notice / Terms / License / 404 */
+:root[data-theme="dark"] .page-hero { background: #1d3827; border-bottom-color: #3d5844; }
+:root[data-theme="dark"] .page-hero .lead { color: #d2e4d7; }
+:root[data-theme="dark"] .eyebrow { color: #9cf3b9; }
+:root[data-theme="dark"] .legal-nav { background: #1d3022; border-color: #3e5844; }
+:root[data-theme="dark"] .legal-nav a { color: #c1d7c4; }
+:root[data-theme="dark"] .legal-nav a:hover { color: #a0ffca; }
+:root[data-theme="dark"] .legal-card { background: #1b2c21; border-color: #3d5742; box-shadow: 0 8px 25px #0003; }
+:root[data-theme="dark"] .legal-card p,
+:root[data-theme="dark"] .legal-card li { color: #d0e0d1; }
+:root[data-theme="dark"] .legal-card a { color: #99ffc3; }
+:root[data-theme="dark"] .legal-card code { color: #bafbd4; background: #284e36; }
+:root[data-theme="dark"] .meta-line { color: #b1c9b8 !important; }
+:root[data-theme="dark"] .callout { background: #223d2b; border-color: #527257; }
+:root[data-theme="dark"] .callout.warning { background: #413321; border-color: #7c6137; }
+:root[data-theme="dark"] .callout.info { background: #233e2d; }
+:root[data-theme="dark"] .callout strong { color: #e6f7e8; }
+:root[data-theme="dark"] table th { background: #285238; color: #e7fff0; }
+:root[data-theme="dark"] table td,
+:root[data-theme="dark"] table th { border-bottom-color: #46624d; }
+:root[data-theme="dark"] table td { color: #d1e4d4; }
+:root[data-theme="dark"] .empty-page { background: #101815; }
+:root[data-theme="dark"] .empty-page p { color: #c4d8c6; }
+:root[data-theme="dark"] .is-disabled { opacity: .68; }

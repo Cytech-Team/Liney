@@ -44,8 +44,9 @@ installer/download guide. Legal and privacy pages use the same design system.
 This intentionally does not change the separately deployed Web App runtime UI.
 
 The shared stylesheet is website/styles.css; the page-specific markup is in
-index.html and download.html. Mobile navigation uses site.js and download metadata
-uses release.js. Test all pages at desktop/mobile widths and run the website build.
+index.html and download.html. The theme selector (System / Light / Dark) is shared by all static pages.\nIt reads a saved preference from localStorage (if available) before stylesheet\nparsing, follows OS color preference in System mode, and persists manual choices.\nThe separate Web App remains unchanged. Theme bootstrapping uses theme-init.js\nand the dark design layer is theme.css.\n\nMobile navigation uses site.js and download metadata
+uses release.js. Test all pages at desktop/mobile widths, run the website build, and run
+`bun run test:theme` for theme persistence and OS-preference behavior.
 
 ## Published packages and feature status
 
