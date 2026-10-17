@@ -63,10 +63,23 @@ done
 # GStreamer normally starts its plugin scanner in a separate process.
 # AppImage has a private library search path, so copy the helper from the
 # matching host GStreamer version and tell it the exact bundled location.
-if [ -x "$GST_SRC/gst-plugin-scanner" ]; then
-  cp -L "$GST_SRC/gst-plugin-scanner" "$GST_DST/gst-plugin-scanner"
-  chmod 755 "$GST_DST/gst-plugin-scanner"
-fi
+GST_SCANNER_DIR=$(pkg-config --variable=pluginscannerdir gstreamer-1.0 2>/dev/null || true)
+GST_LIBEXEC_DIR=$(pkg-config --variable=libexecdir gstreamer-1.0 2>/dev/null || true)
+GST_SCANNER=""
+for candidate in \
+  "$GST_SCANNER_DIR/gst-plugin-scanner" \
+  "$GST_SRC/gst-plugin-scanner" \
+  "${GST_SRC%/gstreamer-1.0}/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner" \
+  "$GST_LIBEXEC_DIR/gstreamer-1.0/gst-plugin-scanner" \
+  /usr/libexec/gstreamer-1.0/gst-plugin-scanner; do
+  if [ -x "$candidate" ]; then GST_SCANNER="$candidate"; break; fi
+done
+test -n "$GST_SCANNER" || {
+  echo "GStreamer plugin scanner missing; refusing incomplete AppImage" >&2
+  exit 1
+}
+cp -L "$GST_SCANNER" "$GST_DST/gst-plugin-scanner"
+chmod 755 "$GST_DST/gst-plugin-scanner"
 mkdir -p "$APPDIR/apprun-hooks"
 cat > "$APPDIR/apprun-hooks/liney-gstreamer.sh" <<'HOOK'
 #!/bin/sh
