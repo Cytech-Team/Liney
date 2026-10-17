@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f7f2">
+  <meta name="description" content="รู้จักสถาปัตยกรรม Liney Desktop: React, Tauri, Bun, LINEJS, SQLite, ระบบเสียงและการทำงานบน Linux">
+  <meta property="og:title" content="เบื้องหลังระบบ — Liney">
+  <meta property="og:description" content="รู้จักสถาปัตยกรรม Liney Desktop: React, Tauri, Bun, LINEJS, SQLite, ระบบเสียงและการทำงานบน Linux">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="https://liney.namnarak.in.th/assets/liney-logo.png">
+  <title>เบื้องหลังระบบ — Liney</title>
+  <link rel="icon" type="image/svg+xml" href="assets/liney-mark.svg">
+  <script src="theme-init.js"></script>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="theme.css">
+  <script src="site-config.js"></script>
+  <script src="site.js" defer></script>
+</head>
+<body class="product-page technology-page">
+<a class="skip-link" href="#main-content">ข้ามไปยังเนื้อหา</a>
+<header class="site-header">
+  <div class="container nav-shell">
+    <a href="index.html" class="brand" aria-label="Liney หน้าแรก"><img src="assets/liney-mark.svg" alt=""><span class="brand-name">liney<span class="brand-dot">.</span></span><span class="brand-note">for Linux</span></a>
+    <nav class="site-nav" aria-label="เมนูหลัก">
+      <a href="index.html">หน้าแรก</a>
+      <a href="features.html">ฟีเจอร์</a>
+      <a href="technology.html" aria-current="page">เบื้องหลัง</a>
+      <a href="app.html" data-web-app-link>Web App</a>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="download.html" class="nav-cta">ดาวน์โหลด <span aria-hidden="true">↗</span></a>
+    </nav>
+  </div>
+</header>
+<main id="main-content">
+<section class="subpage-hero subpage-tech-hero"><div class="container subpage-hero-layout"><div><span class="section-index">TECHNOLOGY / UNDER THE HOOD</span><h1>ออกแบบแยกส่วน<br><em>สำหรับ Linux จริง</em><span class="headline-period">.</span></h1><p>ดูการทำงานของ Liney Desktop ตั้งแต่หน้าตาไคลเอนต์ไปจนถึง Engine และการจัดเก็บข้อมูลในเครื่อง ไม่ใช่ตัว LINE Official</p><div class="subpage-hero-actions"><a class="button button-dark" href="#how-it-works">ดูสถาปัตยกรรม ↓</a><a class="button button-outline" data-repo-link href="https://github.com/Cytech-Team/Liney">Source Code ↗</a></div></div><div class="technology-hero-art" aria-hidden="true"><span>REACT / TAURI</span><i>↓ IPC</i><span>BUN / LINEJS</span><i>↓ LOCAL</i><span>SQLITE</span></div></div></section><section id="how-it-works" class="section architecture-section">
+    <div class="container architecture-layout">
+      <div class="architecture-copy"><span class="section-index">02 / HOW IT WORKS</span><h2>แอปจริง<br>ไม่ใช่แค่ <em>แท็บเว็บ</em></h2><p>UI ใช้ React และ Tauri ส่วน LINEJS ทำงานใน Bun/TypeScript sidecar พร้อม SQLite สำหรับเก็บข้อมูลในเครื่อง นี่คือโครงสร้างของ Liney Desktop — ไม่ใช่ LINE Official และไม่ใช่ระบบ relay ข้อความกลาง</p><a data-repo-link href="https://github.com/Cytech-Team/Liney" class="button button-light">เปิดดูซอร์สโค้ด ↗</a></div>
+      <div class="architecture-diagram" aria-label="โครงสร้างการทำงานของ Liney Desktop"><div class="diagram-node"><span>01 / FRONTEND</span><b>Liney Desktop</b><small>React · Tauri · WebKitGTK</small></div><div class="diagram-link"><i></i> LOCAL IPC <i></i></div><div class="diagram-node"><span>02 / ENGINE</span><b>Bun + LINEJS</b><small>Sync · SQLite · Native helpers</small></div><div class="diagram-link"><i></i> NETWORK <i></i></div><div class="diagram-node diagram-destination"><span>03 / SERVICES</span><b>LINE services</b><small>ผ่านไคลเอนต์ที่ไม่เป็นทางการ</small></div></div>
+    </div>
+  </section><section class="section technology-details"><div class="container"><div class="section-heading"><div><span class="section-index">TECH STACK</span><h2>แต่ละส่วน<br><em>มีหน้าที่ของมัน</em></h2></div><p>นี่คือภาพรวมจากซอร์สของ Desktop การทำงานจริงขึ้นกับเวอร์ชันของ LINEJS และระบบ Linux ที่ติดตั้ง</p></div>
+<div class="technology-detail-grid">
+<article><span>01 / FRONTEND</span><h3>React + Tauri</h3><p>หน้าตาและการโต้ตอบใช้เว็บเทคโนโลยี โดยฝังอยู่ใน WebView ของระบบ แทนการแบก Chromium แบบ Electron</p></article>
+<article><span>02 / ENGINE</span><h3>Bun + LINEJS</h3><p>Engine ทำหน้าที่เชื่อมต่อและประมวลผลข้อความผ่าน LINEJS พร้อมระบบจัดการงานเบื้องหลัง</p></article>
+<article><span>03 / DATA</span><h3>SQLite + Outbox</h3><p>ฐานข้อมูลและคิวข้อความอยู่ในเครื่องของผู้ใช้ ไม่ได้หมายความว่าข้อมูลที่ LINE ให้บริการจะเก็บในเครื่องทั้งหมด</p></article>
+<article><span>04 / DESKTOP</span><h3>Native helpers</h3><p>ระบบเสียง การแจ้งเตือน และการจับภาพหน้าจอทำงานร่วมกับ Native API และ Wayland/X11 ตามสภาพแวดล้อม</p></article>
+</div></div></section>
+<section class="section subpage-next"><div class="container subpage-next-inner"><div><span class="section-index">NEXT STEPS</span><h2>กำลังพัฒนาอะไร<br><em>ต่อจากนี้?</em></h2></div><a class="button button-dark" href="roadmap.html">ดู Roadmap ↗</a></div></section>
+</main>
+<footer class="site-footer"><div class="container footer-layout"><div class="footer-identity"><a class="brand" href="index.html"><img src="assets/liney-mark.svg" alt=""><span class="brand-name">liney<span class="brand-dot">.</span></span></a><p>LINE on Linux, your way.<br>Independent desktop client by Cytech Team Development.</p></div><div class="footer-column"><b>สำรวจ</b><a href="features.html">ฟีเจอร์</a><a href="technology.html">เบื้องหลังระบบ</a><a href="roadmap.html">Roadmap</a><a href="download.html">ดาวน์โหลด</a><a href="app.html">Web App</a><a href="https://github.com/Cytech-Team/Liney" target="_blank" rel="noopener noreferrer">GitHub</a></div><div class="footer-column"><b>ข้อควรรู้</b><a href="notice.html">Safety Notice</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="license.html">MIT License</a></div><div class="footer-column"><b>ติดต่อ</b><a data-contact-email href="mailto:namnarak@namnarak.in.th">namnarak@namnarak.in.th</a><a href="https://github.com/Cytech-Team/Liney/issues" target="_blank" rel="noopener noreferrer">GitHub Issues ↗</a></div></div><div class="container footer-bottom"><span>© <span data-current-year></span> Cytech Team Development · ไม่ใช่ผลิตภัณฑ์จาก LINE / LY Corporation</span><span>Made for the penguins.</span></div></footer>
+</body>
+</html>

@@ -53,21 +53,24 @@ The repository is public. Keep the repository and release URL pointed at Cytech-
 ## 2026 website redesign
 
 The product website uses a fresh light editorial design with a responsive navigation,
+and a true multi-page structure: `index.html` (overview), `features.html`
+(feature catalog), `technology.html` (architecture), `roadmap.html`
+(development direction), and `download.html` (releases and install).
 CSS-only illustrative desktop chat mock (explicitly marked as a concept), bento-style
 feature summaries, developer architecture, Linux-first roadmap, and an interactive
 installer/download guide. Legal and privacy pages use the same design system.
 This intentionally does not change the separately deployed Web App runtime UI.
 
-The shared stylesheet is website/styles.css; the page-specific markup is in
-index.html and download.html. The theme selector (System / Light / Dark) is shared by all static pages.
+The shared stylesheet is website/styles.css; all public pages use the same
+navigation, footer and System/Light/Dark selector.
 It reads a saved preference from localStorage (if available) before stylesheet
 parsing, follows OS color preference in System mode, and persists manual choices.
 The separate Web App remains unchanged. Theme bootstrapping uses theme-init.js
 and the dark design layer is theme.css.
 
-Mobile navigation uses site.js and download metadata
-uses release.js. Test all pages at desktop/mobile widths, run the website build, and run
-`bun run test:theme` for theme persistence and OS-preference behavior.
+Mobile navigation uses site.js and download metadata uses release.js.
+Test pages at desktop/mobile widths and run `bun run test:website` to check
+links, anchors, theme persistence, cached asset hashes and built pages.
 
 ## Published packages and feature status
 
@@ -103,7 +106,10 @@ python3 -m http.server 4173 --directory dist
 
 ## Pages
 
-- `index.html` — landing page
+- `index.html` — concise landing page linking into detailed pages
+- `features.html` — feature catalog with implementation status
+- `technology.html` — technical architecture and desktop stack
+- `roadmap.html` — current priorities and non-committed future ideas
 - `download.html` — packages, requirements, and FAQ
 - `notice.html` — safety and unofficial-client notice
 - `privacy.html` — local-first privacy notice

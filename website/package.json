@@ -5,6 +5,6 @@
   "scripts": {
     "build": "bun ./build.mjs",
     "test:theme": "node --test tests/theme.test.cjs",
-    "test:website": "bun run build && node --test tests/theme.test.cjs tests/build-cache.test.mjs"
+    "test:website": "bun run build && node --test tests/theme.test.cjs tests/build-cache.test.mjs tests/navigation.test.mjs"
   }
 }

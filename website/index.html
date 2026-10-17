@@ -25,10 +25,10 @@
     <a href="index.html" class="brand" aria-label="Liney หน้าแรก"><img src="assets/liney-mark.svg" alt=""><span class="brand-name">liney<span class="brand-dot">.</span></span><span class="brand-note">for Linux</span></a>
     <nav class="site-nav" aria-label="เมนูหลัก">
       <a href="index.html" aria-current="page">หน้าแรก</a>
-      <a href="index.html#features">ฟีเจอร์</a>
-      <a href="index.html#how-it-works">เบื้องหลัง</a>
+      <a href="features.html">ฟีเจอร์</a>
+      <a href="technology.html">เบื้องหลัง</a>
       <a href="app.html" data-web-app-link>Web App</a>
-      <a href="index.html#roadmap">Roadmap</a>
+      <a href="roadmap.html">Roadmap</a>
       <a href="download.html" class="nav-cta">ดาวน์โหลด <span aria-hidden="true">↗</span></a>
     </nav>
   </div>
@@ -43,7 +43,7 @@
         <p class="hero-subtitle">ไม่ต้องเปิด Windows เพื่ออ่านข้อความอีกต่อไป Liney คือ LINE client แบบอิสระสำหรับ Linux ที่ออกแบบโดยคนใช้ Linux จริง ๆ</p>
         <div class="hero-actions">
           <a href="download.html" class="button button-dark">ดาวน์โหลด Liney <span aria-hidden="true">↗</span></a>
-          <a href="#features" class="button button-outline">รู้จัก Liney <span aria-hidden="true">↓</span></a>
+          <a href="features.html" class="button button-outline">รู้จัก Liney <span aria-hidden="true">↗</span></a>
         </div>
         <div class="hero-footnote"><span class="mini-avatar">L</span><span><strong>Linux Desktop · รุ่นทดลอง</strong><small>ปัจจุบัน <span data-release-version>ตรวจสอบ Release…</span> · ไม่ใช่แอปจาก LINE อย่างเป็นทางการ</small></span></div>
       </div>
@@ -79,71 +79,41 @@
 
   <section class="ticker" aria-label="เทคโนโลยีที่ใช้"><div class="ticker-track"><span>BUILT FOR LINUX</span><i>✳</i><span>TAURI</span><i>✳</i><span>LINEJS</span><i>✳</i><span>LOCAL SQLITE</span><i>✳</i><span>WAYLAND + X11</span><i>✳</i><span>BUILT FOR LINUX</span><i>✳</i><span>TAURI</span><i>✳</i><span>LINEJS</span><i>✳</i></div></section>
 
-  <section id="features" class="section features">
-    <div class="container">
-      <div class="section-heading"><div><span class="section-index">01 / FEATURES</span><h2>ฟีเจอร์เยอะได้<br><em>ไม่ต้องทำให้ชีวิตยาก</em></h2></div><p>ความสามารถที่มาจากโปรเจกต์จริง ทั้งระบบแชต การจัดเก็บในเครื่อง และส่วนที่กำลังทดลอง แต่ละฟีเจอร์มีสถานะชัดเจน</p></div>
-      <div class="bento">
-        <article class="bento-card bento-chat">
-          <div class="card-top"><span class="feature-number">01</span><span class="status ready">มีระบบแล้ว</span></div>
-          <div class="bento-text"><h3>แชตต่อได้เลย</h3><p>แชตเดี่ยว กลุ่ม ส่งข้อความ รูปภาพ ไฟล์ สติกเกอร์ และระบบติดตามสถานะส่งข้อความ</p></div>
-          <div class="mini-conversation" aria-hidden="true"><div class="mini-conversation-row"><span class="mini-face">L</span><span>จาก Linux ถึงเพื่อนทุกคน</span></div><div class="mini-conversation-reply">คุยต่อได้แล้ว! <b>✓✓</b></div></div>
-        </article>
-        <article class="bento-card bento-official">
-          <div class="card-top"><span class="feature-number">02</span><span class="status ready">มีระบบแล้ว</span></div>
-          <div class="bento-text"><h3>คุยกับ Official Account</h3><p>แสดง Flex และ Rich Message จากบัญชี LINE OA รวมถึง action ที่ไคลเอนต์รองรับ</p></div>
-          <div class="oa-mock" aria-hidden="true"><span class="oa-mark">OA</span><div><b>ข้อความแบบ Flex</b><span>การ์ดและข้อความจากบัญชีทางการ</span><div class="oa-lines"><i></i><i></i><i></i></div></div></div>
-        </article>
-        <article class="bento-card bento-calls">
-          <div class="card-top"><span class="feature-number">03</span><span class="status preview">กำลังทดลอง</span></div>
-          <div class="bento-text"><h3>คุยกันด้วยเสียง</h3><p>มีระบบโทรเสียง 1:1 และ Native audio helper ส่วนรับสายและวิดีโอคอลยังต้องทดสอบกับบัญชีจริง</p></div>
-          <div class="call-orb" aria-hidden="true"><div>☎</div><span class="orb-ring"></span></div>
-        </article>
-        <article class="bento-card bento-album">
-          <div class="card-top"><span class="feature-number">04</span><span class="status verify">ต้องตรวจสอบจริง</span></div>
-          <div class="bento-text"><h3>Album และ Note</h3><p>มีหน้าดูอัลบั้ม รูปภาพ และจัดการ Note ความพร้อมขึ้นอยู่กับ LINEJS และบริการ LINE</p></div>
-          <div class="album-art" aria-hidden="true"><span></span><span></span><span></span></div>
-        </article>
-        <article class="bento-card bento-native">
-          <div class="card-top"><span class="feature-number">05</span><span class="status ready">มีระบบแล้ว</span></div>
-          <div class="bento-text"><h3>เกิดมาเพื่อ Desktop</h3><p>System Tray, แจ้งเตือน และระบบจับภาพหน้าจอที่เลือก backend ตาม Wayland/X11</p></div>
-          <div class="platform-tags"><span>Wayland</span><span>X11</span><span>Desktop notifications</span></div>
-        </article>
-        <article class="bento-card bento-local">
-          <div class="card-top"><span class="feature-number">06</span><span class="status ready">มีระบบแล้ว</span></div>
-          <div class="bento-text"><h3>เก็บประวัติในเครื่อง</h3><p>SQLite, sync state, outbox และ credential wallet เมื่อตัวระบบรองรับ ไม่ต้องพึ่งเซิร์ฟเวอร์ข้อความกลางของ Liney Desktop</p></div>
-          <div class="local-art" aria-hidden="true"><span>◈</span><b>LOCAL FIRST</b></div>
-        </article>
-      </div>
-      <p class="fine-print">* สถานะอ้างอิงจากซอร์สของ Liney ไม่ใช่การรับประกันว่าใช้งานได้ครบทุกบัญชีหรือทุกสภาพแวดล้อม Linux <a href="notice.html">อ่านข้อจำกัดก่อนใช้ ↗</a></p>
+  <section id="features" class="section home-preview-section">
+  <div class="container">
+    <div class="section-heading"><div><span class="section-index">01 / THE FEATURES</span><h2>คุยได้เหมือนเดิม<br><em>บน Linux ที่ชอบ</em></h2></div><div class="section-action"><p>รวมฟีเจอร์ที่มีอยู่จริง และสถานะสิ่งที่ยังทดลองอย่างชัดเจน</p><a class="button button-outline" href="features.html">ดูฟีเจอร์ทั้งหมด ↗</a></div></div>
+    <div class="home-teaser-grid">
+      <a class="home-teaser teal" href="features.html#messaging"><span>01 / MESSAGING</span><strong>Chat &amp; Media</strong><p>ข้อความ รูปภาพ ไฟล์ และการซิงก์</p><b>↗</b></a>
+      <a class="home-teaser blue" href="features.html#official"><span>02 / OFFICIAL</span><strong>Official Account</strong><p>Flex / Rich Message และข้อความ OA</p><b>↗</b></a>
+      <a class="home-teaser sand" href="features.html#calling"><span>03 / EXPERIMENTAL</span><strong>Calls &amp; Audio</strong><p>ระบบโทรเสียงที่ยังอยู่ระหว่างทดสอบ</p><b>↗</b></a>
     </div>
-  </section>
+  </div>
+</section>
 
-  <section id="how-it-works" class="section architecture-section">
-    <div class="container architecture-layout">
-      <div class="architecture-copy"><span class="section-index">02 / HOW IT WORKS</span><h2>แอปจริง<br>ไม่ใช่แค่ <em>แท็บเว็บ</em></h2><p>UI ใช้ React และ Tauri ส่วน LINEJS ทำงานใน Bun/TypeScript sidecar พร้อม SQLite สำหรับเก็บข้อมูลในเครื่อง นี่คือโครงสร้างของ Liney Desktop — ไม่ใช่ LINE Official และไม่ใช่ระบบ relay ข้อความกลาง</p><a data-repo-link href="https://github.com/Cytech-Team/Liney" class="button button-light">เปิดดูซอร์สโค้ด ↗</a></div>
-      <div class="architecture-diagram" aria-label="โครงสร้างการทำงานของ Liney Desktop"><div class="diagram-node"><span>01 / FRONTEND</span><b>Liney Desktop</b><small>React · Tauri · WebKitGTK</small></div><div class="diagram-link"><i></i> LOCAL IPC <i></i></div><div class="diagram-node"><span>02 / ENGINE</span><b>Bun + LINEJS</b><small>Sync · SQLite · Native helpers</small></div><div class="diagram-link"><i></i> NETWORK <i></i></div><div class="diagram-node diagram-destination"><span>03 / SERVICES</span><b>LINE services</b><small>ผ่านไคลเอนต์ที่ไม่เป็นทางการ</small></div></div>
-    </div>
-  </section>
+  <section id="how-it-works" class="section home-technology-preview">
+  <div class="container home-technology-layout">
+    <div><span class="section-index">02 / UNDER THE HOOD</span><h2>เกิดมาเพื่อ<br><em>Linux Desktop</em></h2><p>แยก UI, Engine และข้อมูลในเครื่องออกจากกัน ใช้ React + Tauri, Bun + LINEJS และ SQLite เพื่อดูแลส่วนต่าง ๆ ได้ชัดเจน</p><a class="button button-light" href="technology.html">ดูเบื้องหลัง Liney ↗</a></div>
+    <a class="technology-preview-visual" href="technology.html" aria-label="อ่านรายละเอียดสถาปัตยกรรม Liney">
+      <span>DESKTOP UI <small>React · Tauri</small></span><i>↓ LOCAL IPC ↓</i><span>LINEY ENGINE <small>Bun · LINEJS · SQLite</small></span><i>↓ NETWORK ↓</i><span>LINE SERVICES <small>Unofficial protocol</small></span>
+    </a>
+  </div>
+</section>
 
   <section id="download" class="section download-promo">
     <div class="container download-promo-layout"><div><span class="section-index">03 / GET LINEY</span><h2>พร้อมคุยต่อ<br>บน <em>Linux</em> แล้วหรือยัง?</h2><p>AppImage · DEB · RPM · Flatpak bundle · TAR.GZ จากไฟล์ Release ที่มีอยู่จริงบน GitHub</p><a class="button button-dark" href="download.html">เลือกไฟล์สำหรับเครื่องคุณ ↗</a></div><div class="download-promo-art"><span class="download-glyph">↙</span><div class="version-sticker"><span>PUBLIC RELEASE</span><b data-release-version>ตรวจสอบรุ่นล่าสุด…</b><small>ตรวจจาก GitHub Releases</small></div></div></div>
   </section>
 
-  <section id="roadmap" class="section roadmap-section">
-    <div class="container">
-      <div class="section-heading"><div><span class="section-index">04 / WHAT'S NEXT</span><h2>ของดีต้องค่อย ๆ<br><em>ทำให้มันดีจริง</em></h2></div><p>Liney ยังอยู่ระหว่างพัฒนา เราแยกระหว่างสิ่งที่ทำอยู่ กับสิ่งที่เป็นเพียงไอเดียจากชุมชนให้ชัดเจน</p></div>
-      <div class="roadmap-list">
-        <article><span class="roadmap-count">01</span><div><h3>Linux stability</h3><p>การซิงก์ที่เชื่อถือได้ ประสิทธิภาพ การโทร และรายละเอียด UX</p></div><span class="status ready">โฟกัสตอนนี้</span></article>
-        <article><span class="roadmap-count">02</span><div><h3>Liney Lite</h3><p>แนวคิดเวอร์ชันเน้น Chat, Calls และ Albums ยังไม่มีรุ่นที่เปิดให้ใช้งาน</p></div><span class="status idea">กำลังพิจารณา</span></article>
-        <article><span class="roadmap-count">03</span><div><h3>Windows &amp; macOS</h3><p>ยังไม่มีแผนพอร์ตตอนนี้ อาจทบทวนหากมีความต้องการจากชุมชนเพียงพอ</p></div><span class="status idea">ยังไม่กำหนด</span></article>
-      </div>
-    </div>
-  </section>
+  <section id="roadmap" class="section home-roadmap-preview">
+  <div class="container">
+    <div class="section-heading"><div><span class="section-index">04 / NEXT UP</span><h2>ไปต่อแบบ<br><em>ไม่รับปากเกินจริง</em></h2></div><div class="section-action"><p>โฟกัส Linux ก่อน ส่วน Liney Lite และแพลตฟอร์มอื่นยังเป็นไอเดีย</p><a class="button button-outline" href="roadmap.html">เปิด Roadmap ↗</a></div></div>
+    <div class="home-roadmap-strip"><span>NOW</span><strong>ปรับความเสถียรบน Linux</strong><span class="status ready">กำลังพัฒนา</span><a href="roadmap.html" aria-label="ดู Roadmap">↗</a></div>
+  </div>
+</section>
 
   <section class="section final-cta"><div class="container final-cta-inner"><img src="assets/liney-mark.svg" alt="" aria-hidden="true"><div><span class="section-index">COME SAY HELLO</span><h2>มี Linux ก็มี Liney<span>.</span></h2><p>ลองใช้ แชร์ความคิดเห็น และช่วยกันทำให้การแชตบน Linux ดีขึ้น</p></div><div class="final-actions"><a class="button button-dark" href="download.html">ดาวน์โหลดเลย ↗</a><a class="button button-outline" href="https://github.com/Cytech-Team/Liney/issues" target="_blank" rel="noopener noreferrer">แจ้งปัญหา / เสนอไอเดีย</a></div></div></section>
   <section class="disclaimer-band"><div class="container"><b>ควรรู้ก่อนใช้งาน</b><p>Liney เป็นไคลเอนต์อิสระ ไม่เกี่ยวข้องกับหรือได้รับการรับรองจาก LY Corporation การใช้โปรโตคอลที่ไม่เป็นทางการอาจขัดกับข้อกำหนดของ LINE และมีความเสี่ยงต่อบัญชี</p><a href="notice.html">อ่าน Safety Notice ↗</a></div></section>
 </main>
 
-<footer class="site-footer"><div class="container footer-layout"><div class="footer-identity"><a class="brand" href="index.html"><img src="assets/liney-mark.svg" alt=""><span class="brand-name">liney<span class="brand-dot">.</span></span></a><p>LINE on Linux, your way.<br>Independent desktop client by Cytech Team Development.</p></div><div class="footer-column"><b>สำรวจ</b><a href="index.html#features">ฟีเจอร์</a><a href="download.html">ดาวน์โหลด</a><a href="app.html">Web App</a><a href="https://github.com/Cytech-Team/Liney" target="_blank" rel="noopener noreferrer">GitHub</a></div><div class="footer-column"><b>ข้อควรรู้</b><a href="notice.html">Safety Notice</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="license.html">MIT License</a></div><div class="footer-column"><b>ติดต่อ</b><a data-contact-email href="mailto:namnarak@namnarak.in.th">namnarak@namnarak.in.th</a><a href="https://github.com/Cytech-Team/Liney/issues" target="_blank" rel="noopener noreferrer">GitHub Issues ↗</a></div></div><div class="container footer-bottom"><span>© <span data-current-year></span> Cytech Team Development · ไม่ใช่ผลิตภัณฑ์จาก LINE / LY Corporation</span><span>Made for the penguins.</span></div></footer>
+<footer class="site-footer"><div class="container footer-layout"><div class="footer-identity"><a class="brand" href="index.html"><img src="assets/liney-mark.svg" alt=""><span class="brand-name">liney<span class="brand-dot">.</span></span></a><p>LINE on Linux, your way.<br>Independent desktop client by Cytech Team Development.</p></div><div class="footer-column"><b>สำรวจ</b><a href="features.html">ฟีเจอร์</a><a href="technology.html">เบื้องหลังระบบ</a><a href="roadmap.html">Roadmap</a><a href="download.html">ดาวน์โหลด</a><a href="app.html">Web App</a><a href="https://github.com/Cytech-Team/Liney" target="_blank" rel="noopener noreferrer">GitHub</a></div><div class="footer-column"><b>ข้อควรรู้</b><a href="notice.html">Safety Notice</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="license.html">MIT License</a></div><div class="footer-column"><b>ติดต่อ</b><a data-contact-email href="mailto:namnarak@namnarak.in.th">namnarak@namnarak.in.th</a><a href="https://github.com/Cytech-Team/Liney/issues" target="_blank" rel="noopener noreferrer">GitHub Issues ↗</a></div></div><div class="container footer-bottom"><span>© <span data-current-year></span> Cytech Team Development · ไม่ใช่ผลิตภัณฑ์จาก LINE / LY Corporation</span><span>Made for the penguins.</span></div></footer>
 </body>
 </html>

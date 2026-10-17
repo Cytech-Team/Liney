@@ -6,8 +6,9 @@ import { fileURLToPath } from "node:url";
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dist = path.join(root, "dist");
 const files = [
-  "404.html", "app.html", "download.html", "index.html", "license.html",
-  "LICENSE.txt", "notice.html", "privacy.html", "robots.txt",
+  "404.html", "app.html", "download.html", "index.html",
+  "features.html", "technology.html", "roadmap.html", "license.html",
+  "LICENSE.txt", "notice.html", "privacy.html", "robots.txt", "sitemap.xml",
   "site-config.js", "site.js", "theme-init.js", "release.js",
   "styles.css", "theme.css", "terms.html", "favicon.svg",
   "icons.svg", "liney-logo.png", "liney-mark.svg",

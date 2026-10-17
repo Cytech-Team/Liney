@@ -260,3 +260,59 @@
 :root[data-theme="dark"] .empty-page { background: #101815; }
 :root[data-theme="dark"] .empty-page p { color: #c4d8c6; }
 :root[data-theme="dark"] .is-disabled { opacity: .68; }
+
+/* Dedicated multi-page Liney experience — dark variants */
+:root[data-theme="dark"] .home-preview-section {background:#122119}
+:root[data-theme="dark"] .home-teaser {border-color:#3a6246}
+:root[data-theme="dark"] .home-teaser.teal {background:#214631}
+:root[data-theme="dark"] .home-teaser.blue {background:#263c51;border-color:#355b75}
+:root[data-theme="dark"] .home-teaser.sand {background:#453b2c;border-color:#66553d}
+:root[data-theme="dark"] .home-teaser > span {color:#a5ebbf}
+:root[data-theme="dark"] .home-teaser strong {color:#f1fff5}
+:root[data-theme="dark"] .home-teaser p {color:#c6dbc9}
+:root[data-theme="dark"] .home-technology-preview {background:#0d1b12}
+:root[data-theme="dark"] .home-technology-preview p {color:#c2d9c8}
+:root[data-theme="dark"] .home-roadmap-preview {background:#1c3022}
+:root[data-theme="dark"] .home-roadmap-strip {background:#223a29;border-color:#43624a}
+:root[data-theme="dark"] .home-roadmap-strip > span:first-child {color:#a7f3c2}
+:root[data-theme="dark"] .section-action p {color:#bfd5c4}
+:root[data-theme="dark"] .subpage-feature-hero {background:linear-gradient(116deg,#183224,#244c33)}
+:root[data-theme="dark"] .subpage-tech-hero {background:linear-gradient(116deg,#122820,#205044)}
+:root[data-theme="dark"] .subpage-roadmap-hero {background:linear-gradient(116deg,#2a3324,#294d33)}
+:root[data-theme="dark"] .subpage-hero h1 em {color:#9dfac3}
+:root[data-theme="dark"] .subpage-hero p {color:#d4e8d9}
+:root[data-theme="dark"] .feature-hero-circle {background:#277b4a;color:#cafadb;box-shadow:0 0 0 26px #326846,0 0 0 58px #29553a}
+:root[data-theme="dark"] .feature-hero-chip {background:#1d3b29;color:#c0ffd9;border-color:#568667;box-shadow:0 12px 30px #0007}
+:root[data-theme="dark"] .technology-hero-art {background:#254936;border-color:#518a63;box-shadow:14px 14px 0 #163522}
+:root[data-theme="dark"] .technology-hero-art span {background:#112e1e;color:#e8fff0}
+:root[data-theme="dark"] .technology-hero-art i {color:#a8ebc0}
+:root[data-theme="dark"] .roadmap-phase {background:#1b6037;border-color:#469e69;color:#c9f9d4;box-shadow:0 13px 27px #040f0770}
+:root[data-theme="dark"] .roadmap-phase strong {color:#edfff2}
+:root[data-theme="dark"] .roadmap-phase.phase-future {background:#3b4937;border-color:#63745f}
+:root[data-theme="dark"] .roadmap-hero-art > i {color:#a1d4ae}
+:root[data-theme="dark"] .feature-detail-section {background:#17291c}
+:root[data-theme="dark"] .feature-status-grid article {background:#223729;border-color:#48654f}
+:root[data-theme="dark"] .feature-status-grid p {color:#cbdfd0}
+:root[data-theme="dark"] .technology-details {background:#14241a}
+:root[data-theme="dark"] .technology-detail-grid article {background:#203d2b;border-color:#41634a}
+:root[data-theme="dark"] .technology-detail-grid article:nth-child(2) {background:#20384a;border-color:#36586a}
+:root[data-theme="dark"] .technology-detail-grid article:nth-child(3) {background:#453727;border-color:#605039}
+:root[data-theme="dark"] .technology-detail-grid article:nth-child(4) {background:#3a2b43;border-color:#52405e}
+:root[data-theme="dark"] .technology-detail-grid article > span {color:#a5f5c8}
+:root[data-theme="dark"] .technology-detail-grid p {color:#d2e1d7}
+:root[data-theme="dark"] .roadmap-notes {background:#172b1e}
+:root[data-theme="dark"] .roadmap-note-grid article {background:#22392a;border-color:#42634b}
+:root[data-theme="dark"] .roadmap-note-grid p {color:#c9dccd}
+:root[data-theme="dark"] .roadmap-feedback {background:#265437;border-color:#4a8c5d}
+:root[data-theme="dark"] .roadmap-feedback p {color:#d4e9d7}
+:root[data-theme="dark"] .subpage-next {background:#214e31}
+:root[data-theme="dark"] .subpage-next h2 em {color:#a4ffd2}
+@media (max-width: 990px) {
+ .site-nav a {font-size:.8rem;padding:.55rem .67rem}
+ .site-nav {gap:0}
+ .theme-picker {margin-left:.25rem}
+}
+@media (max-width: 720px) {
+ .site-nav {gap:.25rem}
+ .site-nav a {font-size:.91rem;padding:.8rem 1rem}
+}
