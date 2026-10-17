@@ -240,7 +240,7 @@ function Landing({ onNavigate }: { onNavigate: (path: string) => void }) {
           <article className="marketing-roadmap-card">
             <span className="marketing-roadmap-label upcoming"><Clock3 size={16} /> ขั้นต่อไป</span>
             <h3>ความสมบูรณ์ของ Client</h3>
-            <p>จัดการกลุ่ม, Notes และเติม UI ให้ความสามารถที่ Protocol รองรับ</p>
+            <p>จัดการกลุ่ม, Notes, VOOM และเติม UI ให้ความสามารถที่ Protocol รองรับ</p>
             <small>พร้อมตรวจสอบการเปลี่ยนแปลงของ LINEJS เป็นระยะ</small>
           </article>
         </div>

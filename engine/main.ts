@@ -5301,6 +5301,30 @@ async function handle(request: any) {
       return;
     }
 
+    if (method === "chat.identity.merge") {
+      const aliasInput = String(request?.params?.aliasMid ?? "").trim();
+      const canonicalInput = String(request?.params?.canonicalMid ?? "").trim();
+      if (!/^u[0-9a-f]{32}$/i.test(aliasInput) || !/^u[0-9a-f]{32}$/i.test(canonicalInput)) {
+        throw new Error("เลือกแชตส่วนตัวสองรายการที่ต้องการรวม");
+      }
+      const aliasMid = aliasInput;
+      const canonicalMid = canonicalTalkIdentityMid(canonicalInput);
+      if (canonicalTalkIdentityMid(aliasMid) === canonicalMid) throw new Error("แชตสองรายการนี้ถูกรวมไว้แล้ว");
+      if (!database.mergeTalkIdentity(ACCOUNT_ID, aliasMid, canonicalMid)) {
+        throw new Error("ไม่พบแชตส่วนตัวทั้งสองรายการในข้อมูลเครื่องนี้");
+      }
+      for (const mid of new Set([aliasInput, canonicalInput, aliasMid, canonicalMid])) {
+        talkMessageBoxCache.delete(mid);
+        preSyncedMessages.delete("talk:" + mid);
+        liveMessageOverlayKeys.delete("talk:" + mid);
+      }
+      const chats = collapseTalkIdentityAliases(database.listConversationChats(ACCOUNT_ID));
+      database.upsertChats(ACCOUNT_ID, chats as DatabaseChat[]);
+      emit({ type: "event.chats.updated", kind: "talk", chats });
+      emit({ id, ok: true, result: { merged: true, canonicalMid } });
+      return;
+    }
+
     if (method === "chat.list" || method === "chats.list") {
       if (preSyncedChats) {
         const synced = preSyncedChats;

@@ -2,21 +2,19 @@
 <html lang="th">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Liney Connector</title>
     <link rel="stylesheet" href="popup.css">
   </head>
   <body>
     <main>
-      <img src="icons/liney-logo.png" alt="" class="logo">
       <h1>Liney Connector</h1>
-      <p id="status">กำลังตรวจสถานะ...</p>
-      <dl>
-        <dt>Mode</dt><dd>Chrome Extension Bridge</dd>
-        <dt>Relay</dt><dd>No central Worker</dd>
-        <dt>Client</dt><dd>Liney-Website</dd>
-      </dl>
-      <button id="open-app" type="button">เปิด Liney Web App</button>
+      <p id="status">กำลังเช็ก...</p>
+      <label>Runner URL<input id="runner-url" autocomplete="off" spellcheck="false"></label>
+      <label>Runner token<input id="runner-token" type="password" autocomplete="off" spellcheck="false" placeholder="วาง token จาก Home Server"></label>
+      <label class="row"><input id="runner-enabled" type="checkbox"> เปิดใช้ Home Runner</label>
+      <button id="save">บันทึก</button>
+      <button id="check">เช็ก runner</button>
+      <button id="open-app">เปิด Liney Web App</button>
     </main>
     <script src="popup.js"></script>
   </body>

@@ -25,7 +25,7 @@ mkdir -p "$OUT" "$WORK"
 "$BUN" run doctor
 "$BUN" test
 "$BUN" run lint
-"$BUN" run build
+"$BUN" run build -- --bundles deb,rpm
 
 APP="$ROOT/src-tauri/target/release/liney"
 TARGET=$(rustc -vV | sed -n 's/^host: //p')
@@ -35,7 +35,6 @@ AUDIO="$ROOT/src-tauri/binaries/liney-audio-$TARGET"
 SCREEN="$ROOT/src-tauri/binaries/liney-screen-$TARGET"
 SCREEN_WAYLAND="$ROOT/src-tauri/binaries/liney-screen-wayland-$TARGET"
 SCREEN_X11="$ROOT/src-tauri/binaries/liney-screen-x11-$TARGET"
-APPIMAGE=$(find "$ROOT/src-tauri/target/release/bundle/appimage" -maxdepth 1 -type f -name '*.AppImage' -print -quit)
 DEB=$(find "$ROOT/src-tauri/target/release/bundle/deb" -maxdepth 1 -type f -name '*.deb' -print -quit)
 RPM=$(find "$ROOT/src-tauri/target/release/bundle/rpm" -maxdepth 1 -type f -name '*.rpm' -print -quit 2>/dev/null || true)
 
@@ -46,14 +45,10 @@ test -x "$AUDIO"
 test -x "$SCREEN"
 test -x "$SCREEN_WAYLAND"
 test -x "$SCREEN_X11"
-test -n "$APPIMAGE" && test -f "$APPIMAGE"
 test -n "$DEB" && test -f "$DEB"
 
-APPIMAGE_OUT="$OUT/Liney-${VERSION}-linux-${ARCH}.AppImage"
 DEB_OUT="$OUT/Liney-${VERSION}-linux-${ARCH}.deb"
-cp "$APPIMAGE" "$APPIMAGE_OUT"
 cp "$DEB" "$DEB_OUT"
-chmod +x "$APPIMAGE_OUT"
 
 if [ -n "$RPM" ] && [ -f "$RPM" ]; then
   RPM_OUT="$OUT/Liney-${VERSION}-linux-${ARCH}.rpm"
@@ -75,10 +70,10 @@ install -m644 "$ROOT/packaging/liney.desktop" "$PORTABLE/liney.desktop"
 install -m644 "$ROOT/packaging/liney.png" "$PORTABLE/liney.png"
 install -m644 "$ROOT/README.md" "$PORTABLE/README.md"
 install -m644 "$ROOT/LICENSE" "$PORTABLE/LICENSE"
+install -m644 "$ROOT/native/vendor/libwayshot-liney/LICENSE-BSD" "$PORTABLE/LICENSE-WAYSHOT-BSD"
 
 tar -C "$WORK" -czf "$OUT/$PORTABLE_NAME.tar.gz" "$PORTABLE_NAME"
 
-APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGE_OUT" --appimage-version >/dev/null
 if command -v dpkg-deb >/dev/null 2>&1; then
   dpkg-deb --info "$DEB_OUT" >/dev/null
   dpkg-deb --contents "$DEB_OUT" | grep -q 'usr/bin/liney-engine'
@@ -105,7 +100,7 @@ grep -q '"pong":true' "$ENGINE_SMOKE"
 CHECKSUM="$OUT/Liney-${VERSION}-linux-${ARCH}.sha256"
 (
   cd "$OUT"
-  files="Liney-${VERSION}-linux-${ARCH}.AppImage Liney-${VERSION}-linux-${ARCH}.deb $PORTABLE_NAME.tar.gz"
+  files="Liney-${VERSION}-linux-${ARCH}.deb $PORTABLE_NAME.tar.gz"
   if [ -f "Liney-${VERSION}-linux-${ARCH}.rpm" ]; then files="$files Liney-${VERSION}-linux-${ARCH}.rpm"; fi
   # shellcheck disable=SC2086
   sha256sum $files

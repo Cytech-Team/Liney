@@ -51,6 +51,7 @@
   "author": "Cytech Team Development",
   "repository": "https://github.com/Cytech-Team/Liney",
   "patchedDependencies": {
-    "@jsr/evex__linejs@3.4.2": "patches/@jsr%2Fevex__linejs@3.4.2.patch"
+    "@jsr/evex__linejs@3.4.2": "patches/@jsr%2Fevex__linejs@3.4.2.patch",
+    "lucide-react@1.41.0": "patches/lucide-react@1.41.0.patch"
   }
 }

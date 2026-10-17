@@ -1,10 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Liney Connector",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Connect Liney Web App to LINE endpoints from the user's browser without a central Worker relay.",
   "minimum_chrome_version": "120",
-  "permissions": ["storage"],
+  "permissions": [
+    "storage"
+  ],
   "host_permissions": [
     "https://liney.namnarak.in.th/*",
     "https://legy.line-apps.com/*",
@@ -13,7 +15,11 @@
     "https://gw.line.naver.jp/*",
     "https://obs.line-scdn.net/*",
     "https://dl.profile.line-cdn.net/*",
-    "https://profile.line-scdn.net/*"
+    "https://profile.line-scdn.net/*",
+    "https://cdn.cytechteam.site/*",
+    "https://*.cytechteam.site/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -21,8 +27,13 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://liney.namnarak.in.th/app*", "https://liney.pages.dev/app*"],
-      "js": ["content.js"],
+      "matches": [
+        "https://liney.namnarak.in.th/app*",
+        "https://liney.pages.dev/app*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_start"
     }
   ],

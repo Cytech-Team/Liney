@@ -30,6 +30,9 @@
       },
     },
   },
+  "patchedDependencies": {
+    "lucide-react@1.41.0": "patches/lucide-react@1.41.0.patch",
+  },
   "packages": {
     "@evex/linejs": ["@jsr/evex__linejs@3.5.0", "https://npm.jsr.io/~/11/@jsr/evex__linejs/3.5.0.tgz", { "dependencies": { "@jsr/evex__linejs-types": "^3.5.0", "@jsr/evex__loose-types": "^1.0.1", "@noble/ciphers": "^2.2", "@types/node-int64": "^0.4.32", "@types/thrift": "^0.10.17", "crypto-js": "^4.2.0", "curve25519-js": "^0.0.4", "node-bignumber": "^1.2.2", "node-int64": "^0.4.0", "opusscript": "^0.1.1", "thrift": "^0.20.0", "tweetnacl": "^1.0.3", "undici": "^7" } }, "sha512-LdE2YYA48FAa0NBm8Tq0VyCre5xJ5gQ7+HmJy/VNAE0GozqiuNlB5Y7dKvM1QYe0oyOacYtHHdIknc0xVv8z4w=="],
 

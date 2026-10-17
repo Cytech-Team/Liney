@@ -1,10 +1,42 @@
-# Liney
+<div align="center">
 
-<p align="center">
-  <img src="branding/liney-logo.jpg" alt="Liney logo" width="640">
+<img src="public/liney-logo.png" alt="Liney — a penguin hugging a chat bubble" width="370">
+
+<h1>Liney</h1>
+
+**LINE for Linux.**
+*Chat closer on Linux.*
+
+<p>
+  <a href="#development-requirements"><img src="https://img.shields.io/badge/Platform-Linux-1EC87E?style=for-the-badge&logo=linux&logoColor=white" alt="Platform: Linux"></a>
+  <a href="#what-liney-is"><img src="https://img.shields.io/badge/Desktop-React_%2B_Tauri-182B29?style=for-the-badge&logo=tauri&logoColor=5FE6B0" alt="Desktop UI: React and Tauri"></a>
+  <a href="#engine-rpc"><img src="https://img.shields.io/badge/Engine-Bun_%2B_TypeScript-182B29?style=for-the-badge&logo=typescript&logoColor=5FE6B0" alt="Engine: Bun and TypeScript"></a>
 </p>
 
-<p align="center"><strong>LINE for Linux.</strong><br>Chat closer on Linux.</p>
+<p>
+  <a href="#current-implementation"><img src="https://img.shields.io/badge/Status-In_Development-2C7A5B?style=flat-square" alt="Status: In development"></a>
+  <a href="#license"><img src="https://img.shields.io/badge/License-TLL--1.0-26BF75?style=flat-square" alt="License: TLL-1.0"></a>
+  <a href="#license"><img src="https://img.shields.io/badge/Source-Available-23383A?style=flat-square" alt="Source available; custom license"></a>
+  <a href="#build-and-release"><img src="https://img.shields.io/badge/Packages-DEB_%7C_RPM_%7C_AppImage-23383A?style=flat-square" alt="Packages: DEB, RPM and AppImage"></a>
+</p>
+
+<a href="https://liney.namnarak.in.th">Website</a> ·
+<a href="https://github.com/Cytech-Team/Liney/releases">Downloads</a> ·
+<a href="#current-implementation">Features</a> ·
+<a href="#security-and-local-data">Privacy &amp; Security</a> ·
+<a href="#development-requirements">Development</a> ·
+<a href="#star-history">Star History</a>
+
+</div>
+
+<!-- CYTECH_README_REFRESH:START -->
+<p align="center"><sub>Independent LINE client for Linux</sub></p>
+
+<p align="center"><a href="#why-liney-exists">Why Liney exists</a> &nbsp;·&nbsp; <a href="#what-liney-is">What Liney is</a> &nbsp;·&nbsp; <a href="#current-implementation">Current implementation</a> &nbsp;·&nbsp; <a href="#security-and-local-data">Security and local data</a> &nbsp;·&nbsp; <a href="https://github.com/Cytech-Team/Liney/issues">Issues</a> &nbsp;·&nbsp; <a href="https://github.com/Cytech-Team/Liney/releases">Releases</a></p>
+
+<!-- CYTECH_README_REFRESH:END -->
+
+---
 
 Liney is an independent Linux desktop client for LINE. The UI is built with
 React + Tauri (WebView), the protocol engine is a standalone TypeScript/Bun
@@ -355,3 +387,15 @@ versioned AppImage, Debian, RPM, portable tarball, and SHA-256 checksum files to
 Tags matching the application version (for example `v0.1.0`) run the same release
 gate in GitHub Actions on x86_64 and aarch64 and attach the verified artifacts to
 the GitHub Release automatically.
+
+## Star History
+
+Follow Liney's public GitHub star growth on [Star History](https://star-history.dera.page/Cytech-Team/Liney).
+
+<!-- Public-release note:
+     The repository is currently private. After making it public, verify the
+     Star History data before replacing this link with a chart embed.
+     GitHub's 2026 stargazer-history API restrictions can leave third-party
+     embedded charts empty. Prefer a maintainer-generated static SVG if needed.
+     Never publish a GitHub access token in README markup.
+-->

@@ -1,43 +1,30 @@
-# Liney Connector Extension
+# Liney Connector
 
-Chrome MV3 connector for Liney Web App.
+Chrome extension bridge for `https://liney.namnarak.in.th/app`.
 
-Goal:
+Default transport:
 
-- Keep `/app` as the same React UI as the desktop app.
-- Avoid Cloudflare Worker or a central Liney relay as the default path.
-- Let the user's browser extension perform allowed cross-origin LINE requests.
+```text
+Liney Web App -> Liney Connector extension -> Liney Home Runner -> local Liney JSONL engine -> LINE
+```
 
-## Local install for testing
+Default runner URL:
+
+```text
+https://cdn.cytechteam.site/liney-runner
+```
+
+The connector stores only its runner URL/token in `chrome.storage.local`. It does not include a hard-coded runner token and does not use Cloudflare Worker relay by default.
+
+## Dev install
 
 1. Open `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Click **Load unpacked**.
-4. Select `extensions/liney-connector`.
-5. Open `https://liney.namnarak.in.th/app`.
+2. Enable Developer mode.
+3. Load unpacked: `extensions/liney-connector`.
+4. Open the extension popup, set the Home Runner token, then open Liney Web App.
 
-## Chrome Web Store unlisted release
-
-Zip the extension folder and upload it to the Chrome Web Store Developer Dashboard as **Unlisted**.
+## Package
 
 ```sh
 bun run extension:zip
 ```
-
-The zip is created at `release/Liney-Connector-0.1.0.zip`.
-
-## Current runtime status
-
-Implemented now:
-
-- content-script bridge from `liney.namnarak.in.th/app`
-- extension background request handler
-- connector capabilities / ping
-- cross-origin relay fetch from the extension, not from Cloudflare Worker
-- empty safe responses for list/history calls so the desktop UI can boot on web
-
-Pending:
-
-- browser-safe LINEJS QR login flow
-- session persistence in extension storage
-- chat sync/send mapping through the connector transport

@@ -100,6 +100,31 @@ describe("LineJsAdapter fallback polling", () => {
 });
 
 
+describe("LineJsAdapter fallback polling", () => {
+  test("creates one stateful LINEJS Polling instance for talk and square fallback cycles", () => {
+    let created = 0;
+    const calls: string[] = [];
+    const polling = {
+      _listenTalkEvents: (options: unknown) => { calls.push(`talk:${String(Boolean(options))}`); return {} as AsyncIterable<unknown>; },
+      _listenSquareEvents: (options: unknown) => { calls.push(`square:${String(Boolean(options))}`); return {} as AsyncIterable<unknown>; },
+    };
+    const client = {
+      base: {
+        createPolling: () => { created += 1; return polling; },
+      },
+    } as any;
+
+    const session = createPollingSession(client);
+    session.talk({ pollingInterval: 1000 });
+    session.square({ pollingInterval: 1000 });
+    session.talk({ pollingInterval: 250 });
+
+    expect(created).toBe(1);
+    expect(calls).toEqual(["talk:true", "square:true", "talk:true"]);
+  });
+});
+
+
 describe("LineJsAdapter E2EE Talk media", () => {
   test("keeps media replies encrypted and attaches the relation to the final Talk message", async () => {
     const uploads: Array<Record<string, unknown>> = [];

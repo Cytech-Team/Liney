@@ -5654,6 +5654,7 @@ function AuthModal({
 }) {
   const [riskAcknowledged, setRiskAcknowledged] = useState(false);
   const canLogin = engineState === "ready" && !authBusy && riskAcknowledged;
+  const isWebRuntime = !lineyEngine.isNative && typeof window !== "undefined" && window.location.pathname === "/app";
 
   return (
     <motion.div className="modal-backdrop auth-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -5664,7 +5665,7 @@ function AuthModal({
         <h2>{keyImportMode ? "รับคีย์ E2EE จากมือถือ" : authenticated ? (profileName || "เชื่อม LINE แล้ว") : "เชื่อมบัญชี LINE"}</h2>
         <p className="auth-copy">{keyImportMode
           ? "สแกนด้วยมือถือที่มีคีย์เดิม โดยใช้บัญชีเดียวกับ Desktop"
-          : authenticated ? "บัญชีนี้เชื่อมต่อกับ Liney แล้ว" : "ต้องเข้าสู่ระบบก่อนจึงจะใช้แชตและฟีเจอร์ของ Liney ได้"}</p>
+          : authenticated ? "บัญชีนี้เชื่อมต่อกับ Liney แล้ว" : isWebRuntime ? "Liney Web ใช้ Public Home Runner แยก session ต่อ browser และรองรับการเข้าสู่ระบบด้วย QR Code" : "ต้องเข้าสู่ระบบก่อนจึงจะใช้แชตและฟีเจอร์ของ Liney ได้"}</p>
 
         {authenticated ? (
           keyImportMode ? (
@@ -5713,7 +5714,7 @@ function AuthModal({
               <button type="button" role="tab" aria-selected={authMode === "qr"} className={authMode === "qr" ? "active" : ""} disabled={authBusy} onClick={() => onModeChange("qr")}>
                 <QrCode size={15}/> QR Code
               </button>
-              <button type="button" role="tab" aria-selected={authMode === "password"} className={authMode === "password" ? "active" : ""} disabled={authBusy} onClick={() => onModeChange("password")}>
+              <button type="button" role="tab" aria-selected={authMode === "password"} className={authMode === "password" ? "active" : ""} disabled={authBusy || isWebRuntime} title={isWebRuntime ? "Liney Web Public ใช้ QR Code เท่านั้น เพื่อไม่ส่งรหัสผ่าน LINE ผ่าน Home Runner" : undefined} onClick={() => onModeChange("password")}>
                 <Mail size={15}/> Email / Password
               </button>
             </div>
@@ -5770,7 +5771,11 @@ function AuthModal({
         {authenticated && !keyImportMode ? (
           <button className="auth-secondary-danger" onClick={() => void onLogout()}>ออกจากระบบบนเครื่องนี้</button>
         ) : null}
-        <div className="auth-footnote">Client: {clientIdentity?.displayName || "Liney-Linux"} · Credential: {storageMode === "wallet" ? "Wallet / Secret Service" : storageMode === "encrypted-file" ? "Encrypted local fallback (AES-256-GCM · ย้ายเข้า Wallet อัตโนมัติเมื่อพร้อม)" : "session-only (ไม่ persist credential)"} · E2EE storage อยู่ที่ ~/.local/share/liney · ไม่มี Liney server กลาง</div>
+        <div className="auth-footnote">
+          {isWebRuntime
+            ? <>Client: {clientIdentity?.displayName || "Liney-Website"} · Public Home Runner session แยกต่อ browser · Credential: {storageMode === "wallet" ? "Wallet / Secret Service" : "session-only"} · session/E2EE/cache ถูกเก็บชั่วคราวในพื้นที่แยกบน Home Server และลบเมื่อ session หมดอายุหรือถูกปิด · ไม่ใช้ Chrome Extension หรือ Cloudflare Worker</>
+            : <>Client: {clientIdentity?.displayName || "Liney-Linux"} · Credential: {storageMode === "wallet" ? "Wallet / Secret Service" : storageMode === "encrypted-file" ? "Encrypted local fallback (AES-256-GCM · ย้ายเข้า Wallet อัตโนมัติเมื่อพร้อม)" : "session-only (ไม่ persist credential)"} · E2EE storage อยู่ที่ ~/.local/share/liney · ไม่มี Liney server กลาง</>}
+        </div>
       </motion.section>
     </motion.div>
   );
