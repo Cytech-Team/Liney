@@ -65,7 +65,7 @@ import {
   talkMessageBoxHistoryState,
   talkMessageBoxId,
 } from "./talk-history";
-import { parseFlexMessage } from "./flex";
+import { flexAltText, parseFlexMessage } from "./flex";
 import { parseRichMessage } from "./rich";
 import { richAssetAuthHeaders } from "./rich-asset";
 import { callHistoryPreview, parseCallHistory } from "./call-history";
@@ -348,6 +348,8 @@ const database = new LineyDatabase(databasePath());
 if (readCredential()) ACCOUNT_ID = database.latestAccountId() ?? ACCOUNT_ID;
 // Recover names for cached direct chats from messages sent by that exact MID.
 database.restorePlaceholderDmNamesFromHistory(ACCOUNT_ID);
+// Upgrade saved sidebar previews from an old generic label to LINE ALT_TEXT.
+database.restoreFlexPreviewsFromHistory(ACCOUNT_ID);
 let lastPersistentCachePruneAt = 0;
 function prunePersistentCache(force = false): void {
   const now = Date.now();
@@ -980,7 +982,7 @@ function contentLabel(contentType: unknown) {
     case 16: return "มีโพสต์ใหม่";
     case 17: return "Rich message";
     case 18: return "กิจกรรมในแชต";
-    case 22: return "Flex message";
+    case 22: return "การ์ดข้อความ";
     default: return "";
   }
 }
@@ -1463,6 +1465,7 @@ function displayMessageText(text: unknown, contentType: unknown, rawMessage?: un
   const raw = String(text ?? "").replace(/\r\n?/g, "\n").trim();
   const code = contentTypeCode(contentType);
   if (code === 6) return callHistoryPreview(parseCallHistory(rawMessage ?? { contentType, text }));
+  if (code === 22) return flexAltText(rawMessage) || "การ์ดข้อความ";
   const internalTokens = new Set([
     "IMAGE", "VIDEO", "AUDIO", "CALL", "STICKER", "FILE", "LOCATION",
     "POSTNOTIFICATION", "CHATEVENT", "FLEX",
@@ -1483,6 +1486,7 @@ function compactPreview(text: unknown, contentType: unknown, rawMessage?: unknow
   const clean = String(text ?? "").replace(/\s+/g, " ").trim();
   const code = contentTypeCode(contentType);
   if (code === 6) return callHistoryPreview(parseCallHistory(rawMessage ?? { contentType, text }));
+  if (code === 22) return flexAltText(rawMessage) || "การ์ดข้อความ";
   // LINEJS may surface the enum token itself as message.text for non-text
   // messages (for example POSTNOTIFICATION). Never show that internal token
   // directly in the UI; use a localized content label instead.
@@ -2484,7 +2488,7 @@ async function loadOpenChatList(persist = true, canPersist: () => boolean = () =
       name: String(chat.name || "OpenChat"),
       kind: "openchat",
       avatarUrl: cdnUrl(chat?.raw?.chatImageObsHash),
-      preview: compactPreview(last?.text, last?.contentType),
+      preview: compactPreview(last?.text, last?.contentType, last),
       unread: Number(status?.otherStatus?.unreadMessageCount ?? 0),
       memberCount: Number(status?.otherStatus?.memberCount ?? 0),
       lastMessageTime: Number(last?.createdTime ?? 0),

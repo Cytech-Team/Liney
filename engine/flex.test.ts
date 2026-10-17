@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { parseFlexMessage } from "./flex";
+import { flexAltText, parseFlexMessage } from "./flex";
 
 describe("parseFlexMessage", () => {
+  test("reads a human preview from ALT_TEXT without depending on FLEX_JSON", () => {
+    expect(flexAltText({ contentMetadata: { ALT_TEXT: "  เพลงใหม่\nมาแล้ว  ", FLEX_JSON: "not parsed" } })).toBe("เพลงใหม่ มาแล้ว");
+    expect(flexAltText({ raw: { contentMetadata: JSON.stringify({ ALT_TEXT: "โปรโมชันวันนี้" }) } })).toBe("โปรโมชันวันนี้");
+    expect(flexAltText({ flex: { altText: "สินค้าแนะนำ" } })).toBe("สินค้าแนะนำ");
+    expect(flexAltText({ contentMetadata: {} })).toBeUndefined();
+  });
+
   test("parses a JSON encoded bubble and metadata", () => {
     expect(parseFlexMessage({
       contentType: "FLEX",

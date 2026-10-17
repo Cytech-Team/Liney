@@ -2,6 +2,7 @@ export type MessagePreviewLike = {
   text?: unknown;
   contentType?: unknown;
   rich?: { altText?: unknown } | null;
+  flex?: { altText?: unknown } | null;
   call?: { durationMs?: unknown; status?: unknown } | null;
 };
 
@@ -16,6 +17,10 @@ export type NotificationChatLike = {
 export function liveMessagePreview(message: MessagePreviewLike): string {
   const richAltText = String(message.rich?.altText ?? "").replace(/\s+/g, " ").trim();
   if (Number(message.contentType ?? 0) === 17 && richAltText) return richAltText;
+  if (Number(message.contentType ?? 0) === 22) {
+    const altText = String(message.flex?.altText ?? "").replace(/\s+/g, " ").trim();
+    return altText || "การ์ดข้อความ";
+  }
   if (Number(message.contentType ?? 0) === 6) return callMessagePreview(message.call);
   const text = String(message.text ?? "").replace(/\s+/g, " ").trim();
   if (text && !["IMAGE", "VIDEO", "AUDIO", "STICKER", "FILE", "FLEX"].includes(text.toUpperCase())) return text;
@@ -28,7 +33,6 @@ export function liveMessagePreview(message: MessagePreviewLike): string {
     case 14: return "ไฟล์";
     case 16: return "มีโพสต์ใหม่";
     case 17: return richAltText || "Rich message";
-    case 22: return "Flex message";
     default: return text || "ข้อความใหม่";
   }
 }

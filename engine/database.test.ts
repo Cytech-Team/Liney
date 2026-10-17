@@ -5,6 +5,41 @@ import { join } from "node:path";
 import { LineyDatabase } from "./database";
 
 describe("LineyDatabase", () => {
+  test("repairs old Flex previews from the latest non-hidden message only", () => {
+    const root = mkdtempSync(join(tmpdir(), "liney-flex-preview-test-"));
+    const db = new LineyDatabase(join(root, "liney.sqlite"));
+    const accountId = "test";
+    for (const id of ["melody", "shopping", "text-room", "no-alt"]) {
+      db.upsertChat(accountId, { id, kind: "dm", name: id, preview: "Flex message" });
+    }
+    db.upsertMessage(accountId, {
+      id: "melody-flex", chatId: "melody", kind: "dm", text: "Flex message",
+      contentType: 22, isMine: false, createdTime: 200,
+      raw: { contentMetadata: { ALT_TEXT: "เมโลดี้เพลงมาแรง", FLEX_JSON: "{}" } },
+    });
+    db.upsertMessage(accountId, {
+      id: "shopping-flex", chatId: "shopping", kind: "dm", text: "Flex message",
+      contentType: 22, isMine: false, createdTime: 200,
+      raw: { contentMetadata: { ALT_TEXT: "ช้อปสินค้าลดราคา" } },
+    });
+    db.upsertMessage(accountId, {
+      id: "text-newer", chatId: "text-room", kind: "dm", text: "ข้อความปกติ",
+      contentType: 0, isMine: false, createdTime: 250,
+    });
+    db.upsertMessage(accountId, {
+      id: "no-alt-flex", chatId: "no-alt", kind: "dm", text: "Flex message",
+      contentType: 22, isMine: false, createdTime: 150,
+      raw: { contentMetadata: { FLEX_JSON: "{}" } },
+    });
+    expect(db.restoreFlexPreviewsFromHistory(accountId)).toBe(3);
+    const byId = new Map(db.listChats(accountId).map((chat) => [chat.id, chat]));
+    expect(byId.get("melody")?.preview).toBe("เมโลดี้เพลงมาแรง");
+    expect(byId.get("shopping")?.preview).toBe("ช้อปสินค้าลดราคา");
+    expect(byId.get("text-room")?.preview).toBe("Flex message");
+    expect(byId.get("no-alt")?.preview).toBe("การ์ดข้อความ");
+    expect(db.restoreFlexPreviewsFromHistory(accountId)).toBe(0);
+  });
+
   test("stores chats, history, outbox and sync state transactionally", () => {
     const root = mkdtempSync(join(tmpdir(), "liney-db-test-"));
     const database = new LineyDatabase(join(root, "data", "liney.sqlite"));

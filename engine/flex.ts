@@ -49,6 +49,17 @@ function metadataText(metadata: Record<string, unknown>, ...keys: string[]): str
   return undefined;
 }
 
+/** Extract LINE's real, human-readable preview without parsing FLEX_JSON. */
+export function flexAltText(raw: unknown): string | undefined {
+  const source = isRecord(raw) ? raw : undefined;
+  const flex = isRecord(source?.flex) ? source.flex : undefined;
+  const metadata = messageMetadata(raw);
+  const text = metadataText(metadata ?? {}, "ALT_TEXT", "altText")
+    ?? (typeof flex?.altText === "string" ? flex.altText : undefined);
+  const clean = text?.replace(/\s+/g, " ").trim();
+  return clean ? clean.slice(0, 400) : undefined;
+}
+
 /**
  * Extract the JSON Flex document from a raw Talk or Square message.
  * Only the two LINE Flex root types are accepted; the UI renders the known

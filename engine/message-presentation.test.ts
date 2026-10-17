@@ -12,7 +12,8 @@ describe("message presentation helpers", () => {
     expect(liveMessagePreview({ text: "IMAGE", contentType: 1 })).toBe("รูปภาพ");
     expect(liveMessagePreview({ text: "ignored", contentType: 7 })).toBe("ignored");
     expect(liveMessagePreview({ contentType: 17, rich: { altText: "  rich\ncard " } })).toBe("rich card");
-    expect(liveMessagePreview({ contentType: 22 })).toBe("Flex message");
+    expect(liveMessagePreview({ contentType: 22 })).toBe("การ์ดข้อความ");
+    expect(liveMessagePreview({ contentType: 22, text: "Flex message", flex: { altText: "  ลดราคา 50%\n วันนี้  " } })).toBe("ลดราคา 50% วันนี้");
     expect(liveMessagePreview({
       contentType: 6,
       text: "Call History : 11000 millisecs, Result: 16",

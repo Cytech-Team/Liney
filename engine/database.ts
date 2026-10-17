@@ -3,6 +3,7 @@ import { chmodSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { ensurePrivateDirectory } from "./secure-storage";
 import { normalizeJsonValue, parseJsonValue } from "./serialization";
+import { flexAltText } from "./flex";
 
 export type ChatKind = "dm" | "group" | "openchat";
 export type ChatHistoryState = "available" | "new" | "unavailable";
@@ -590,6 +591,34 @@ export class LineyDatabase {
       historyState: (["available", "new", "unavailable"].includes(String(row.history_state)) ? String(row.history_state) : "available") as ChatHistoryState,
       raw: fromJson(row.raw_json),
     }));
+  }
+
+  /** Repair legacy sidebar previews without touching messages, read counts or timestamps. */
+  restoreFlexPreviewsFromHistory(accountId: string): number {
+    const candidates = this.db.query([
+      "SELECT c.chat_id, m.raw_json",
+      "FROM chats c",
+      "JOIN messages m ON m.account_id = c.account_id AND m.chat_id = c.chat_id",
+      "WHERE c.account_id = ? AND c.preview IN ('Flex message', 'FLEX')",
+      "  AND m.content_type = 22",
+      "  AND m.id = (SELECT latest.id FROM messages latest",
+      "    WHERE latest.account_id = c.account_id AND latest.chat_id = c.chat_id",
+      "      AND NOT EXISTS (SELECT 1 FROM hidden_messages h",
+      "        WHERE h.account_id = latest.account_id AND h.chat_id = latest.chat_id",
+      "          AND h.kind = latest.kind AND h.message_id = latest.id)",
+      "    ORDER BY latest.created_time DESC, latest.id DESC LIMIT 1)",
+    ].join("\n")).all(accountId) as Array<{ chat_id: string; raw_json?: string }>;
+    let restored = 0;
+    for (const { chat_id: chatId, raw_json: rawJson } of candidates) {
+      const alt = flexAltText(fromMessageJson(rawJson)) || "การ์ดข้อความ";
+      this.db.query([
+        "UPDATE chats SET preview = ?, updated_at = ?",
+        "WHERE account_id = ? AND chat_id = ?",
+        "  AND preview IN ('Flex message', 'FLEX')",
+      ].join("\n")).run(alt, Date.now(), accountId, chatId);
+      restored += 1;
+    }
+    return restored;
   }
 
   getLatestPeerName(accountId: string, chatId: string): string | undefined {
