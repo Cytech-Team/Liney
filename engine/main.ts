@@ -5304,6 +5304,13 @@ async function handle(request: any) {
       return;
     }
 
+    if (method === "album.cover.preview") {
+      const chatId = String(request?.params?.chatId ?? "").trim();
+      const albumId = String(request?.params?.albumId ?? "").trim();
+      emit({ id, ok: true, result: await LineJsAdapter.previewLineAlbumCover(client, { chatId, albumId }) });
+      return;
+    }
+
     if (method === "album.photo.preview") {
       const chatId = String(request?.params?.chatId ?? "").trim();
       const albumId = String(request?.params?.albumId ?? "").trim();

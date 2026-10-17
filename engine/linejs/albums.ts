@@ -145,3 +145,29 @@ export async function previewLineAlbumPhoto(
   if (!mime) throw new Error("album file is not a supported image preview");
   return { dataUrl: `data:${mime};base64,${Buffer.from(bytes).toString("base64")}`, bytes: bytes.length };
 }
+
+
+/**
+ * Moa's album list does not provide a cover URL. Resolve a real album photo
+ * only on demand, rather than downloading a picture for every album at list time.
+ * No private channel credentials or OBS URLs are returned to the WebView.
+ */
+export async function previewLineAlbumCover(
+  client: Client,
+  options: { chatId: string; albumId: string },
+): Promise<{ dataUrl: string; bytes: number }> {
+  const page = await listLineAlbumPhotos(client, options);
+  const candidates = page.photos.filter((photo) =>
+    photo.sid !== "v" && !/video/i.test(photo.resourceType));
+  if (!candidates.length) throw new Error("album has no previewable photos");
+  // A broken/deleted first picture shouldn't hide the whole album's cover.
+  let failure: unknown;
+  for (const photo of candidates.slice(0, 3)) {
+    try {
+      return await previewLineAlbumPhoto(client, { ...options, oid: photo.oid });
+    } catch (error) {
+      failure = error;
+    }
+  }
+  throw failure ?? new Error("album cover unavailable");
+}

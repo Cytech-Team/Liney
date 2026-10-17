@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { AlbumThumbnail } from "./AlbumThumbnail";
+import { AlbumThumbnailLoader } from "../lib/album-thumbnail-loader";
 import { Image as ImageIcon, LoaderCircle, X, ArrowLeft } from "lucide-react";
 import { lineyEngine } from "../lib/engine";
 import "./LineAlbumsModal.css";
@@ -25,6 +27,7 @@ export function LineAlbumsModal({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState("");
   const [preview, setPreview] = useState<{ photo: AlbumPhoto; dataUrl: string }>();
   const [previewLoading, setPreviewLoading] = useState<string>();
+  const [thumbnailLoader] = useState(() => new AlbumThumbnailLoader());
 
   useEffect(() => {
     let valid = true;
@@ -116,7 +119,14 @@ export function LineAlbumsModal({ onClose }: { onClose: () => void }) {
           <div className="liney-albums-list">
             {albums.map((album) => (
               <button className="liney-albums-item" type="button" key={`${album.chatId}:${album.albumId}`} onClick={() => { setSelected(album); setLoading(true); setError(""); setPhotos([]); setPhotoCursor(undefined); setPreview(undefined); }}>
-                <ImageIcon size={19} />
+                {album.photoCount > 0
+                  ? <AlbumThumbnail
+                      loader={thumbnailLoader}
+                      cacheKey={`cover:${album.chatId}:${album.albumId}`}
+                      request={{ method: "album.cover.preview", params: { chatId: album.chatId, albumId: album.albumId } }}
+                      className="liney-albums-cover" alt={`ภาพปก ${album.title}`}
+                    />
+                  : <span className="liney-albums-cover"><ImageIcon aria-hidden="true" size={21}/></span>}
                 <span><strong>{album.title}</strong><small>รูป {album.photoCount} · ห้อง {album.chatId.slice(0, 10)}…</small></span>
                 <span aria-hidden="true">›</span>
               </button>
@@ -130,7 +140,14 @@ export function LineAlbumsModal({ onClose }: { onClose: () => void }) {
               const video = photo.sid === "v" || /video/i.test(photo.resourceType);
               return (
                 <button key={photo.id} type="button" className="liney-albums-photo" disabled={video || Boolean(previewLoading)} onClick={() => void openPhoto(photo)}>
-                  <ImageIcon size={22}/>
+                  {video
+                    ? <span className="liney-albums-photo-thumb"><ImageIcon aria-hidden="true" size={22}/></span>
+                    : <AlbumThumbnail
+                        loader={thumbnailLoader}
+                        cacheKey={`photo:${selected.chatId}:${selected.albumId}:${photo.oid}`}
+                        request={{ method: "album.photo.preview", params: { chatId: selected.chatId, albumId: selected.albumId, oid: photo.oid } }}
+                        className="liney-albums-photo-thumb" alt={`ภาพย่อรูป ${photo.id}`}
+                      />}
                   <small>{video ? "วิดีโอ (ยังไม่มีพรีวิว)" : previewLoading === photo.id ? "กำลังโหลด…" : `รูป ${photo.id}`}</small>
                 </button>
               );

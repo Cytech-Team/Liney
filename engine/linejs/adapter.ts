@@ -4,7 +4,7 @@
  * Future LINEJS API changes or replacements require changes only here.
  */
 import { Buffer } from "node:buffer";
-import { listLineAlbums, listLineAlbumPhotos, previewLineAlbumPhoto } from "./albums";
+import { listLineAlbums, listLineAlbumPhotos, previewLineAlbumCover, previewLineAlbumPhoto } from "./albums";
 import { listNotes, getNote, createNote, updateNote, deleteNote, likeNote, commentNote } from "./notes";
 import { renameGroup, inviteGroupFriends, leaveGroup, renameFriend, setFriendFavorite, setFriendMuted } from "./social";
 import { uploadProfileAvatar } from "./profile-media";
@@ -38,6 +38,7 @@ export type LineClient = Client;
 export const LineJsAdapter = {
   listLineAlbums,
   listLineAlbumPhotos,
+  previewLineAlbumCover,
   previewLineAlbumPhoto,
   listNotes,
   getNote,

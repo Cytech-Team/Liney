@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Client } from "@evex/linejs";
-import { listLineAlbums, listLineAlbumPhotos, previewLineAlbumPhoto } from "./albums";
+import { listLineAlbums, listLineAlbumPhotos, previewLineAlbumCover, previewLineAlbumPhoto } from "./albums";
 
 function mockClient(moa: Record<string, unknown>): Client {
   return { base: { moa } } as unknown as Client;
@@ -57,4 +57,36 @@ describe("LINEJS Album/Moa read-only facade", () => {
     await expect(previewLineAlbumPhoto(bad, { chatId: "c1", albumId: "a1", oid: "p1" }))
       .rejects.toThrow("not a supported image");
   });
+  test("cover preview skips videos and retrieves the first real still image", async () => {
+    const calls: unknown[] = [];
+    const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
+    const client = mockClient({
+      getAlbums: async () => ({ result: { albums: [] } }),
+      getPhotos: async (options: unknown) => {
+        calls.push(options);
+        return { result: { photos: [
+          { photoId: "v", obsResourceId: { oid: "video", sid: "v" } },
+          { photoId: "cover", obsResourceId: { oid: "still", sid: "a" } },
+        ] } };
+      },
+      downloadPhoto: async (options: unknown) => { calls.push(options); return png; },
+    });
+    const cover = await previewLineAlbumCover(client, { chatId: "c1", albumId: "a1" });
+    expect(cover.dataUrl).toStartWith("data:image/png;base64,");
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toMatchObject({ oid: "still", chatId: "c1", albumId: "a1" });
+  });
+
+  test("an empty album has no cover and never downloads an image", async () => {
+    let downloads = 0;
+    const client = mockClient({
+      getAlbums: async () => ({ result: { albums: [] } }),
+      getPhotos: async () => ({ result: { photos: [] } }),
+      downloadPhoto: async () => { downloads++; return new Uint8Array(); },
+    });
+    await expect(previewLineAlbumCover(client, { chatId: "c1", albumId: "a1" }))
+      .rejects.toThrow("no previewable photos");
+    expect(downloads).toBe(0);
+  });
+
 });
