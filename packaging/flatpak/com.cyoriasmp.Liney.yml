@@ -23,7 +23,7 @@ modules:
       - type: file
         path: com.cyoriasmp.Liney.metainfo.xml
       - type: file
-        path: ../liney.png
+        path: liney.png
     build-commands:
       - mkdir -p deb-extract && cd deb-extract && ar x ../Liney-release.deb && tar -xf data.tar.*
       - install -Dm755 deb-extract/usr/bin/liney /app/bin/liney

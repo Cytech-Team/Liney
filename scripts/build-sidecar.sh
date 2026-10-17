@@ -28,6 +28,14 @@ if command -v bun >/dev/null 2>&1; then BUN=$(command -v bun); else BUN="$USER_H
 test -x "$BUN" || { echo 'bun is required to build liney-engine' >&2; exit 1; }
 PATH=$(dirname "$BUN"):$PATH
 export PATH
+# Fresh GitHub Actions / AUR checkouts have no ignored dist/ tree.
+# Cargo runs Tauri's generate_context! even while compiling standalone helpers,
+# so frontendDist must exist *before* the first `cargo build`, not only when
+# tauri build eventually runs its beforeBuildCommand hook.
+if [ ! -s "$ROOT/dist/index.html" ]; then
+  echo "Building missing frontendDist before compiling Tauri sidecars"
+  (cd "$ROOT" && "$BUN" run web:build)
+fi
 case "$TARGET" in
   x86_64-*) BUN_TARGET=bun-linux-x64 ;;
   aarch64-*|arm64-*) BUN_TARGET=bun-linux-arm64 ;;

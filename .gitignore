@@ -59,3 +59,7 @@ website/dist/
 /packaging/flatpak/.flatpak-builder/
 
 /.flatpak-builder/
+
+# org.flatpak.Builder local Flathub wrapper output
+/builddir/
+/repo/
