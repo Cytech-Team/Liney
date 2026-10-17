@@ -1,0 +1,17 @@
+.liney-notes-panel { width: min(640px, 95vw); }
+.liney-notes-scroll { overflow: auto; padding: 15px 18px 24px; flex: 1; }
+.liney-notes-compose { display: flex; flex-direction: column; gap: 9px; background: var(--panel-2); padding: 14px; border-radius: 13px; }
+.liney-notes-compose label { font-size: 13px; font-weight: 600; }
+.liney-notes-compose textarea, .liney-note-comment input { width: 100%; color: var(--text); background: var(--panel); border: 1px solid var(--border, #7774); border-radius: 9px; padding: 10px 12px; font: inherit; resize: vertical; }
+.liney-notes-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
+.liney-notes-actions button, .liney-note-comment button { display: inline-flex; align-items: center; gap: 5px; padding: 8px 12px; background: var(--panel); color: var(--text); border: 1px solid var(--border, #7774); border-radius: 9px; cursor: pointer; }
+.liney-note-card { padding: 17px 4px; border-bottom: 1px solid var(--border, #7774); }
+.liney-note-card p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 12px 0; font-size: 13px; }
+.liney-note-author { display: flex; gap: 10px; align-items: center; font-size: 13px; }
+.liney-note-author span { color: var(--muted); font-size: 11px; }
+.liney-note-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.liney-note-tools button { display: inline-flex; align-items: center; gap: 5px; border: 0; border-radius: 8px; padding: 8px; background: transparent; color: var(--muted); cursor: pointer; }
+.liney-note-tools button:hover { background: var(--hover, #7772); }
+.liney-note-comment { display: flex; gap: 8px; margin-top: 10px; }
+.liney-note-comment input { flex: 1; }
+.liney-notes-panel button:disabled { opacity: .55; cursor: not-allowed; }

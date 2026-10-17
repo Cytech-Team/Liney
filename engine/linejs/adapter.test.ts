@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { fetchMessageAsset, getTalkMessageReadRanges, getTargetProfiles, LINEJS_VERSION, markTalkMessageRead, normalizeTalkMessageReadRanges, replyTargetMessageId, sendTalkMediaE2EE, talkMessageEditState } from "./adapter";
+import { LineJsAdapter, createPollingSession, fetchMessageAsset, getChatMetadataBatch, getTalkMessageReadRanges, getTargetProfiles, LINEJS_VERSION, updateOwnProfile, markTalkMessageRead, normalizeTalkMessageReadRanges, parseE2EEKeyData, replyTargetMessageId, sendTalkMessage, sendTalkMediaE2EE, talkMessageEditState } from "./adapter";
 
 describe("LineJsAdapter sender metadata", () => {
   test("deduplicates sender MIDs and requests target profiles through LINEJS", async () => {
@@ -63,6 +63,42 @@ describe("LineJsAdapter sender metadata", () => {
   });
 });
 
+describe("LineJsAdapter E2EE key storage", () => {
+  test("reads JSON-string key records and rejects malformed records", () => {
+    const key = { keyId: 7, privKey: "private", pubKey: "public" };
+
+    expect(parseE2EEKeyData(JSON.stringify(key))).toEqual(key);
+    expect(parseE2EEKeyData(key)).toEqual(key);
+    expect(parseE2EEKeyData("not-json")).toBeNull();
+    expect(parseE2EEKeyData("[]")).toBeNull();
+  });
+});
+
+
+describe("LineJsAdapter fallback polling", () => {
+  test("creates one stateful LINEJS Polling instance for talk and square fallback cycles", () => {
+    let created = 0;
+    const calls: string[] = [];
+    const polling = {
+      _listenTalkEvents: (options: unknown) => { calls.push(`talk:${String(Boolean(options))}`); return {} as AsyncIterable<unknown>; },
+      _listenSquareEvents: (options: unknown) => { calls.push(`square:${String(Boolean(options))}`); return {} as AsyncIterable<unknown>; },
+    };
+    const client = {
+      base: {
+        createPolling: () => { created += 1; return polling; },
+      },
+    } as any;
+
+    const session = createPollingSession(client);
+    session.talk({ pollingInterval: 1000 });
+    session.square({ pollingInterval: 1000 });
+    session.talk({ pollingInterval: 250 });
+
+    expect(created).toBe(1);
+    expect(calls).toEqual(["talk:true", "square:true", "talk:true"]);
+  });
+});
+
 
 describe("LineJsAdapter E2EE Talk media", () => {
   test("keeps media replies encrypted and attaches the relation to the final Talk message", async () => {
@@ -113,6 +149,87 @@ describe("LineJsAdapter E2EE Talk media", () => {
     });
   });
 });
+
+describe("LineJsAdapter E2EE text sender-key recovery", () => {
+  test("persists, selects, and verifies the refreshed key before retrying encrypted text", async () => {
+    let activeKey: Record<string, unknown> = { keyId: 4, privKey: "old-private", pubKey: "old-public" };
+    let registerCalls = 0;
+    let verifyCalls = 0;
+    const calls: Array<Record<string, unknown>> = [];
+    const registered = {
+      keyId: 5,
+      privKey: Buffer.alloc(32, 5),
+      pubKey: Buffer.alloc(32, 6),
+      e2eeVersion: 1,
+    };
+    const client = {
+      base: {
+        profile: { mid: "u-self" },
+        e2ee: {
+          registerE2EEKeyPair: async () => { registerCalls += 1; return registered; },
+          saveE2EESelfKeyData: async (value: Record<string, unknown>) => { activeKey = value; },
+          getE2EESelfKeyData: async () => activeKey,
+          verifyStoredKeyAgainstServer: async () => { verifyCalls += 1; return true; },
+        },
+        talk: {
+          sendMessage: async (value: Record<string, unknown>) => {
+            calls.push(value);
+            if (calls.length === 1) {
+              throw Object.assign(new Error("send rejected"), { data: { code: "E2EE_UPDATE_SENDER_KEY" } });
+            }
+            return { id: "server-message-1" };
+          },
+        },
+      },
+    } as any;
+
+    await expect(sendTalkMessage(client, { to: "u-peer", text: "hello" })).resolves.toEqual({ id: "server-message-1" });
+
+    expect(registerCalls).toBe(1);
+    expect(verifyCalls).toBe(1);
+    expect(activeKey).toMatchObject({
+      keyId: 5,
+      privKey: registered.privKey.toString("base64"),
+      pubKey: registered.pubKey.toString("base64"),
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toMatchObject({ to: "u-peer", text: "hello", e2ee: true });
+  });
+
+  test("does not retry when LINE reports the registered sender key does not match", async () => {
+    let sendCalls = 0;
+    const registered = {
+      keyId: 5,
+      privKey: Buffer.alloc(32, 5),
+      pubKey: Buffer.alloc(32, 6),
+      e2eeVersion: 1,
+    };
+    let activeKey: Record<string, unknown> = {};
+    const client = {
+      base: {
+        profile: { mid: "u-self" },
+        e2ee: {
+          registerE2EEKeyPair: async () => registered,
+          saveE2EESelfKeyData: async (value: Record<string, unknown>) => { activeKey = value; },
+          getE2EESelfKeyData: async () => activeKey,
+          verifyStoredKeyAgainstServer: async () => false,
+        },
+        talk: {
+          sendMessage: async () => {
+            sendCalls += 1;
+            throw Object.assign(new Error("send rejected"), { data: { code: "E2EE_UPDATE_SENDER_KEY" } });
+          },
+        },
+      },
+    } as any;
+
+    await expect(sendTalkMessage(client, { to: "u-peer", text: "hello" }))
+      .rejects.toThrow("does not match the server's public key");
+
+    expect(sendCalls).toBe(1);
+  });
+});
+
 
 describe("LineJsAdapter reply relations", () => {
   test("only treats REPLY relations as quoted replies", () => {
@@ -223,5 +340,82 @@ describe("LINEJS compatibility floor", () => {
 
     const [major, minor, patch] = LINEJS_VERSION.split(".").map(Number);
     expect(major > 3 || (major === 3 && (minor > 1 || (minor === 1 && patch >= 7)))).toBe(true);
+  });
+
+  test("keeps PLANET reply transaction correlation for T103 compatibility", () => {
+    const packageJson = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
+    expect(packageJson.patchedDependencies?.["@jsr/evex__linejs@3.4.2"]).toBe(
+      "patches/@jsr%2Fevex__linejs@3.4.2.patch",
+    );
+    const transport = readFileSync(
+      new URL("../../node_modules/@evex/linejs/client/features/call/planet/transport.js", import.meta.url),
+      "utf8",
+    );
+    expect(transport).toContain("replyTo: request.message.hdr");
+    expect(transport).toContain("#planetReplyHdr(msgId, request)");
+    expect(transport).toContain("tranSeq: request.tranSeq");
+    expect(transport).toContain("sessId: request.sessId?.length ? request.sessId : this.#sessId");
+
+    const callModule = readFileSync(
+      new URL("../../node_modules/@evex/linejs/client/features/call/mod.js", import.meta.url),
+      "utf8",
+    );
+    expect(callModule).toContain("async answerIncoming(event, opts)");
+    expect(callModule).toContain("verifyIncomingDetailed");
+    expect(callModule).toContain("acceptIncomingDetailed");
+  });
+});
+
+describe("LineJsAdapter own profile update validation", () => {
+  test("forwards only supported fields and preserves boolean types", async () => {
+    let received: unknown;
+    const client = { updateMyProfile: async (update: unknown) => { received = update; } } as any;
+    await updateOwnProfile(client, { displayName: "Liney", allowSearchByUserid: false, notSupported: "secret" });
+    expect(received).toEqual({ displayName: "Liney", allowSearchByUserid: false });
+  });
+  test("rejects mismatched types and missing changes", async () => {
+    const client = { updateMyProfile: async () => { throw new Error("should not be called"); } } as any;
+    expect(() => updateOwnProfile(client, { allowSearchByEmail: "false" })).toThrow("Invalid profile field");
+    expect(() => updateOwnProfile(client, {})).toThrow("No supported profile fields");
+  });
+});
+
+describe("LineJsAdapter group metadata recovery", () => {
+  test("uses one bounded getChats request without member enumeration", async () => {
+    const requests: unknown[] = [];
+    const client = {
+      base: {
+        talk: {
+          getChats: async (options: unknown) => {
+            requests.push(options);
+            return { chats: [
+              { chatMid: "c111", chatName: "กลุ่มทดสอบ", picturePath: "picture-hash" },
+              { chatMid: "c222", chatName: "", picturePath: "" },
+            ] };
+          },
+        },
+      },
+    } as never;
+    const results = await getChatMetadataBatch(client, ["c111", "c222"]);
+    expect(requests).toEqual([{ chatMids: ["c111", "c222"], withInvitees: false, withMembers: false }]);
+    expect(results[0]).toEqual({
+      mid: "c111", name: "กลุ่มทดสอบ", raw: { chatMid: "c111", chatName: "กลุ่มทดสอบ", picturePath: "picture-hash" },
+    });
+    expect(results[1].name).toBe("");
+  });
+
+  test("does not call LINE for empty group list", async () => {
+    const result = await getChatMetadataBatch({} as never, []);
+    expect(result).toEqual([]);
+  });
+});
+
+// Regression: engine imports the LineJsAdapter facade, not named exports.
+// All public methods used by engine/main.ts must be reachable via that facade.
+describe("LineJsAdapter public facade contract", () => {
+  test("exposes friend diagnostics, retry and group metadata batch at runtime", () => {
+    expect(typeof LineJsAdapter.getFriendSyncDiagnostics).toBe("function");
+    expect(typeof LineJsAdapter.retryMissingFriendProfiles).toBe("function");
+    expect(typeof LineJsAdapter.getChatMetadataBatch).toBe("function");
   });
 });

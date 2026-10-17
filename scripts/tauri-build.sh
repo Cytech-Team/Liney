@@ -124,4 +124,34 @@ EOF
   export PATH
 fi
 
-exec "$BUN" x tauri build "$@"
+# Normal Tauri packaging first. If linuxdeploy fails after creating a complete
+# AppDir on some rolling Linux systems, package that staged tree directly.
+# Never apply the fallback to deb/rpm or to an incomplete build.
+if "$BUN" x tauri build "$@"; then
+  "$ROOT/scripts/repair-appimage-engine.sh" "$BUNDLE_DIR"
+  exit 0
+fi
+case " $* " in
+  *" appimage "*) ;;
+  *) exit 1 ;;
+esac
+APPDIR="$BUNDLE_DIR/appimage/Liney.AppDir"
+PLUGIN="${XDG_CACHE_HOME:-$USER_HOME/.cache}/tauri/linuxdeploy-plugin-appimage.AppImage"
+test -x "$APPDIR/usr/bin/liney" || exit 1
+test -x "$APPDIR/usr/bin/liney-engine" || exit 1
+test -x "$APPDIR/usr/bin/liney-media" || exit 1
+test -f "$APPDIR/usr/share/applications/Liney.desktop" || exit 1
+test -x "$PLUGIN" || exit 1
+# Desktop entry names the icon 'liney'; Tauri stages it as 'Liney.png'.
+if [ ! -e "$APPDIR/liney.png" ] && [ -f "$APPDIR/Liney.png" ]; then
+  ln -s Liney.png "$APPDIR/liney.png"
+fi
+ARCH=$(uname -m)
+VERSION=$(node -p "require('$ROOT/package.json').version")
+case "$ARCH" in x86_64) SUFFIX=amd64 ;; aarch64) SUFFIX=aarch64 ;; *) exit 1 ;; esac
+OUT="$BUNDLE_DIR/appimage/Liney_${VERSION}_${SUFFIX}.AppImage"
+ARCH="$ARCH" LINUXDEPLOY_OUTPUT_VERSION="$VERSION" LDAI_OUTPUT="$OUT" \
+  "$PLUGIN" --appimage-extract-and-run --appdir="$APPDIR"
+test -s "$OUT"
+"$ROOT/scripts/repair-appimage-engine.sh" "$BUNDLE_DIR"
+printf 'AppImage fallback packaging OK: %s\n' "$OUT"

@@ -87,11 +87,10 @@ LINE services
   opaque media references, progress, cancellation, and a disk preview cache.
 - Native tray, close-to-tray, desktop notification, reconnect, and startup
   integration on supported Linux desktops.
-- A real outgoing 1:1 audio call path uses LINEJS PLANET, Opus, and PipeWire
-  when the local audio session is available. Incoming-call notifications are
-  shown, but accepting an incoming call is not advertised until LINEJS
-  exposes a stable PLANET answer flow. Video, group calls, and LiveTalk are
-  not advertised.
+- 1:1 calls use LINEJS PLANET and Opus with Liney's native audio helper.
+  Incoming answering and video transport remain experimental, while camera,
+  microphone, speaker, and screen-share availability are isolated capabilities:
+  missing hardware disables only that control and does not block joining a call.
 
 The application reports capabilities enabled by the running engine and keeps
 the `liveValidated` flag separate for real two-account verification. A
@@ -135,17 +134,45 @@ archives.
 
 ## Development requirements
 
-- Linux with WebKitGTK, GStreamer, and PipeWire runtime libraries.
-- Bun 1.4 or newer.
-- Rust 1.77.2 or newer.
-- A working Secret Service or KWallet integration for persistent credentials.
-- `secret-tool` is useful for checking the wallet from a terminal.
+Building Liney from source requires Bun 1.4+, Rust 1.85+, WebKitGTK 4.1
+development files for the Tauri/Wry UI, and the development libraries used to
+compile the optional native capability sidecars. These are source-build
+requirements, not a requirement that every runtime feature be present.
 
-Install dependencies and start the desktop app (React + Tauri WebView):
+Liney follows a **standalone-first, system-aware** runtime model:
+
+- `liney-media` owns camera capture/encoding and system keyring integration.
+- `liney-audio` owns microphone, speaker, resampling, and call tones.
+- `liney-screen` owns XDG Desktop Portal/PipeWire screen capture.
+- `liney-screen-wayland` owns direct Wayland capture through
+  `ext-image-copy-capture-v1`, with `wlr-screencopy-v1` fallback.
+- `liney-screen-x11` owns native X11 capture without PipeWire: XShm fast
+  capture with core GetImage fallback, RandR/Xinerama monitor discovery,
+  XComposite mapped-window capture, XDamage dirty-region refresh, XFixes cursor
+  compositing, and desktop/monitor/window/region targets.
+- `liney-engine` owns LINEJS, call transport, storage, sync, and capability
+  fallback behavior.
+
+The main application does not require GStreamer, FFmpeg, `pw-cat`, `grim`,
+`slurp`, or `secret-tool`. Audio follows the user's system-default input/output.
+Camera uses native V4L2 plus bundled OpenH264. Screen sharing is selected by
+runtime capability rather than desktop name: Portal/PipeWire is preferred;
+Wayland can fall back to `ext-image-copy-capture-v1` and then
+`wlr-screencopy-v1`; a real X11 session can fall back to native X11 capture.
+The X11 backend prefers XShm and falls back to core GetImage if XShm is
+unavailable. Optional XDamage, XComposite, XFixes, RandR, and Xinerama support
+improves efficiency or target selection without becoming launch requirements.
+Mapped X11 windows can be shared directly; minimized/unmapped windows are not
+promised because X11 does not guarantee backing pixels for them. Liney
+deliberately does not use an XWayland root window as a fake Wayland desktop
+capture. If one capability cannot run, only that capability is disabled; the
+rest of Liney continues to work.
+
+Start the desktop app (React + Tauri WebView):
 
 ```sh
 bun install
-bun run doctor    # verify WebKitGTK 4.1 / Linux desktop dependencies
+bun run doctor    # source-build checks + non-failing runtime capability report
 bun run dev       # static WebView; ไม่เปิด localhost/web server
 bun run dev:web   # optional Vite HMR development server
 ```
@@ -244,7 +271,7 @@ The public-facing landing page and project documents live in [`website/`](websit
 - Safety Notice about the unofficial client and LINE TOS risk
 - Privacy Notice
 - Liney Terms of Use draft
-- The Liney License 1.0 summary
+- MIT License and third-party rights notice
 - GitHub Pages 404 page
 
 The [`website` workflow](.github/workflows/pages.yml) publishes the directory
@@ -271,11 +298,13 @@ they use with it. Do not use an account that you cannot afford to lose. The
 project does not encourage spam, abuse, bypassing security controls, or
 interference with LINE services.
 
-The outgoing call path is deliberately limited to audio 1:1. It requires a
-reachable PipeWire session and still needs a real two-account, two-way audio
-test on the target system before a release can be labelled live-validated.
-The UI never presents video or group-call controls, and it does not pretend
-that the current LINEJS incoming notification hook can answer a call.
+Call support still depends on an unofficial LINE protocol implementation and
+must be live-validated with real accounts after transport changes. Audio,
+incoming answering, and video negotiation are kept separate from local hardware
+capabilities: no camera means no local camera feed, no microphone means silence
+from the local side, no speaker means no local playback, and an unavailable
+screen-capture environment disables only screen sharing. Group calls and
+LiveTalk are not advertised.
 
 ## Relationship with LINE and future cooperation
 
@@ -293,19 +322,23 @@ advertising, or legal matters, please contact:
 Cytech Team Development is willing to discuss reasonable changes, a safer
 implementation, migration to an official API or SDK, authorized notices or
 advertising, cooperation, or a request to modify, restrict, or discontinue
-distribution. See the compliance section in [The Liney License 1.0](LICENSE).
+distribution. See [LICENSE](LICENSE) for Liney's source-code license. It does
+not grant rights to LINE/LY Corporation's marks, content, or services, and it
+does not replace the terms that apply to LINE services.
 
 ## License
 
-Liney is currently distributed under **The Liney License 1.0 (TLL-1.0)**. It is
-a custom source-available license with copyleft-like redistribution terms and
-a compliance/cooperation mechanism. It is not GPL-3.0 and should not be
-described as OSI-approved Open Source.
+Liney's original source code is licensed under the **MIT License**; see
+[LICENSE](LICENSE). You may use, modify, and redistribute that code under the
+license terms.
+
+MIT covers only copyright rights in Liney code granted by its copyright
+holders. It does not grant rights to LINE/LY Corporation's trademarks, logos,
+content, or services, and it does not replace terms or policies that apply to
+using LINE services. Liney is an independent, unofficial client. LINE may\nseparately enforce its rights or terms against particular users or\ndistributions; the effect depends on the specific facts and applicable law.\nMIT provides no immunity from those rights.
 
 Third-party dependencies and bundled components remain under their own
 licenses. Read the relevant notices before redistributing a build.
-
-See [LICENSE](LICENSE) for the complete terms.
 
 ## Distribution
 
@@ -315,7 +348,7 @@ Validated Linux release artifacts are generated with:
 bun run release:local
 ```
 
-This runs the dependency doctor, unit tests, lint, and Tauri packaging, then writes
+This runs the source-build/capability doctor, unit tests, lint, and Tauri packaging, then writes
 versioned AppImage, Debian, RPM, portable tarball, and SHA-256 checksum files to
 `release/`. The portable tarball includes `install-user.sh` for a per-user install.
 

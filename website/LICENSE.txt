@@ -1,193 +1,21 @@
-The Liney License 1.0 (TLL-1.0)
-SPDX-License-Identifier: LicenseRef-TLL-1.0
+MIT License
 
 Copyright (c) 2026 Cytech Team Development and Liney contributors
 
-This is a custom source-available license. It is not the GNU General Public
-License, it is not an OSI-approved Open Source license, and it must not be
-described as GPL-3.0. If a file, dependency, or bundled component contains a
-different license notice, that notice governs that component.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-1. Definitions
-==============
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-"Liney" means the original software, source code, documentation, artwork,
-and other material identified by the Liney maintainers as covered by this
-license.
-
-"Covered Work" means Liney and a modified work that contains or is derived
-from material covered by this license.
-
-"You" means any person or organization exercising rights under this license.
-
-"Maintainers" means Cytech Team Development and the copyright holders who
-publish or maintain the official Liney project.
-
-"Formal Compliance Notice" means a notice published by the Maintainers after
-reasonably verifying a written request from LINE, LY Corporation, or a person
-authorized to represent the relevant rights holder. A message from an unknown
-third party is not a Formal Compliance Notice by itself.
-
-2. Permission
-=============
-
-Subject to the conditions in this license, the Maintainers grant You a
-worldwide, royalty-free, non-exclusive license to:
-
-* use Liney for personal, educational, research, internal, or commercial
-  purposes;
-* study the source code;
-* build Liney from source;
-* modify Liney;
-* create Covered Works and forks; and
-* redistribute unmodified or modified copies of a Covered Work.
-
-This permission is granted for the duration of the applicable copyright and
-only for rights that the relevant copyright holders are able to license.
-
-3. Redistribution conditions
-============================
-
-When You redistribute Liney or a Covered Work, You must:
-
-1. provide a copy of this license;
-2. preserve applicable copyright, attribution, and disclaimer notices;
-3. clearly identify material changes made by You;
-4. make the corresponding source code of the Liney-covered portions available
-   to recipients under this license; and
-5. avoid presenting a modified build as an official Liney release unless the
-   Maintainers have authorized that representation.
-
-Forks are allowed. A fork may use a different project name, package name,
-repository, and visual identity, subject to the branding terms below.
-
-4. Liney branding
-=================
-
-The name "Liney", the Liney wordmark, the penguin mascot, the supplied Liney
-artwork, and other original Liney branding are project identifiers. This
-license grants no trademark or branding rights beyond the right to accurately
-identify an unmodified Covered Work as Liney.
-
-You may state that a product is based on Liney, but You must not imply that a
-fork is an official release, is maintained by Cytech Team Development, or is
-endorsed by the Maintainers without written permission.
-
-LINE, the LINE name, LINE logos, LINE characters, and related marks and
-copyrighted assets belong to their respective rights holders. This license
-does not grant rights to those marks or assets.
-
-5. LINE and LY Corporation independence notice
-================================================
-
-Liney is an independent project. It is not affiliated with, authorized by,
-endorsed by, sponsored by, or officially associated with LY Corporation or
-the official LINE application unless a separate written agreement says so.
-
-Liney may use unofficial software, protocols, compatibility layers, or
-libraries to communicate with LINE services. Such use may stop working, may
-be restricted by LINE, and may be affected by LINE's Terms of Service or
-other policies. This license does not grant permission from LINE or LY
-Corporation to access or use their services.
-
-6. Cooperation and compliance requests
-=======================================
-
-The Maintainers are willing to discuss reasonable requests concerning
-branding, trademarks, security, protocol behavior, distribution, features,
-advertising, official notices, licensing, compatibility, or cooperation.
-
-After receiving and reasonably verifying a formal request from LINE, LY
-Corporation, or an authorized representative, the Maintainers may publish a
-Formal Compliance Notice with its scope and effective date. Depending on the
-request, the Maintainers may:
-
-* stop publishing public releases;
-* stop public development or make official repositories private;
-* remove or restrict affected functionality;
-* change the backend or migrate to an official API or SDK;
-* add an authorized notice, promotion, or advertising placement;
-* continue future development privately or under different terms; or
-* discontinue the project.
-
-If a Formal Compliance Notice expressly applies to further public
-redistribution of a Covered Work, You must stop further public redistribution
-of the affected Covered Work, remove the affected functionality where
-specified, or otherwise follow the scope of the notice. The notice does not
-require You to erase historical knowledge or physically delete copies that
-You already received.
-
-This section does not retroactively change the license of a copy that was
-lawfully distributed before the effective date of a Formal Compliance Notice.
-It also cannot change the license of independent third-party code.
-
-7. Third-party components
-=========================
-
-Third-party libraries, protocols, assets, and generated components are not
-relicensed under TLL-1.0 merely because they are used, bundled, or referenced
-by Liney. Each component remains governed by its own license and copyright
-notice.
-
-In particular, the license of the LINEJS dependency is selected by its
-copyright holders and is separate from this license. You must review and
-follow the licenses of dependencies before redistributing a build.
-
-8. Contributions
-=================
-
-By intentionally submitting code, documentation, artwork, or another work to
-the official Liney project for inclusion, You grant the Maintainers a
-worldwide, perpetual, non-exclusive, royalty-free, irrevocable license to
-use, reproduce, modify, publish, distribute, sublicense, and relicense that
-contribution as part of Liney.
-
-This contribution license includes the right to include the contribution in
-public, private, source-available, differently licensed, officially
-authorized, or closed-source future versions of Liney. You retain ownership
-of Your contribution unless a separate written agreement transfers it.
-
-By submitting a contribution, You represent that You have the right to grant
-these permissions and that the contribution does not knowingly violate a
-third party's rights.
-
-9. Future versions
-==================
-
-The copyright holders may release future versions of Liney under TLL-1.0,
-another source-available license, an open-source license, a private or
-closed-source model, a license agreed with LINE or LY Corporation, or no
-license at all.
-
-Changing the terms for a future version does not automatically change the
-terms applicable to a copy that was already lawfully distributed under this
-license.
-
-10. Disclaimer of warranty
-==========================
-
-TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, LINEY IS PROVIDED "AS IS"
-AND WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, WHETHER EXPRESS, IMPLIED,
-OR STATUTORY. THE MAINTAINERS DISCLAIM WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT, AVAILABILITY,
-SECURITY, ACCURACY, AND CONTINUED COMPATIBILITY WITH LINE SERVICES.
-
-11. Limitation of liability
-===========================
-
-TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, NO MAINTAINER OR
-COPYRIGHT HOLDER WILL BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL,
-CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES, OR FOR LOSS OF DATA, PROFITS,
-ACCOUNTS, ACCESS, OR GOODWILL, ARISING FROM OR RELATING TO LINEY OR THIS
-LICENSE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
-
-12. Contact
-===========
-
-Legal, trademark, cooperation, and compliance contact:
-
-namnarak@namnarak.in.th
-
-Cytech Team Development and the Liney Maintainers are willing to review
-legitimate requests and discuss an authorized or technically safer way to
-provide LINE access on Linux.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

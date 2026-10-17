@@ -2,7 +2,7 @@
   "name": "liney",
   "private": true,
   "version": "0.1.0",
-  "license": "LicenseRef-TLL-1.0",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "doctor": "sh scripts/check-linux-deps.sh",
@@ -24,7 +24,8 @@
     "extension:zip": "sh scripts/package-extension.sh"
   },
   "dependencies": {
-    "@evex/linejs": "npm:@jsr/evex__linejs@3.4.2",
+    "@evex/linejs": "npm:@jsr/evex__linejs@3.5.0",
+    "@tanstack/react-virtual": "^3.14.13",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-notification": "^2",
@@ -48,5 +49,8 @@
   },
   "description": "Independent unofficial LINE desktop client for Linux",
   "author": "Cytech Team Development",
-  "repository": "https://github.com/Cytech-Team/Liney"
+  "repository": "https://github.com/Cytech-Team/Liney",
+  "patchedDependencies": {
+    "@jsr/evex__linejs@3.4.2": "patches/@jsr%2Fevex__linejs@3.4.2.patch"
+  }
 }

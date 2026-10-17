@@ -9,6 +9,9 @@ export type Chat = {
   kind: ChatKind;
   avatar: string;
   avatarUrl?: string;
+  profileIdentityKey?: string;
+  profileSnapshotTime?: number;
+  profileFetchedAt?: number;
   accent: string;
   detail?: string;
   lastMessageTime?: number;
@@ -82,6 +85,7 @@ export type Message = {
   stickerUrl?: string;
   emojiUrl?: string;
   flex?: FlexMessageData;
+  raw?: unknown;
   filename?: string;
   reaction?: string;
   reactions?: MessageReaction[];
@@ -94,6 +98,7 @@ export type Message = {
   edited?: boolean;
   updatedTime?: number;
   status?: "sending" | "sent" | "error" | "unknown";
+  sendError?: string;
   createdTime?: number;
   contentType?: number;
   senderId?: string;

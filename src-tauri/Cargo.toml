@@ -1,9 +1,10 @@
 [package]
 name = "liney"
+default-run = "liney"
 version = "0.1.0"
 description = "LINE desktop client for Linux"
 authors = ["Cytech Team Development"]
-license = "LicenseRef-TLL-1.0"
+license = "MIT"
 repository = "https://github.com/Cytech-Team/Liney"
 edition = "2021"
 rust-version = "1.77.2"
@@ -13,6 +14,27 @@ rust-version = "1.77.2"
 [lib]
 name = "liney_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = []
+media-sidecar = ["dep:keyring", "dep:dbus-secret-service", "dep:openh264", "dep:png", "dep:v4l"]
+audio-sidecar = ["dep:cpal"]
+screen-sidecar = ["dep:ashpd", "dep:async-std", "dep:pipewire", "dep:openh264"]
+
+[[bin]]
+name = "liney-media"
+path = "src/bin/liney-media.rs"
+required-features = ["media-sidecar"]
+
+[[bin]]
+name = "liney-audio"
+path = "src/bin/liney-audio.rs"
+required-features = ["audio-sidecar"]
+
+[[bin]]
+name = "liney-screen"
+path = "src/bin/liney-screen.rs"
+required-features = ["screen-sidecar"]
 
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
@@ -30,5 +52,15 @@ tauri-plugin-notification = "2"
 tauri-plugin-single-instance = "2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+ashpd = { version = "0.9.3", optional = true }
+async-std = { version = "1.13.0", optional = true }
+pipewire = { version = "0.9.2", optional = true }
+cpal = { version = "0.16.0", optional = true }
+dbus-secret-service = { version = "=4.0.1", features = ["crypto-rust"], optional = true }
+keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"], optional = true }
 gtk = "0.18.2"
 notify-rust = "4.18.0"
+openh264 = { version = "0.5.0", optional = true }
+png = { version = "0.18.1", optional = true }
+v4l = { version = "0.14.0", optional = true }

@@ -1,11 +1,21 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   ArrowRight,
   Check,
+  CheckCircle2,
+  ChevronDown,
+  Clock3,
+  FlaskConical,
+  Heart,
+  Layers3,
   Code2,
   Database,
   LockKeyhole,
   MessageCircle,
+  Menu,
+  Moon,
+  Sun,
+  X,
   Monitor,
   QrCode,
   ShieldCheck,
@@ -63,32 +73,77 @@ const features: Feature[] = [
   },
 ];
 
+type MarketingTheme = "light" | "dark";
+const THEME_STORAGE_KEY = "liney.marketing.theme";
+
+function getSavedTheme(): MarketingTheme | null {
+  try {
+    const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return saved === "light" || saved === "dark" ? saved : null;
+  } catch {
+    return null;
+  }
+}
+
 export function MarketingSite({ view, onNavigate }: MarketingSiteProps) {
+  const [choice, setChoice] = useState<MarketingTheme | null>(getSavedTheme);
+  const [systemDark, setSystemDark] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches
+  );
+  const theme: MarketingTheme = choice ?? (systemDark ? "dark" : "light");
+
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    const update = () => setSystemDark(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  function toggleTheme() {
+    const next = theme === "dark" ? "light" : "dark";
+    setChoice(next);
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, next);
+    } catch {
+      // Still apply the choice for this session when storage is unavailable.
+    }
+  }
+
   return (
-    <div className="marketing-page">
-      <MarketingHeader view={view} onNavigate={onNavigate} />
+    <div className={`marketing-page marketing-theme-${theme}`} data-theme={theme}>
+      <MarketingHeader view={view} onNavigate={onNavigate} theme={theme} onToggleTheme={toggleTheme} />
       {view === "login" ? <DemoLogin onNavigate={onNavigate} /> : <Landing onNavigate={onNavigate} />}
       <MarketingFooter onNavigate={onNavigate} />
     </div>
   );
 }
 
-function MarketingHeader({ view, onNavigate }: { view: MarketingView; onNavigate: (path: string) => void }) {
+function MarketingHeader({ view, onNavigate, theme, onToggleTheme }: { view: MarketingView; onNavigate: (path: string) => void; theme: MarketingTheme; onToggleTheme: () => void }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const anchors = [
+    { href: "#what-is-liney", text: "Liney คืออะไร" },
+    { href: "#features", text: "ความสามารถ" },
+    { href: "#architecture", text: "เบื้องหลัง" },
+    { href: "#roadmap", text: "สถานะ" },
+    { href: "#get-liney", text: "วิธีทดลอง" },
+  ];
   return (
     <header className="marketing-header">
       <div className="marketing-container marketing-header-inner">
-        <button className="marketing-brand" type="button" onClick={() => onNavigate("/")} aria-label="กลับหน้าแรก Liney">
+        <button className="marketing-brand" type="button" onClick={() => { setMenuOpen(false); onNavigate("/"); }} aria-label="กลับหน้าแรก Liney">
           <img src="/liney-mark.svg" alt="" />
-          <span>
-            <strong>Liney</strong>
-            <small>Chat closer on Linux</small>
-          </span>
+          <span><strong>Liney</strong><small>LINE, made for Linux.</small></span>
         </button>
         <nav className="marketing-nav" aria-label="เมนูหลัก">
-          <a href={view === "home" ? "#what-is-liney" : "/#what-is-liney"}>Liney คืออะไร</a>
-          <a href={view === "home" ? "#features" : "/#features"}>ความสามารถ</a>
-          <a href={view === "home" ? "#architecture" : "/#architecture"}>การทำงาน</a>
-          <button className="marketing-nav-cta" type="button" onClick={() => onNavigate("/chat")}>ดูตัวอย่างแอป <ArrowRight size={15} /></button>
+          <button className="marketing-mobile-menu-button" type="button" aria-expanded={menuOpen} aria-controls="marketing-nav-sections" aria-label={menuOpen ? "ปิดเมนู" : "เปิดเมนู"} onClick={() => setMenuOpen((current) => !current)}>
+            {menuOpen ? <X size={20}/> : <Menu size={20}/>}
+          </button>
+          <div id="marketing-nav-sections" className={menuOpen ? "marketing-nav-links open" : "marketing-nav-links"}>
+            {anchors.map((entry) => <a key={entry.href} href={view === "home" ? entry.href : "/" + entry.href} onClick={() => setMenuOpen(false)}>{entry.text}</a>)}
+          </div>
+          <button className="marketing-theme-toggle" type="button" onClick={onToggleTheme} aria-label={theme === "dark" ? "เปลี่ยนเป็น Light Mode" : "เปลี่ยนเป็น Dark Mode"} aria-pressed={theme === "dark"} title={theme === "dark" ? "Light Mode" : "Dark Mode"}>{theme === "dark" ? <Sun size={19} /> : <Moon size={19} />}</button>
+          <button className="marketing-nav-cta" type="button" onClick={() => { setMenuOpen(false); onNavigate("/chat"); }}>ลองดู UI <ArrowRight size={15} /></button>
         </nav>
       </div>
     </header>
@@ -100,17 +155,19 @@ function Landing({ onNavigate }: { onNavigate: (path: string) => void }) {
     <main>
       <section className="marketing-hero marketing-container">
         <div className="marketing-hero-copy">
-          <div className="marketing-kicker"><span className="marketing-kicker-dot" />UNOFFICIAL · LINUX-FIRST</div>
-          <h1>LINE บน Linux<br /><em>ในแบบที่เป็นของเรา</em></h1>
+          <div className="marketing-kicker marketing-hero-kicker"><span className="marketing-kicker-dot" /> INDEPENDENT PROJECT <span className="marketing-kicker-separator">/</span> LINUX DESKTOP</div>
+          <h1>แชตที่คุ้นเคย<br /><em>บน Linux ที่คุณรัก.</em></h1>
           <p className="marketing-hero-lede">
-            Liney คือ unofficial LINE desktop client ที่สร้างขึ้นเพื่อให้ผู้ใช้ Linux
-            คุยกับคนและชุมชนเดิมได้ โดยไม่ต้องพึ่ง Windows, Wine หรือ VM
+            พบกับ <strong>Liney</strong> — LINE Desktop Client ที่ชุมชน Linux กำลังสร้างขึ้นใหม่
+            เปิดแชตจากเครื่องของคุณเอง ด้วยประสบการณ์ Desktop ที่ออกแบบอย่างตั้งใจ
+            ไม่ต้องเปิด Wine หรือ Windows เพื่อคุยกับคนเดิม
           </p>
           <div className="marketing-actions">
-            <button className="marketing-primary-button" type="button" onClick={() => onNavigate("/chat")}>ดูหน้าแชตตัวอย่าง <ArrowRight size={17} /></button>
-            <button className="marketing-secondary-button" type="button" onClick={() => onNavigate("/login")}><QrCode size={16} /> ดูหน้า Login</button>
+            <button className="marketing-primary-button" type="button" onClick={() => onNavigate("/chat")}>สำรวจหน้าตา Liney <ArrowRight size={18} /></button>
+            <a className="marketing-secondary-button marketing-link-button" href="#roadmap"><Layers3 size={17} /> ดูแผนพัฒนา <ArrowRight size={15} /></a>
           </div>
-          <div className="marketing-hero-note"><ShieldCheck size={15} /> หน้าเว็บนี้เป็น product preview ไม่ได้เชื่อมบัญชี LINE จริง</div>
+          <div className="marketing-hero-proof"><span><CheckCircle2 size={15} /> Independent</span><span><Monitor size={15} /> Linux-first</span><span><ShieldCheck size={15} /> Local-first</span></div>
+          <div className="marketing-hero-note"><FlaskConical size={15} /> กำลังพัฒนา · หน้าเว็บเป็นเพียงตัวอย่าง ไม่ได้เชื่อมบัญชี LINE จริง</div>
         </div>
         <ProductPreview onNavigate={onNavigate} />
       </section>
@@ -119,11 +176,11 @@ function Landing({ onNavigate }: { onNavigate: (path: string) => void }) {
         <ProofItem icon={Code2} label="React + Tauri WebView" />
         <ProofItem icon={Zap} label="Bun + TypeScript engine" />
         <ProofItem icon={Database} label="SQLite local history" />
-        <ProofItem icon={ShieldCheck} label="No central relay" />
+        <ProofItem icon={ShieldCheck} label="Independent project" />
       </section>
 
       <section className="marketing-section marketing-container" id="what-is-liney">
-        <SectionHeading eyebrow="WHAT IS LINEY?" title="ชั้นกลางที่ทำให้ LINE รู้สึกเป็น Linux มากขึ้น" body="Liney แยกหน้าตาแอปออกจาก protocol engine อย่างชัดเจน จึงดูแล UI, cache, sync และการเชื่อมต่อได้เป็นส่วน ๆ" />
+        <SectionHeading eyebrow="WHY LINEY?" title="LINE บน Linux ควรใช้งานได้อย่างเป็นธรรมชาติ" body="ไม่ใช่แค่เปิดหน้าต่างแชต แต่เป็น Client อิสระที่ออกแบบความลื่นไหล ข้อมูลในเครื่อง และการเชื่อมต่อให้เป็นส่วนหนึ่งของ Linux Desktop" />
         <div className="marketing-explain-grid">
           <ExplainCard number="01" icon={Monitor} title="UI ที่ใช้งานง่าย" body="หน้าแชตที่เน้นการอ่าน การตอบ และการเห็นสถานะจริงของข้อความ โดยไม่ซ่อนข้อจำกัดไว้หลัง mock interaction" />
           <ExplainCard number="02" icon={Database} title="ข้อมูลท้องถิ่นเป็นหลัก" body="SQLite เป็น source of truth สำหรับ cache, history และ outbox ทำให้เปิดดูข้อมูลเดิมได้แม้ network ไม่พร้อม" />
@@ -133,7 +190,7 @@ function Landing({ onNavigate }: { onNavigate: (path: string) => void }) {
 
       <section className="marketing-section marketing-section-soft" id="features">
         <div className="marketing-container">
-          <SectionHeading eyebrow="BUILT FOR EVERYDAY USE" title="สิ่งที่ Liney ตั้งใจแก้" body="ไม่ใช่แค่เอา chat bubble มาวางบน Linux แต่พยายามแก้ปัญหาที่เกิดขึ้นจริงตอนใช้ desktop client" />
+          <SectionHeading eyebrow="DESIGNED FOR YOUR DESKTOP" title="รายละเอียดเล็กน้อยที่สำคัญในทุกวัน" body="ตั้งแต่การเปิดประวัติแชตจนถึงการส่งข้อความ Liney พยายามทำให้แต่ละขั้นตอนเข้ากับวิธีใช้ Linux จริง ๆ" />
           <div className="marketing-feature-grid">
             {features.map((feature) => <FeatureCard key={feature.title} {...feature} />)}
           </div>
@@ -162,13 +219,74 @@ function Landing({ onNavigate }: { onNavigate: (path: string) => void }) {
         </div>
       </section>
 
+      <section className="marketing-section marketing-container" id="roadmap">
+        <div className="marketing-roadmap-intro">
+          <SectionHeading eyebrow="DEVELOPMENT STATUS" title="กำลังสร้าง ไม่ได้แกล้งบอกว่าเสร็จแล้ว" body="Liney ยังอยู่ระหว่างพัฒนา ฟีเจอร์ในโค้ดกับฟีเจอร์ที่ทดสอบกับ LINE จริงอาจไม่เท่ากัน เราแยกสถานะไว้ให้เห็นชัด ๆ" />
+          <a className="marketing-inline-link" href="#get-liney">ดูแผนการเผยแพร่ <ArrowRight size={16} /></a>
+        </div>
+        <div className="marketing-roadmap-grid">
+          <article className="marketing-roadmap-card">
+            <span className="marketing-roadmap-label"><CheckCircle2 size={16} /> มีในโค้ดแล้ว</span>
+            <h3>ระบบแชตหลัก</h3>
+            <p>หน้าต่างแชต, ประวัติใน SQLite, Media, Outbox, การจัดการ Session และการอ่านจาก Cache</p>
+            <small>บางความสามารถยังต้องตรวจสอบกับ LINE Server จริง</small>
+          </article>
+          <article className="marketing-roadmap-card">
+            <span className="marketing-roadmap-label experimental"><FlaskConical size={16} /> กำลังทดสอบ</span>
+            <h3>เสียงและวิดีโอ</h3>
+            <p>ระบบรับสาย/โทรออก, Native Audio, Video และ Screen Sharing สำหรับ Linux Desktop</p>
+            <small>มี Implementation แต่ยังไม่ยืนยันว่าเสถียรสำหรับใช้งานประจำวัน</small>
+          </article>
+          <article className="marketing-roadmap-card">
+            <span className="marketing-roadmap-label upcoming"><Clock3 size={16} /> ขั้นต่อไป</span>
+            <h3>ความสมบูรณ์ของ Client</h3>
+            <p>จัดการกลุ่ม, Notes และเติม UI ให้ความสามารถที่ Protocol รองรับ</p>
+            <small>พร้อมตรวจสอบการเปลี่ยนแปลงของ LINEJS เป็นระยะ</small>
+          </article>
+        </div>
+      </section>
+
+      <section className="marketing-section marketing-section-download" id="get-liney">
+        <div className="marketing-container marketing-download-layout">
+          <div>
+            <div className="marketing-kicker">GET INVOLVED</div>
+            <h2>อยากลอง Liney บนเครื่องตัวเอง?</h2>
+            <p>ตอนนี้ Liney ยังอยู่ในช่วง Developer Preview โดย Repository ยังเป็นส่วนตัว และยังไม่มี Public Release เรากำลังเตรียมแพ็กเกจและทดสอบฟีเจอร์ให้พร้อมก่อนเปิดให้ทดลอง</p>
+            <div className="marketing-actions">
+              <button className="marketing-primary-button" type="button" onClick={() => onNavigate("/chat")}>ลองหน้าแชตตัวอย่าง <ArrowRight size={17}/></button>
+              <a className="marketing-secondary-button marketing-link-button" href="#roadmap"><Layers3 size={16}/> ดูสถานะโปรเจกต์</a>
+            </div>
+          </div>
+          <div className="marketing-terminal" aria-label="ขั้นตอนเตรียมเผยแพร่ Liney">
+            <div className="marketing-terminal-top"><span className="window-dots"><i/><i/><i/></span><span><Layers3 size={14}/> release checklist</span></div>
+            <div className="marketing-terminal-body marketing-terminal-steps">
+              <span><b>01</b> Desktop Client &amp; Local Engine</span>
+              <span><b>02</b> QA · Security · Compatibility</span>
+              <span><b>03</b> Linux Packages &amp; Release</span>
+            </div>
+            <div className="marketing-terminal-bottom"><FlaskConical size={14}/> กำลังพัฒนา · ไม่มีปุ่มดาวน์โหลดหรือหน้า Source สาธารณะในขณะนี้</div>
+
+          </div>
+        </div>
+      </section>
+
+      <section className="marketing-section marketing-container" id="faq">
+        <SectionHeading eyebrow="GOOD TO KNOW" title="คำถามที่ควรรู้ก่อนลองใช้" body="ข้อมูลตรงไปตรงมาเกี่ยวกับการติดตั้ง ความเป็นอิสระ และข้อจำกัดที่ยังมีอยู่" />
+        <div className="marketing-faq">
+          <details><summary>Liney เป็น LINE ทางการหรือเปล่า? <ChevronDown size={18}/></summary><p>ไม่ใช่ Liney เป็นโครงการอิสระ ไม่ได้พัฒนาหรือรับรองโดย LY Corporation และใช้ Protocol ที่ไม่ได้รับรองอย่างเป็นทางการ</p></details>
+          <details><summary>เว็บไซต์นี้ล็อกอิน LINE ได้จริงไหม? <ChevronDown size={18}/></summary><p>ไม่ได้ หน้าตัวอย่างแชตและล็อกอินเป็น Demo เท่านั้น การเชื่อมต่อบัญชีจริงเกิดใน Desktop Client ไม่ใช่เว็บไซต์นำเสนอนี้</p></details>
+          <details><summary>ติดตั้งบน Linux ได้เลยหรือยัง? <ChevronDown size={18}/></summary><p>ยังไม่มี Public Release หรือ Repository สาธารณะสำหรับดาวน์โหลดในตอนนี้ หน้าเว็บให้ทดลองเฉพาะ UI Demo ไปก่อน</p></details>
+          <details><summary>ใช้ Client อิสระมีความเสี่ยงอะไร? <ChevronDown size={18}/></summary><p>LINE อาจเปลี่ยน Private Protocol หรือข้อจำกัดการเข้าสู่ระบบ ทำให้ฟีเจอร์หยุดทำงานหรือบัญชีถูกจำกัดการใช้งานได้ ควรทดลองอย่างระมัดระวัง</p></details>
+        </div>
+      </section>
+
       <section className="marketing-cta marketing-container">
         <div>
           <div className="marketing-kicker">TAKE A LOOK AROUND</div>
-          <h2>อยากเห็นหน้าตาแอปจริงไหม?</h2>
-          <p>เปิดตัวอย่างหน้าแชตได้ทันที ข้อมูลทั้งหมดเป็น mock data เพื่อการนำเสนอเท่านั้น</p>
+          <h2>มาดูหน้าตา Liney กันก่อน</h2>
+          <p>ทดลอง UI แบบโต้ตอบได้ในเบราว์เซอร์ โดยไม่มีการเชื่อมบัญชี LINE จริง</p>
         </div>
-        <button className="marketing-primary-button" type="button" onClick={() => onNavigate("/chat")}>เปิดตัวอย่าง Liney <ArrowRight size={17} /></button>
+        <button className="marketing-primary-button" type="button" onClick={() => onNavigate("/chat")}>เข้าสู่ Demo <ArrowRight size={17} /></button>
       </section>
 
       <section className="marketing-disclaimer marketing-container">
@@ -293,5 +411,20 @@ function DiagramNode({ icon: Icon, title, detail, dark }: { icon: LucideIcon; ti
 }
 
 function MarketingFooter({ onNavigate }: { onNavigate: (path: string) => void }) {
-  return <footer className="marketing-footer"><div className="marketing-container marketing-footer-inner"><button className="marketing-footer-brand" type="button" onClick={() => onNavigate("/")}><img src="/liney-mark.svg" alt="" /><span><strong>Liney</strong><small>Unofficial LINE client for Linux</small></span></button><span>Built independently for Linux users · 2026</span><span className="marketing-footer-note">Not affiliated with LINE / LY Corporation</span></div></footer>;
+  return (
+    <footer className="marketing-footer">
+      <div className="marketing-container marketing-footer-inner">
+        <button className="marketing-footer-brand" type="button" onClick={() => onNavigate("/")}>
+          <img src="/liney-mark.svg" alt="" />
+          <span><strong>Liney</strong><small>An independent Linux desktop project</small></span>
+        </button>
+        <div className="marketing-footer-links">
+          <a href="/#features">Features</a>
+          <a href="/#roadmap">Roadmap</a>
+          <a href="/#faq">FAQ</a>
+        </div>
+        <span className="marketing-footer-note">Made for the Linux community <Heart size={13}/><br/>Not affiliated with LY Corporation</span>
+      </div>
+    </footer>
+  );
 }

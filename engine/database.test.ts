@@ -228,6 +228,64 @@ describe("LineyDatabase", () => {
     database.close();
   });
 
+  test("keeps link previews persistent and bounded by LRU", () => {
+    const root = mkdtempSync(join(tmpdir(), "liney-link-preview-cache-test-"));
+    const database = new LineyDatabase(join(root, "liney.sqlite"));
+
+    database.saveLinkPreview("default", "https://example.com/one", { title: "One", siteName: "example.com" }, 2);
+    database.saveLinkPreview("default", "https://example.com/two", { title: "Two", siteName: "example.com" }, 2);
+    expect(database.getLinkPreview("default", "https://example.com/one")).toMatchObject({ title: "One" });
+    database.saveLinkPreview("default", "https://example.com/three", { title: "Three", siteName: "example.com" }, 2);
+
+    expect(database.getLinkPreview("default", "https://example.com/one")).toMatchObject({ title: "One" });
+    expect(database.getLinkPreview("default", "https://example.com/three")).toMatchObject({ title: "Three" });
+    expect(database.getLinkPreview("default", "https://example.com/two")).toBeNull();
+    database.close();
+  });
+
+  test("prunes durable message cache without deleting pending rows", () => {
+    const root = mkdtempSync(join(tmpdir(), "liney-cache-prune-test-"));
+    const database = new LineyDatabase(join(root, "liney.sqlite"));
+
+    for (const chatId of ["u-a", "u-b", "u-c"]) {
+      database.upsertChat("default", { id: chatId, kind: "dm", name: chatId });
+      for (let index = 0; index < 10; index += 1) {
+        database.upsertMessage("default", {
+          id: `${chatId}-${index}`,
+          chatId,
+          kind: "dm",
+          text: `message ${index}`,
+          isMine: false,
+          createdTime: 1_700_000_000_000 + index,
+          status: "sent",
+        });
+      }
+    }
+    database.upsertMessage("default", {
+      id: "pending-1",
+      chatId: "u-a",
+      kind: "dm",
+      text: "still sending",
+      isMine: true,
+      createdTime: 1_700_000_000_100,
+      status: "sending",
+    });
+
+    const result = database.pruneMessageCache("default", {
+      maxPerChat: 5,
+      maxTotal: 12,
+      keepPerChat: 2,
+    });
+
+    expect(result.removed).toBeGreaterThan(0);
+    expect(database.getMessage("default", "u-a", "pending-1")?.status).toBe("sending");
+    expect(database.listMessages("default", "u-a", 100).some((message) => message.id === "u-a-9")).toBe(true);
+    expect(database.listMessages("default", "u-b", 100).some((message) => message.id === "u-b-9")).toBe(true);
+    expect(database.listMessages("default", "u-c", 100).some((message) => message.id === "u-c-9")).toBe(true);
+    expect(database.stats("default").messages).toBeLessThanOrEqual(13);
+    database.close();
+  });
+
   test("lists visible CALL messages without mixing in other content", () => {
     const root = mkdtempSync(join(tmpdir(), "liney-call-history-test-"));
     const database = new LineyDatabase(join(root, "liney.sqlite"));
@@ -262,6 +320,28 @@ describe("LineyDatabase", () => {
     }]);
     database.hideMessageForMe("default", "u-peer", "dm", "call-1");
     expect(database.listMessagesByContentType("default", 6)).toEqual([]);
+    database.close();
+  });
+});
+
+describe("E2EE pending recovery index", () => {
+  test("returns only encrypted placeholders and stops returning recovered messages", () => {
+    const root = mkdtempSync(join(tmpdir(), "liney-e2ee-recovery-test-"));
+    const database = new LineyDatabase(join(root, "liney.sqlite"));
+    const base = {
+      chatId: "u-peer", kind: "dm" as const, isMine: false,
+      createdTime: 1_700_000_000_000, contentType: 0,
+    };
+    database.upsertMessage("default", { ...base, id: "pending", text: "ข้อความเข้ารหัส — ไม่สามารถถอดรหัสได้", raw: {
+      id: "pending", contentType: 0, lineyE2eeDecodeError: true,
+    } });
+    database.upsertMessage("default", { ...base, id: "ready", text: "hello", raw: { id: "ready", contentType: 0 } });
+    database.upsertMessage("default", { ...base, id: "fake", text: "like placeholder", raw: { id: "fake", lineyE2eeDecodeError: false } });
+    expect(database.listPendingE2EEMessages("default").map((message) => message.id)).toEqual(["pending"]);
+    database.upsertMessage("default", { ...base, id: "pending", text: "decrypted", raw: {
+      id: "pending", contentType: 0, text: "decrypted",
+    } });
+    expect(database.listPendingE2EEMessages("default")).toEqual([]);
     database.close();
   });
 });

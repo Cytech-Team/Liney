@@ -1,0 +1,30 @@
+.liney-albums-backdrop { z-index: 38; }
+.liney-albums-panel { position: relative; width: min(600px, 94vw); max-height: min(730px, 88vh); min-height: 280px; display: flex; flex-direction: column; overflow: hidden; color: var(--text); background: var(--panel); border: 1px solid var(--border-strong); border-radius: 18px; box-shadow: 0 18px 90px #0003; }
+.liney-albums-head { display: flex; align-items: center; gap: 14px; border-bottom: 1px solid var(--border); padding: 16px 20px; color: var(--text); }
+.liney-albums-head > div { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; }
+.liney-albums-head strong { font-size: 15px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.liney-albums-head small, .liney-albums-item small { color: var(--muted); font-size: 11px; }
+.liney-albums-panel .icon-button { color: var(--muted); flex: 0 0 auto; }
+.liney-albums-panel .icon-button:hover { color: var(--text); background: var(--panel-3); }
+.liney-albums-panel input:not([type="checkbox"]), .liney-albums-panel textarea { color: var(--text); background: var(--panel-2); border: 1px solid var(--border-strong); accent-color: var(--green); }
+.liney-albums-panel input:not([type="checkbox"]):focus, .liney-albums-panel textarea:focus { outline: 2px solid color-mix(in srgb, var(--green) 55%, transparent); outline-offset: 1px; }
+.liney-albums-panel input[type="checkbox"] { accent-color: var(--green); }
+.liney-albums-panel button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.liney-albums-head > .icon-button:last-child { margin-left: auto; }
+.liney-albums-list, .liney-albums-photo-list { padding: 10px; overflow: auto; flex: 1; }
+.liney-albums-item { display: flex; width: 100%; align-items: center; text-align: left; gap: 13px; border: 0; background: transparent; color: inherit; padding: 13px; border-radius: 10px; cursor: pointer; }
+.liney-albums-item:hover, .liney-albums-photo:hover:not(:disabled) { background: var(--hover, #879a8620); }
+.liney-albums-item > span:nth-child(2) { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 5px; }
+.liney-albums-item strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.liney-albums-empty { display: flex; align-items: center; gap: 10px; padding: 30px; justify-content: center; text-align: center; color: var(--muted); font-size: 12px; }
+.liney-albums-error { margin: 12px 18px; color: #ef7777; font-size: 12px; overflow-wrap: anywhere; }
+:root:not([data-theme="dark"]) .liney-albums-error { color: #a72235; }
+.liney-albums-photo-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(125px, 1fr)); align-content: start; gap: 8px; }
+.liney-albums-photo { min-height: 94px; padding: 14px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--border, #ccc6); border-radius: 12px; background: transparent; color: inherit; cursor: pointer; }
+.liney-albums-photo:disabled { opacity: .55; cursor: not-allowed; }
+.liney-albums-photo small { text-align: center; overflow-wrap: anywhere; }
+.liney-albums-more { border: 0; border-top: 1px solid var(--border, #ddd6); padding: 13px; background: transparent; color: inherit; cursor: pointer; }
+.liney-albums-preview { position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; padding: 60px 18px 18px; background: #0b1321f0; }
+.liney-albums-preview > button { position: absolute; top: 10px; right: 10px; color: white; }
+.liney-albums-preview img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; }
+@media (max-width: 480px) { .liney-albums-panel { width: 100vw; max-height: 100dvh; height: 100dvh; border-radius: 0; } }

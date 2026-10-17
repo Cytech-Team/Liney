@@ -1,0 +1,4 @@
+import { createRoot } from "react-dom/client";
+import { ImageViewerOverlay } from "./ImageViewerOverlay";
+const sample = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#18212d"/><stop offset="1" stop-color="#26394c"/></linearGradient></defs><rect width="1280" height="720" fill="url(#g)"/><circle cx="1040" cy="150" r="90" fill="#22c55e" opacity=".8"/><text x="640" y="330" text-anchor="middle" fill="white" font-family="sans-serif" font-size="64" font-weight="700">Liney Image Preview + Edit</text><text x="640" y="400" text-anchor="middle" fill="#aab7c4" font-family="sans-serif" font-size="30">Standalone extracted component</text></svg>`)}`;
+createRoot(document.getElementById("root")!).render(<ImageViewerOverlay src={sample} onClose={() => {}} />);

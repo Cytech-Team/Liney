@@ -5,7 +5,8 @@
     "": {
       "name": "liney",
       "dependencies": {
-        "@evex/linejs": "npm:@jsr/evex__linejs@3.4.2",
+        "@evex/linejs": "npm:@jsr/evex__linejs@3.5.0",
+        "@tanstack/react-virtual": "^3.14.13",
         "@tauri-apps/api": "^2.11.1",
         "@tauri-apps/plugin-dialog": "^2",
         "@tauri-apps/plugin-notification": "^2",
@@ -30,9 +31,9 @@
     },
   },
   "packages": {
-    "@evex/linejs": ["@jsr/evex__linejs@3.4.2", "https://npm.jsr.io/~/11/@jsr/evex__linejs/3.4.2.tgz", { "dependencies": { "@jsr/evex__linejs-types": "^3.4.2", "@jsr/evex__loose-types": "^1.0.1", "@noble/ciphers": "^2.2", "@types/node-int64": "^0.4.32", "@types/thrift": "^0.10.17", "crypto-js": "^4.2.0", "curve25519-js": "^0.0.4", "node-bignumber": "^1.2.2", "node-int64": "^0.4.0", "opusscript": "^0.1.1", "thrift": "^0.20.0", "tweetnacl": "^1.0.3", "undici": "^7" } }, "sha512-nq7q2DKMdOUn1bK5I2sdTb0waaD0JkK/8Zi18T8iQA+nsHLJSlXuTYpvQcfrY2EFPu5IJ5HEUaiJfOkVIzTWIg=="],
+    "@evex/linejs": ["@jsr/evex__linejs@3.5.0", "https://npm.jsr.io/~/11/@jsr/evex__linejs/3.5.0.tgz", { "dependencies": { "@jsr/evex__linejs-types": "^3.5.0", "@jsr/evex__loose-types": "^1.0.1", "@noble/ciphers": "^2.2", "@types/node-int64": "^0.4.32", "@types/thrift": "^0.10.17", "crypto-js": "^4.2.0", "curve25519-js": "^0.0.4", "node-bignumber": "^1.2.2", "node-int64": "^0.4.0", "opusscript": "^0.1.1", "thrift": "^0.20.0", "tweetnacl": "^1.0.3", "undici": "^7" } }, "sha512-LdE2YYA48FAa0NBm8Tq0VyCre5xJ5gQ7+HmJy/VNAE0GozqiuNlB5Y7dKvM1QYe0oyOacYtHHdIknc0xVv8z4w=="],
 
-    "@jsr/evex__linejs-types": ["@jsr/evex__linejs-types@3.4.2", "https://npm.jsr.io/~/11/@jsr/evex__linejs-types/3.4.2.tgz", { "dependencies": { "@jsr/evex__loose-types": "^1.0.1" } }, "sha512-3eQqLqjf4y2RINj2LD4HM+sApxZF54y8+GxredjzuS1yw5ppvtNhhzMkIEDqFlsMnbE0drSCAySKNo3USiKMzA=="],
+    "@jsr/evex__linejs-types": ["@jsr/evex__linejs-types@3.5.0", "https://npm.jsr.io/~/11/@jsr/evex__linejs-types/3.5.0.tgz", { "dependencies": { "@jsr/evex__loose-types": "^1.0.1" } }, "sha512-XH5z1a1Ogt7HD7NMKNgdIR8y2UsXhEL5NmGuXNXKwSUkEUhFVquXo8jKR0XchXteDh7BFkewS84iSAM52iaCDQ=="],
 
     "@jsr/evex__loose-types": ["@jsr/evex__loose-types@1.0.1", "https://npm.jsr.io/~/11/@jsr/evex__loose-types/1.0.1.tgz", {}, "sha512-ENNSHt+xHtkMJj+wp4dGWpLVY3J/BPSfXOo2u6ObFCuLN/hL71HUNQ/xB32jiqQj+u8nqWlGuenH1toFLDYM6Q=="],
 
@@ -109,6 +110,10 @@
     "@rolldown/binding-win32-x64-msvc": ["@rolldown/binding-win32-x64-msvc@1.2.7", "", { "os": "win32", "cpu": "x64" }, "sha512-W/jg5qoRSqjsEv0+dZi4e687mcHqmVuU0P4fK6qS/xjetW2Gmc1W8j//z5nAeNcC8Ttm0hV46IjcYeuVwYhuiw=="],
 
     "@rolldown/pluginutils": ["@rolldown/pluginutils@1.0.1", "", {}, "sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw=="],
+
+    "@tanstack/react-virtual": ["@tanstack/react-virtual@3.14.13", "", { "dependencies": { "@tanstack/virtual-core": "3.17.11" }, "peerDependencies": { "react": "^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0", "react-dom": "^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0" } }, "sha512-JbDTAwtzZ99aOeCrAfW5EsE5KSq5RWh6Af2dtFwyLIIk48Ja7vm6n4axu/43T3vfjFnEGJalxJ1wyYjSQD6bSg=="],
+
+    "@tanstack/virtual-core": ["@tanstack/virtual-core@3.17.11", "", {}, "sha512-+ILjvtHup6Y2hzQ6YzwMgX1Q+oQpxEGOXCEsCNaPoIP0VxMbizIBTmYTDtkerkIQS8/CbP1BRuyt8V/8BCsy1g=="],
 
     "@tauri-apps/api": ["@tauri-apps/api@2.11.1", "", {}, "sha512-M2FPuYND2m+wh5hfW9ZpSdxMPdEJovPBWwoHJmwUpysTYNHaOkVFN419m/K0LIgjb/7KU2vBgsUepJWugQCvAA=="],
 
