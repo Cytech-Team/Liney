@@ -222,7 +222,7 @@ SQLite, sync, and media logic.
 ## Web experience vs. public website
 
 The main public product website is the static site under [website/](website/),
-deployed through Cloudflare Workers at https://liney.namnarak.in.th.
+deployed through Cloudflare Pages at https://liney.namnarak.in.th.
 It includes product information, downloads and the current development status.
 
 The React / Vite frontend under src/ is the shared desktop UI frontend; its
@@ -294,7 +294,7 @@ bun run engine:build   # compile and stage the engine sidecar
 
 Release bundles must never contain credentials or a user's session.
 
-## Public website / Cloudflare Workers
+## Public website / Cloudflare Pages
 
 The public landing page, current feature status and download guide are in
 [website/](website/). The published site is
@@ -310,8 +310,10 @@ this repository's **actual published GitHub Release assets**.
 - Windows/macOS ports and Liney Lite are *ideas under consideration*, not
   released editions or promised features.
 
-Cloudflare Workers Builds publishes static assets from website/dist on master.
-Build with `(cd website && bun run build)`. See [website/README.md](website/README.md).
+Cloudflare Pages builds production on the master branch using
+`node website/build.mjs` (from the repository root) and serves `website/dist`.
+The build fingerprints stylesheet and JavaScript assets to prevent HTML/CSS
+version skew from Cloudflare or browser caches. See [website/README.md](website/README.md).
 The website is informational, not the LINE Desktop protocol engine, and the
 public Web App is a separate experimental route. Never enter LINE credentials
 on a mirror or untrusted download page.

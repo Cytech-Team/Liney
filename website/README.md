@@ -1,6 +1,6 @@
 # Liney public website
 
-Static public pages deployed to Cloudflare Workers Static Assets.
+Static public pages hosted on Cloudflare Pages at https://liney.namnarak.in.th.
 
 ## Cache-safe deployment
 
@@ -14,23 +14,24 @@ HTML references always point at exactly the version they were built with.
 
 Run `bun run test:website` to verify hash references and theme behavior.
 
-## Cloudflare Workers Builds
+## Cloudflare Pages production
 
-The Cloudflare Worker `liney` is connected to `Cytech-Team/Liney` and should use:
+Production is the Cloudflare Pages project `liney` (`liney.pages.dev`),
+connected to `Cytech-Team/Liney` on branch `master`. Its custom domain is
+`liney.namnarak.in.th` (CNAME -> `liney.pages.dev`).
 
+Project Build configuration (configure in Cloudflare Pages settings):
+- Root directory: repository root (empty)
+- Build command: `node website/build.mjs`
+- Build output directory: `website/dist`
 - Production branch: `master`
-- Root directory: `/website`
-- Build command: `bun run build`
-- Deploy command: `npx wrangler deploy`
-- Wrangler config: `website/wrangler.jsonc`
 
-`bun run build` copies only the public site files into `website/dist/`. Wrangler
-then publishes `dist/` as static assets, so project metadata such as this README,
-`package.json`, and `wrangler.jsonc` are not exposed as website assets.
-
-For automatic builds, Cloudflare Workers Builds also needs a valid build API token.
-If Cloudflare reports that the selected token was deleted or rolled, create/select a
-new token in Worker Settings > Build > Build Configuration and retry the build.
+**Important:** Deploying the sibling Cloudflare Worker named `liney` using
+`website/wrangler.jsonc` does *not* update the actual custom domain. This
+domain is bound to Cloudflare Pages, not the Worker. The Pages build must run
+`build.mjs` or Pages will copy raw files from `website/` and the HTML will
+continue to reference unversioned CSS/JS. Build output only contains public
+artifacts and intentionally excludes project metadata and scripts.
 
 ## Configure repository links
 
