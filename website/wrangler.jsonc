@@ -1,8 +1,0 @@
-{
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "liney",
-  "compatibility_date": "2026-09-14",
-  "assets": {
-    "directory": "./dist"
-  }
-}

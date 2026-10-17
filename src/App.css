@@ -1471,12 +1471,3 @@ button { border: 0; background: none; cursor: pointer; }
 }
 .official-history-banner svg { flex: 0 0 auto; color: var(--green-strong); }
 .official-history-banner strong { color: var(--text); }
-
-/* Web-only on-device engine onboarding: no browser extension. */
-.auth-local-engine-setup{display:grid;gap:.6rem;padding:1rem;margin:1rem 0;border:1px solid var(--border);border-radius:12px;background:var(--panel-2)}
-.auth-local-engine-setup>strong{font-size:.9rem}
-.auth-local-engine-setup p{margin:0;font-size:.78rem;line-height:1.65;color:var(--muted);overflow-wrap:anywhere}
-.auth-local-engine-setup code{font-size:.92em}
-.auth-local-engine-setup input{min-width:0;width:100%;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--text);padding:.7rem}
-.auth-local-engine-setup .auth-primary{margin:0}
-.auth-local-engine-setup>a{font-size:.78rem;color:var(--green);text-decoration:underline;text-underline-offset:3px}

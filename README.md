@@ -225,11 +225,10 @@ The main public product website is the static site under [website/](website/),
 deployed through Cloudflare Pages at https://liney.namnarak.in.th.
 It includes product information, downloads and the current development status.
 
-The React / Vite frontend under src/ is the shared desktop UI frontend; its
-web-preview and browser-runtime paths are separate from the product website.
-A public Web App route is experimental and must not be described as having the
-same capabilities, session model or privacy boundary as the local Desktop build.
-When testing preview/demo views, do not treat demo content as a real LINE login.
+The React / Vite frontend under src/ powers the desktop app; browser builds
+are developer previews only, not a LINE Web client. The public Web App was
+discontinued in October 2026. The former /app route redirects to the
+desktop download page. The website never processes LINE sessions or chats.
 
 For the public website build and deploy instructions, see
 [website/README.md](website/README.md).
@@ -314,9 +313,8 @@ Cloudflare Pages builds production on the master branch from the `website/`
 root using `node build.mjs` and serves `website/dist`.
 The build fingerprints stylesheet and JavaScript assets to prevent HTML/CSS
 version skew from Cloudflare or browser caches. See [website/README.md](website/README.md).
-The website is informational, not the LINE Desktop protocol engine, and the
-public Web App is a separate experimental route. Never enter LINE credentials
-on a mirror or untrusted download page.
+The website is informational only; it does not process LINE sessions.
+Never enter LINE credentials on a mirror or untrusted download page.
 
 The Terms and Privacy pages are project drafts, not legal advice. Review them
 for the applicable jurisdiction before treating them as binding legal documents.

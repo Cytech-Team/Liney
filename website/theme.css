@@ -1,4 +1,4 @@
-/* Liney website theme layer: independent of the Liney Desktop and Web App runtimes. */
+/* Liney website theme layer: independent of the Liney Desktop runtime. */
 .theme-picker { position: relative; z-index: 65; flex: 0 0 auto; }
 .theme-trigger {
   display: inline-flex; align-items: center; justify-content: center; gap: .4rem;

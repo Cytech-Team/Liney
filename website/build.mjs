@@ -6,19 +6,17 @@ import { fileURLToPath } from "node:url";
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dist = path.join(root, "dist");
 const files = [
-  "404.html", "app.html", "download.html", "index.html",
-  "features.html", "technology.html", "roadmap.html", "compatibility.html", "license.html",
-  "LICENSE.txt", "notice.html", "privacy.html", "robots.txt", "sitemap.xml",
+  "404.html", "download.html", "index.html",
+  "features.html", "technology.html", "roadmap.html", "license.html",
+  "LICENSE.txt", "notice.html", "privacy.html", "robots.txt", "sitemap.xml", "_redirects",
   "site-config.js", "site.js", "theme-init.js", "release.js",
-  "liney-manifest.webmanifest", "liney-app-sw.js",
-  "styles.css", "theme.css", "compatibility.css", "compatibility.js", "terms.html", "favicon.svg",
-  "icons.svg", "liney-logo.png", "liney-icon-192.png", "liney-mark.svg",
+  "styles.css", "theme.css", "liney-app-sw.js", "terms.html", "favicon.svg",
+  "icons.svg", "liney-logo.png", "liney-mark.svg",
 ];
-const directories = ["assets", "app-assets", "api"];
+const directories = ["assets"];
 const versioned = [
   "site-config.js", "site.js", "theme-init.js", "release.js",
-  "liney-manifest.webmanifest", "liney-app-sw.js",
-  "styles.css", "theme.css", "compatibility.css", "compatibility.js",
+  "styles.css", "theme.css",
 ];
 
 rmSync(dist, { recursive: true, force: true });
@@ -45,14 +43,13 @@ for (const filename of versioned) {
   writeFileSync(path.join(dist, versionedName), bytes);
   aliases.set(filename, versionedName);
 }
-const pageNames = readdirSync(dist).filter((filename) => filename.endsWith(".html") && filename !== "app.html");
+const pageNames = readdirSync(dist).filter((filename) => filename.endsWith(".html"));
 for (const filename of pageNames) {
   let html = readFileSync(path.join(dist, filename), "utf8");
   for (const [before, after] of aliases.entries()) {
     const matcher = new RegExp("((?:src|href)=[\"'])" + before.replaceAll(".", "\\.") + "(?=[\"'])", "g");
     html = html.replace(matcher, (_, attr) => attr + after);
   }
-  // The separate interactive Web App is intentionally left untouched.
   writeFileSync(path.join(dist, filename), html);
 }
 for (const filename of ["index.html", "download.html", "notice.html"]) {

@@ -4,15 +4,15 @@ Static public pages hosted on Cloudflare Pages at https://liney.namnarak.in.th.
 
 ## Cache-safe deployment
 
-Static assets are cached by Cloudflare for up to 4 hours. After a redesign,
+Static assets can be cached by Cloudflare. After a redesign,
 loading a fresh HTML page with a stale `styles.css` or `site.js` could break
 the layout and prevent the theme control from appearing. The `build.mjs` script
 now emits content-addressed CSS and JavaScript names (e.g.
 `styles.<sha256>.css`) and replaces HTML references during deployment.
 HTML references always point at exactly the version they were built with.
-`app.html` and Web App assets remain unchanged.
 
-Run `bun run test:website` to verify hash references and theme behavior.
+
+Run `bun run test:website` to verify hash references, navigation and theme behavior.
 
 ## Cloudflare Pages production
 
@@ -26,14 +26,10 @@ Project Build configuration (configure in Cloudflare Pages settings):
 - Build output directory: `dist` (relative to the root directory)
 - Production branch: `master`
 
-**Important:** Deploying the sibling Cloudflare Worker named `liney` using
-`website/wrangler.jsonc` does *not* update the actual custom domain. This
-domain is bound to Cloudflare Pages, not the Worker. Building from `website/`
-also avoids trying to install the entire desktop app with a Bun version too old
-to parse the repository root lockfile. The Pages build must run
-`build.mjs` or Pages will copy raw files from `website/` and the HTML will
-continue to reference unversioned CSS/JS. Build output only contains public
-artifacts and intentionally excludes project metadata and scripts.
+The production domain uses Cloudflare Pages, not Workers. Build from the
+`website/` root using `node build.mjs` and publish `website/dist`; a raw
+directory upload can ship broken/stale asset URLs. The output intentionally
+contains only the informational desktop website, not browser LINE runtime.
 
 ## Configure repository links
 
@@ -59,52 +55,18 @@ and a true multi-page structure: `index.html` (overview), `features.html`
 CSS-only illustrative desktop chat mock (explicitly marked as a concept), bento-style
 feature summaries, developer architecture, Linux-first roadmap, and an interactive
 installer/download guide. Legal and privacy pages use the same design system.
-This intentionally does not change the separately deployed Web App runtime UI.
+The product website is informational; it does not provide a browser LINE client.
 
 The shared stylesheet is website/styles.css; all public pages use the same
 navigation, footer and System/Light/Dark selector.
 It reads a saved preference from localStorage (if available) before stylesheet
 parsing, follows OS color preference in System mode, and persists manual choices.
-The separate Web App remains unchanged. Theme bootstrapping uses theme-init.js
+Theme bootstrapping uses theme-init.js
 and the dark design layer is theme.css.
 
 Mobile navigation uses site.js and download metadata uses release.js.
 Test pages at desktop/mobile widths and run `bun run test:website` to check
 links, anchors, theme persistence, cached asset hashes and built pages.
-
-## Device capability check
-
-`compatibility.html` is a static, client-side diagnostic available on Cloudflare
-Pages. It tests real local IndexedDB/OPFS read/write/delete, Web Crypto,
-secure context, basic PWA support, storage quota and persistence state.
-`Local Engine` is only probed after a user explicitly clicks the connection
-button; modern Chrome may request Loopback Network permission. Results remain
-in browser memory; copying a redacted report is optional and user-initiated.
-No LINE account, token, machine identifier or Workspace policy is collected.
-A regular website cannot enumerate every ChromeOS Enterprise policy; statuses
-indicate unavailable, available, or unverified rather than guessing.
-
-**Invite codes are not currently implemented.** One-time/revocable codes
-require a server-side authorization service (e.g. Cloudflare Worker + D1)
-that handles only invite metadata, never LINE traffic or credentials.
-A client-only code field must not be described as secure download protection.
-
-## Liney Web (device-local compute, no extension)
-
-The experimental `/app` route uses browser `fetch()` to the Liney Engine
-running on the visitor's device via `127.0.0.1`. A locally generated
-bearer token is entered on the login page and stored in that tab's session
-storage. Recent Chrome can prompt to allow Loopback Network Access.
-
-Cloudflare Pages provides static UI/PWA and updates only.
-No maintainer Home Server or Cloudflare Worker runs LINEJS per user.
-Devices with no permission to run a local helper are not supported yet.
-
-Use `compatibility.html` to verify browser features, local storage and
-loopback reachability; this diagnostic does not report hardware identifiers
-or account tokens. It cannot enumerate all Google Workspace policies.
-The invitation-code idea has not been implemented or made public.
-See `docs/WEB_APP_MODE.md` in the repository for details.
 
 ## Published packages and feature status
 
@@ -155,3 +117,14 @@ python3 -m http.server 4173 --directory dist
 The Terms and Privacy pages are project drafts, not legal advice. Review them
 for the intended jurisdiction and distribution model before treating them as
 binding legal documents.
+
+## Web App retirement (October 2026)
+
+Liney Web App was discontinued. The published `/app` and `/app.html` paths
+redirect to the desktop download page. The browser client, Chrome Connector,
+standalone runner and compatibility probe have been removed from the repo.
+Cloudflare Pages continues hosting *only* the informational product website.
+
+`liney-app-sw.js` remains temporarily as a small retirement script so browsers
+with an older installed PWA can unregister its service worker and clear the
+old `liney-web-local-*` offline shell caches. It does not run a Web App.

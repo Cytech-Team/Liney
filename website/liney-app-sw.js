@@ -1,24 +1,18 @@
-const CACHE = 'liney-web-local-v1';
-const APP = '/app';
-self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll([APP, '/liney-manifest.webmanifest'])));
-  self.skipWaiting();
+// Historical Liney Web App service worker retirement shim.
+// Once fetched by a previously installed PWA, stop interception permanently.
+self.addEventListener("install", (event) => {
+  event.waitUntil(self.skipWaiting());
 });
-self.addEventListener('activate', (event) => {
-  event.waitUntil(caches.keys().then(names => Promise.all(names.filter(n => n.startsWith('liney-web-local-') && n !== CACHE).map(n => caches.delete(n)))));
-  self.clients.claim();
-});
-self.addEventListener('fetch', (event) => {
-  const req = event.request;
-  if (req.method !== 'GET') return;
-  const url = new URL(req.url);
-  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
-  if (url.pathname !== APP && !url.pathname.startsWith('/app-assets/') && url.pathname !== '/liney-manifest.webmanifest') return;
-  event.respondWith(fetch(req).then(res => {
-    if (res.ok) {
-      const copy = res.clone();
-      event.waitUntil(caches.open(CACHE).then(cache => cache.put(req, copy)));
-    }
-    return res;
-  }).catch(async () => await caches.match(req) || (url.pathname === APP ? caches.match(APP) : Response.error())));
+self.addEventListener("activate", (event) => {
+  event.waitUntil((async () => {
+    const names = await caches.keys();
+    await Promise.all(names.filter((name) => name.startsWith("liney-web-local-"))
+      .map((name) => caches.delete(name)));
+    await self.registration.unregister();
+    await self.clients.claim();
+    const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    await Promise.all(clients.filter((client) =>
+      new URL(client.url).pathname.startsWith("/app"))
+      .map((client) => client.navigate("/download.html").catch(() => undefined)));
+  })());
 });

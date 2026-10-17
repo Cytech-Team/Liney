@@ -6,7 +6,7 @@ import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
 const dist = path.join(root, "dist");
-const publicPages = ["index.html", "features.html", "technology.html", "roadmap.html", "compatibility.html", "download.html", "notice.html", "privacy.html", "terms.html", "license.html", "404.html"];
+const publicPages = ["index.html", "features.html", "technology.html", "roadmap.html", "download.html", "notice.html", "privacy.html", "terms.html", "license.html", "404.html"];
 const sourceAssets = ["site-config.js", "site.js", "theme-init.js", "release.js", "styles.css", "theme.css"];
 
 test("all public HTML pages reference identical hash-versioned assets", () => {
@@ -30,9 +30,6 @@ test("all public HTML pages reference identical hash-versioned assets", () => {
     }
     assert.ok(html.indexOf(mapped.get("theme-init.js")) < html.indexOf(mapped.get("styles.css")), "theme bootstrap must run before stylesheet is evaluated");
   }
-});
-test("web app is not rewritten", () => {
-  assert.deepEqual(fs.readFileSync(path.join(dist, "app.html")), fs.readFileSync(path.join(root, "app.html")));
 });
 test("identical content generates deterministic hashes; changed content generates different hashes", () => {
   const digest = (bytes) => createHash("sha256").update(bytes).digest("hex").slice(0, 12);

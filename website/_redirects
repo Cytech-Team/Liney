@@ -1,0 +1,8 @@
+# The Liney Web App has been discontinued. Keep the desktop download only.
+/app /download.html 302
+/app/ /download.html 302
+/app.html /download.html 302
+/web /download.html 302
+/compatibility /download.html 302
+/compatibility.html /download.html 302
+/liney-manifest.webmanifest /download.html 302
