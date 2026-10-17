@@ -15,6 +15,7 @@ type RemoteImageProps = {
   onStatus?: (status: RemoteImageStatus) => void;
   maxAspectRatio?: number;
   preferProxy?: boolean;
+  lineMessage?: { messageId: string; chatId: string; kind: string };
 };
 
 type ImageState = {
@@ -56,6 +57,7 @@ export function RemoteImage({
   onStatus,
   maxAspectRatio,
   preferProxy = false,
+  lineMessage,
 }: RemoteImageProps) {
   const statusRef = useRef(onStatus);
   const [state, setState] = useState<ImageState>(() => initialImageState(src, preferProxy));
@@ -63,6 +65,9 @@ export function RemoteImage({
   const proxyLoading = currentState.proxyLoading;
   const proxyAttempted = currentState.proxyAttempted;
   const failed = currentState.failed;
+  const lineMessageId = lineMessage?.messageId;
+  const lineChatId = lineMessage?.chatId;
+  const lineKind = lineMessage?.kind;
 
   useEffect(() => {
     statusRef.current = onStatus;
@@ -76,7 +81,13 @@ export function RemoteImage({
     if (!proxyLoading) return;
     let alive = true;
     lineyEngine
-      .request<{ dataUrl?: unknown }>("asset.preview", { url: src }, 20_000)
+      .request<{ dataUrl?: unknown }>(
+        lineyEngine.isNative && lineMessageId && lineChatId ? "media.preview" : "asset.preview",
+        lineyEngine.isNative && lineMessageId && lineChatId
+          ? { messageId: lineMessageId, chatId: lineChatId, kind: lineKind ?? "talk" }
+          : { url: src },
+        25_000,
+      )
       .then((result) => {
         const dataUrl = imageDataUrl(result?.dataUrl);
         if (!dataUrl) throw new Error("engine returned an invalid image");
@@ -99,7 +110,7 @@ export function RemoteImage({
     return () => {
       alive = false;
     };
-  }, [src, proxyLoading, preferProxy]);
+  }, [src, proxyLoading, preferProxy, lineMessageId, lineChatId, lineKind]);
 
   const handleError = () => {
     if (

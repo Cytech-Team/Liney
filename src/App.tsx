@@ -5025,7 +5025,7 @@ function Conversation({
                                 {message.raw != null ? <details><summary>Parsed Flex / Rich</summary><pre className="liney-raw-json">{JSON.stringify(message.rich ?? message.flex, null, 2)}</pre></details> : null}
                               </div>
                             ) : message.rich ? (
-                              <RichMessage data={message.rich} onAction={onFlexAction} />
+                              <RichMessage data={message.rich} messageId={message.id} chatId={chat.id} kind={chat.kind} onAction={onFlexAction} onOpenOriginal={() => onOpenOfficialMessage(message)} />
                             ) : message.flex ? (
                               <FlexMessage data={message.flex} onAction={onFlexAction} />
                             ) : null}

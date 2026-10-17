@@ -67,6 +67,7 @@ import {
 } from "./talk-history";
 import { parseFlexMessage } from "./flex";
 import { parseRichMessage } from "./rich";
+import { richAssetAuthHeaders } from "./rich-asset";
 import { callHistoryPreview, parseCallHistory } from "./call-history";
 import { canonicalTalkOperationType, isLineServiceChatOperation } from "./talk-operation";
 import { talkReadStateForMessages } from "./talk-read-state";
@@ -849,7 +850,27 @@ async function fetchMessageMediaBlob(messageId: string, isSquare: boolean, chatI
   if (contentType === 17) {
     const downloadUrl = httpsUrl(metadata.DOWNLOAD_URL);
     if (downloadUrl) {
-      const result = await tryImageSource(() => fetchMessageAsset(client!, downloadUrl), true);
+      // OA Plus artwork may reject anonymous CDN requests (HTTP 403).
+      // Only attach the LINE session to the exact official OA CDN host and
+      // never forward headers across redirects. The URL comes from an actual
+      // persisted LINE message belonging to the active account.
+      const authHeaders = richAssetAuthHeaders(
+        downloadUrl,
+        LineJsAdapter.authToken(client!),
+        LineJsAdapter.systemType(client!),
+      );
+      if (authHeaders) {
+        const result = await tryImageSource(() => fetchMessageAsset(client!, downloadUrl, {
+          headers: authHeaders,
+          redirect: "manual",
+          signal: AbortSignal.timeout(15_000),
+        }), true);
+        if (result) return result;
+      }
+      const result = await tryImageSource(() => fetchMessageAsset(client!, downloadUrl, {
+        redirect: "manual",
+        signal: AbortSignal.timeout(15_000),
+      }), true);
       if (result) return result;
     }
     throw new Error(`LINE rich media object ${messageId} is unavailable`);

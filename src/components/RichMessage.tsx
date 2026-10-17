@@ -12,22 +12,47 @@ function safeHttpsUrl(value: string): string | undefined {
   }
 }
 
-export function RichMessage({ data, onAction }: { data: RichMessageData; onAction?: (action: FlexAction) => void | Promise<void> }) {
+export function RichMessage({ data, onAction, messageId, chatId, kind, onOpenOriginal }: {
+  data: RichMessageData;
+  onAction?: (action: FlexAction) => void | Promise<void>;
+  messageId?: string;
+  chatId?: string;
+  kind?: string;
+  onOpenOriginal?: () => void;
+}) {
   const [imageStatus, setImageStatus] = useState<RemoteImageStatus>("loading");
+  const [retry, setRetry] = useState(0);
   const width = data.width && data.width > 0 ? data.width : undefined;
   const height = data.height && data.height > 0 ? data.height : undefined;
   const imageUrl = safeHttpsUrl(data.imageUrl);
   const actions = (data.actions ?? []).filter((action) => (
     action.width > 0 && action.height > 0 && safeHttpsUrl(action.link)
   ));
-  const style = width && height ? { aspectRatio: `${width} / ${height}` } : undefined;
-  const fallback = <div className="rich-message-fallback">{data.altText || "Rich message โหลดไม่ได้"}</div>;
+  const artworkUnavailable = imageStatus === "failed" || !imageUrl;
+  const style = width && height && !artworkUnavailable ? { aspectRatio: `${width} / ${height}` } : undefined;
+  const fallback = (
+    <div className={`rich-message-fallback ${artworkUnavailable ? "rich-message-fallback-error" : ""}`}>
+      <span>{artworkUnavailable ? "ไม่สามารถโหลดภาพจาก LINE ได้" : "กำลังโหลดรูปจาก LINE…"}</span>
+      {artworkUnavailable ? (
+        <>
+          {data.altText && <p>{data.altText}</p>}
+          <div className="rich-message-fallback-actions">
+            <button type="button" onClick={() => { setImageStatus("loading"); setRetry((n) => n + 1); }}>ลองใหม่</button>
+            {onOpenOriginal && <button type="button" onClick={onOpenOriginal}>เปิดใน LINE ทางการ</button>}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
 
   return (
-    <div className={`rich-message ${width && height ? "rich-message-canvas" : ""}`} style={style}>
+    <div className={`rich-message ${width && height && !artworkUnavailable ? "rich-message-canvas" : ""}`} style={style}>
       {imageUrl ? (
         <RemoteImage
+          key={`${imageUrl}:${retry}`}
           src={imageUrl}
+          lineMessage={messageId && chatId ? { messageId, chatId, kind: kind === "openchat" ? "openchat" : "talk" } : undefined}
+          preferProxy={Boolean(messageId && chatId)}
           alt={data.altText || "Rich message"}
           loading="lazy"
           fallback={fallback}
