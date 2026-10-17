@@ -35,6 +35,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
+            libgstreamer1.0-dev \
+            gstreamer1.0-tools \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
@@ -83,6 +88,36 @@ jobs:
           grep -q 'libwebkit2gtk' /tmp/liney-ldd.txt
           grep -q 'libgtk-3' /tmp/liney-ldd.txt
           ! grep -q 'not found' /tmp/liney-ldd.txt
+
+      - name: Verify AppImage contains working GStreamer plugins
+        shell: bash
+        run: |
+          set -euo pipefail
+          appimage="release/Liney-$(node -p 'require("./package.json").version')-linux-${{ matrix.arch }}.AppImage"
+          test -s "$appimage"
+          temp="$(mktemp -d)"
+          trap 'rm -rf "$temp"' EXIT
+          (cd "$temp" && "$GITHUB_WORKSPACE/$appimage" --appimage-extract usr/lib/gstreamer-1.0 >/dev/null)
+          (cd "$temp" && "$GITHUB_WORKSPACE/$appimage" --appimage-extract apprun-hooks/liney-gstreamer.sh >/dev/null)
+          plugins="$temp/squashfs-root/usr/lib/gstreamer-1.0"
+          for plugin in app autodetect coreelements playback audiofx opengl subenc; do
+            test -s "$plugins/libgst${plugin}.so" || { echo "::error::Missing libgst${plugin}.so in AppImage"; exit 1; }
+          done
+          test -x "$plugins/gst-plugin-scanner"
+          test -s "$temp/squashfs-root/apprun-hooks/liney-gstreamer.sh"
+
+          # Exercise the exact plugin search path used by AppRun. A system
+          # gst-inspect reading host plugins here would be a false positive.
+          appdir="$GITHUB_WORKSPACE/src-tauri/target/release/bundle/appimage/Liney.AppDir"
+          for element in appsink autoaudiosink scaletempo glupload webvttenc; do
+            env LD_LIBRARY_PATH="$appdir/usr/lib" \
+              GST_PLUGIN_PATH='' GST_PLUGIN_PATH_1_0='' \
+              GST_PLUGIN_SYSTEM_PATH="$appdir/usr/lib/gstreamer-1.0" \
+              GST_PLUGIN_SYSTEM_PATH_1_0="$appdir/usr/lib/gstreamer-1.0" \
+              GST_PLUGIN_SCANNER="$appdir/usr/lib/gstreamer-1.0/gst-plugin-scanner" \
+              GST_REGISTRY="$temp/gst-registry" \
+              gst-inspect-1.0 "$element" >/dev/null
+          done
 
       - uses: actions/upload-artifact@v4
         with:

@@ -1,6 +1,6 @@
 # LINEy Linux distribution
 
-The release workflow for tag `v0.1.1` builds `.deb`, `.rpm`, `.AppImage`, portable `.tar.gz` on x86_64 and aarch64, plus an x86_64 `.flatpak` bundle with GNOME Platform 50. Checksums are included. Download from GitHub Releases.
+The release workflow for tag `v0.1.2` builds `.deb`, `.rpm`, `.AppImage`, portable `.tar.gz` on x86_64 and aarch64, plus an x86_64 `.flatpak` bundle with GNOME Platform 50. Checksums are included. Download from GitHub Releases.
 
 ## Arch Linux / CachyOS
 
@@ -13,9 +13,9 @@ AUR publishing requires a separate AUR account with an uploaded SSH public key; 
 `packaging/flatpak/com.cyoriasmp.Liney.yml` consumes a local `.deb` named `Liney-release.deb` (copied from the same release). It installs Tauri and six sidecars into the sandbox and uses GNOME Platform 50. To make a local bundle after installing `flatpak-builder`, `org.gnome.Sdk//50` and `org.gnome.Platform//50`:
 
 ```sh
-cp release/Liney-0.1.1-linux-x86_64.deb packaging/flatpak/Liney-release.deb
+cp release/Liney-0.1.2-linux-x86_64.deb packaging/flatpak/Liney-release.deb
 flatpak-builder --user --install-deps-from=flathub --force-clean --repo=flatpak-repo flatpak-build packaging/flatpak/com.cyoriasmp.Liney.yml
-flatpak build-bundle flatpak-repo release/Liney-0.1.1-linux-x86_64.flatpak com.cyoriasmp.Liney --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak build-bundle flatpak-repo release/Liney-0.1.2-linux-x86_64.flatpak com.cyoriasmp.Liney --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
 ```
 
 An `.flatpak` on GitHub Releases does not automatically make the app available on Flathub: Flathub admission requires a separate submission PR and review. The Flatpak runtime may not support every native sidecar feature out of the box; verify permissions, calls and screen sharing on each environment.

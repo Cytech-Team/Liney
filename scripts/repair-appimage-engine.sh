@@ -36,6 +36,46 @@ test -s "$OUT" || { echo "Missing AppImage to repair: $OUT" >&2; exit 1; }
 cp "$ENGINE" "$BUNDLED_ENGINE"
 chmod 755 "$BUNDLED_ENGINE"
 cmp -s "$ENGINE" "$BUNDLED_ENGINE"
+
+# WebKitGTK ships with the AppImage but loads GStreamer plugins at runtime.
+# linuxdeploy sets GST_PLUGIN_SYSTEM_PATH_1_0 to AppDir/usr/lib/gstreamer-1.0;
+# without these files media initialization can fail and abort WebKitWebProcess.
+# Package the basic plugins from the same GStreamer installation as the
+# libgstreamer shared library that linuxdeploy bundled during this build.
+GST_SRC=$(pkg-config --variable=pluginsdir gstreamer-1.0 2>/dev/null || true)
+GST_DST="$APPDIR/usr/lib/gstreamer-1.0"
+test -n "$GST_SRC" && test -d "$GST_SRC" || {
+  echo "Missing local GStreamer plugins directory; refusing broken AppImage" >&2
+  exit 1
+}
+mkdir -p "$GST_DST"
+for name in app autodetect coreelements playback audioconvert audioresample volume videoconvertscale videorate typefindfunctions audiofx opengl subenc; do
+  plugin="$GST_SRC/libgst$name.so"
+  if [ -f "$plugin" ]; then cp -L "$plugin" "$GST_DST/"; fi
+done
+for required in libgstapp.so libgstautodetect.so libgstcoreelements.so libgstplayback.so; do
+  test -s "$GST_DST/$required" || {
+    echo "Missing mandatory GStreamer plugin for Liney WebKit: $required" >&2
+    exit 1
+  }
+done
+
+# GStreamer normally starts its plugin scanner in a separate process.
+# AppImage has a private library search path, so copy the helper from the
+# matching host GStreamer version and tell it the exact bundled location.
+if [ -x "$GST_SRC/gst-plugin-scanner" ]; then
+  cp -L "$GST_SRC/gst-plugin-scanner" "$GST_DST/gst-plugin-scanner"
+  chmod 755 "$GST_DST/gst-plugin-scanner"
+fi
+mkdir -p "$APPDIR/apprun-hooks"
+cat > "$APPDIR/apprun-hooks/liney-gstreamer.sh" <<'HOOK'
+#!/bin/sh
+if [ -n "${APPDIR:-}" ] && [ -x "$APPDIR/usr/lib/gstreamer-1.0/gst-plugin-scanner" ]; then
+  export GST_PLUGIN_SCANNER="$APPDIR/usr/lib/gstreamer-1.0/gst-plugin-scanner"
+fi
+HOOK
+chmod 755 "$APPDIR/apprun-hooks/liney-gstreamer.sh"
+
 NEW="$OUT.new.$$"
 mkdir -p "$ROOT/build/tmp"
 TMP=$(mktemp -d "$ROOT/build/tmp/liney-appimage-validation.XXXXXX")

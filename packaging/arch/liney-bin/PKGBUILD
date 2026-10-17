@@ -1,6 +1,6 @@
 # Maintainer: Cytech Team Development
 pkgname=liney-bin
-pkgver=0.1.1
+pkgver=0.1.2
 pkgrel=1
 pkgdesc='Unofficial LINE desktop client for Linux (prebuilt portable release)'
 arch=('x86_64' 'aarch64')
