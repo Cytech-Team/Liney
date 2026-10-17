@@ -2,6 +2,18 @@
 
 Static public pages deployed to Cloudflare Workers Static Assets.
 
+## Cache-safe deployment
+
+Static assets are cached by Cloudflare for up to 4 hours. After a redesign,
+loading a fresh HTML page with a stale `styles.css` or `site.js` could break
+the layout and prevent the theme control from appearing. The `build.mjs` script
+now emits content-addressed CSS and JavaScript names (e.g.
+`styles.<sha256>.css`) and replaces HTML references during deployment.
+HTML references always point at exactly the version they were built with.
+`app.html` and Web App assets remain unchanged.
+
+Run `bun run test:website` to verify hash references and theme behavior.
+
 ## Cloudflare Workers Builds
 
 The Cloudflare Worker `liney` is connected to `Cytech-Team/Liney` and should use:
@@ -44,7 +56,13 @@ installer/download guide. Legal and privacy pages use the same design system.
 This intentionally does not change the separately deployed Web App runtime UI.
 
 The shared stylesheet is website/styles.css; the page-specific markup is in
-index.html and download.html. The theme selector (System / Light / Dark) is shared by all static pages.\nIt reads a saved preference from localStorage (if available) before stylesheet\nparsing, follows OS color preference in System mode, and persists manual choices.\nThe separate Web App remains unchanged. Theme bootstrapping uses theme-init.js\nand the dark design layer is theme.css.\n\nMobile navigation uses site.js and download metadata
+index.html and download.html. The theme selector (System / Light / Dark) is shared by all static pages.
+It reads a saved preference from localStorage (if available) before stylesheet
+parsing, follows OS color preference in System mode, and persists manual choices.
+The separate Web App remains unchanged. Theme bootstrapping uses theme-init.js
+and the dark design layer is theme.css.
+
+Mobile navigation uses site.js and download metadata
 uses release.js. Test all pages at desktop/mobile widths, run the website build, and run
 `bun run test:theme` for theme persistence and OS-preference behavior.
 
