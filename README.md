@@ -310,8 +310,8 @@ this repository's **actual published GitHub Release assets**.
 - Windows/macOS ports and Liney Lite are *ideas under consideration*, not
   released editions or promised features.
 
-Cloudflare Pages builds production on the master branch using
-`node website/build.mjs` (from the repository root) and serves `website/dist`.
+Cloudflare Pages builds production on the master branch from the `website/`
+root using `node build.mjs` and serves `website/dist`.
 The build fingerprints stylesheet and JavaScript assets to prevent HTML/CSS
 version skew from Cloudflare or browser caches. See [website/README.md](website/README.md).
 The website is informational, not the LINE Desktop protocol engine, and the

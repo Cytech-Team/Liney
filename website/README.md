@@ -21,14 +21,16 @@ connected to `Cytech-Team/Liney` on branch `master`. Its custom domain is
 `liney.namnarak.in.th` (CNAME -> `liney.pages.dev`).
 
 Project Build configuration (configure in Cloudflare Pages settings):
-- Root directory: repository root (empty)
-- Build command: `node website/build.mjs`
-- Build output directory: `website/dist`
+- Root directory: `website`
+- Build command: `node build.mjs`
+- Build output directory: `dist` (relative to the root directory)
 - Production branch: `master`
 
 **Important:** Deploying the sibling Cloudflare Worker named `liney` using
 `website/wrangler.jsonc` does *not* update the actual custom domain. This
-domain is bound to Cloudflare Pages, not the Worker. The Pages build must run
+domain is bound to Cloudflare Pages, not the Worker. Building from `website/`
+also avoids trying to install the entire desktop app with a Bun version too old
+to parse the repository root lockfile. The Pages build must run
 `build.mjs` or Pages will copy raw files from `website/` and the HTML will
 continue to reference unversioned CSS/JS. Build output only contains public
 artifacts and intentionally excludes project metadata and scripts.
