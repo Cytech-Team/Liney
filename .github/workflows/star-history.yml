@@ -1,0 +1,36 @@
+name: Self-hosted Star History
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: star-history-${{ github.repository }}
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: true
+      - name: Fetch timestamped stars and render SVGs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python3 scripts/generate_star_history.py
+      - name: Commit updated charts only when changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -f -- assets/star-history-light.svg assets/star-history-dark.svg
+          if git diff --cached --quiet; then
+            echo 'No changes to star history.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'docs: refresh Star History charts [skip ci]'
+          git push origin HEAD:"${GITHUB_REF_NAME}"

@@ -395,4 +395,18 @@ the GitHub Release automatically.
 
 ## Star History
 
-Follow Liney's public GitHub star growth on [Star History](https://star-history.dera.page/Cytech-Team/Liney).
+<!-- CYTECH_STAR_HISTORY:START -->
+
+## Star History
+
+<a href="https://github.com/Cytech-Team/Liney/stargazers">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Cytech-Team/Liney/refs/heads/master/assets/star-history-dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/Cytech-Team/Liney/refs/heads/master/assets/star-history-light.svg" />
+    <img alt="Star history for Cytech-Team/Liney" src="https://raw.githubusercontent.com/Cytech-Team/Liney/refs/heads/master/assets/star-history-light.svg" width="1100" />
+  </picture>
+</a>
+
+<sub>Updated automatically from GitHub's dated stargazers. Only currently starred accounts are included.</sub>
+
+<!-- CYTECH_STAR_HISTORY:END -->
