@@ -1,13 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 420" width="1100" height="420" role="img" aria-label="Cytech-Team/Liney · Star History">
-<title>Cytech-Team/Liney · Star History</title><desc>0 current stargazers, latest star none. Dated using GitHub starred_at; unstars are not historically recoverable.</desc>
+<title>Cytech-Team/Liney · Star History</title><desc>3 current stargazers, latest star 2026-10-20. Dated using GitHub starred_at; unstars are not historically recoverable.</desc>
 <rect width="1100" height="420" rx="18" fill="#ffffff" />
 <rect x="18" y="18" width="1064" height="384" rx="14" fill="#f6f8fa" stroke="#d8dee4" />
 <g font-family="ui-sans-serif,system-ui,-apple-system,Segoe UI,Arial,sans-serif">
 <text x="78" y="64" fill="#1f2328" font-size="26" font-weight="700">Cytech-Team/Liney · Stars</text>
-<text x="1034" y="64" text-anchor="end" fill="#0969da" font-size="24" font-weight="700">0 stars</text>
-
-<path d="M 78.0,334.0 L 1034.0,334.0 L 1034,334 L 78,334 Z" fill="#0969da" fill-opacity="0.10" />
-<path d="M 78.0,334.0 L 1034.0,334.0" fill="none" stroke="#0969da" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
-<text x="556" y="214" text-anchor="middle" fill="#656d76" font-size="21">No stars yet</text>
+<text x="1034" y="64" text-anchor="end" fill="#0969da" font-size="24" font-weight="700">3 stars</text>
+<line x1="78" y1="334.0" x2="1034" y2="334.0" stroke="#d8dee4" stroke-width="1" /><text x="65" y="339.0" text-anchor="end" fill="#656d76" font-size="15">0</text><line x1="78" y1="276.5" x2="1034" y2="276.5" stroke="#d8dee4" stroke-width="1" /><text x="65" y="281.5" text-anchor="end" fill="#656d76" font-size="15">0.75</text><line x1="78" y1="219.0" x2="1034" y2="219.0" stroke="#d8dee4" stroke-width="1" /><text x="65" y="224.0" text-anchor="end" fill="#656d76" font-size="15">1.5</text><line x1="78" y1="161.5" x2="1034" y2="161.5" stroke="#d8dee4" stroke-width="1" /><text x="65" y="166.5" text-anchor="end" fill="#656d76" font-size="15">2.25</text><line x1="78" y1="104.0" x2="1034" y2="104.0" stroke="#d8dee4" stroke-width="1" /><text x="65" y="109.0" text-anchor="end" fill="#656d76" font-size="15">3</text><text x="78.0" y="363" text-anchor="middle" fill="#656d76" font-size="15">Oct 2026</text><text x="78.0" y="363" text-anchor="middle" fill="#656d76" font-size="15">Oct 2026</text><text x="556.0" y="363" text-anchor="middle" fill="#656d76" font-size="15">Oct 2026</text><text x="1034.0" y="363" text-anchor="middle" fill="#656d76" font-size="15">Oct 2026</text><text x="1034.0" y="363" text-anchor="middle" fill="#656d76" font-size="15">Oct 2026</text>
+<path d="M 78.0,334.0 L 556.0,334.0 L 556.0,104.0 L 1034.0,104.0 L 1034,334 L 78,334 Z" fill="#0969da" fill-opacity="0.10" />
+<path d="M 78.0,334.0 L 556.0,334.0 L 556.0,104.0 L 1034.0,104.0" fill="none" stroke="#0969da" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+<circle cx="556.0" cy="104.0" r="5" fill="#0969da" />
 <text x="78" y="388" fill="#656d76" font-size="13">GitHub stargazer timestamps · current stars only · generated from GitHub API</text>
 </g></svg>
