@@ -83,16 +83,14 @@ Liney uses that library as the backend of an interactive client. Liney is not
 intended to be a spam tool, mass-messaging system, account farm, or general
 automation framework.
 
-```text
-Liney UI (React + Tauri WebView)
-        |
-        | versioned JSONL IPC
-        v
-Liney engine (Bun + TypeScript)
-        |
-        | LINEJS adapter
-        v
-LINE services
+```mermaid
+flowchart LR
+    UI["Liney UI<br/>React + Tauri WebView"]
+    ENGINE["Liney Engine<br/>Bun + TypeScript"]
+    LINE["LINE services"]
+
+    UI -->|"Versioned JSONL IPC"| ENGINE
+    ENGINE -->|"LINEJS adapter"| LINE
 ```
 
 ## Current implementation
