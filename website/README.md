@@ -110,7 +110,7 @@ python3 -m http.server 4173 --directory dist
 - `notice.html` — safety and unofficial-client notice
 - `privacy.html` — local-first privacy notice
 - `terms.html` — Liney Terms of Use draft
-- `license.html` — MIT License summary
+- `license.html` — The Liney License 1.0 (TLL-1.0) summary
 - `LICENSE.txt` — canonical license text
 - `404.html` — fallback page
 

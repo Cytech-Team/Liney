@@ -15,8 +15,8 @@
 
 <p>
   <a href="#current-implementation"><img src="https://img.shields.io/badge/Status-In_Development-2C7A5B?style=flat-square" alt="Status: In development"></a>
-  <a href="#license"><img src="https://img.shields.io/badge/License-MIT-26BF75?style=flat-square" alt="License: MIT"></a>
-  <a href="#license"><img src="https://img.shields.io/badge/Source-Available-23383A?style=flat-square" alt="Source available; MIT license"></a>
+  <a href="#license"><img src="https://img.shields.io/badge/License-TLL--1.0-26BF75?style=flat-square" alt="License: TLL-1.0"></a>
+  <a href="#license"><img src="https://img.shields.io/badge/Source-Available-23383A?style=flat-square" alt="Source available; TLL-1.0 license"></a>
   <a href="#build-and-release"><img src="https://img.shields.io/badge/Packages-AppImage_%7C_DEB_%7C_RPM_%7C_Flatpak-23383A?style=flat-square" alt="Packages: AppImage, DEB, RPM and Flatpak"></a>
 </p>
 
@@ -362,20 +362,21 @@ does not replace the terms that apply to LINE services.
 
 ## License
 
-Liney's original source code is licensed under the **MIT License**; see
-[LICENSE](LICENSE). You may use, modify, and redistribute that code under the
-license terms.
+Liney's original source code is provided under **The Liney License 1.0
+(TLL-1.0)**, a custom **source-available license** (SPDX identifier:
+`LicenseRef-TLL-1.0`). See [LICENSE](LICENSE) for the complete terms.
 
-MIT covers only copyright rights in Liney code granted by its copyright
-holders. It does not grant rights to LINE/LY Corporation's trademarks, logos,
-content, or services, and it does not replace terms or policies that apply to
-using LINE services. Liney is an independent, unofficial client. LINE may
-separately enforce its rights or terms against particular users or
-distributions; the effect depends on the specific facts and applicable law.
-MIT provides no immunity from those rights.
+TLL-1.0 allows use, study, modification, forks, and redistribution subject to
+its conditions. Redistributed Liney-covered parts must include corresponding
+source code under TLL-1.0, preserve notices, and clearly identify changes.
+The license also distinguishes official Liney branding, LINE/LY Corporation
+rights, and third-party dependencies. It is **not an OSI-approved open-source
+license** and should not be described as MIT or GPL.
 
-Third-party dependencies and bundled components remain under their own
-licenses. Read the relevant notices before redistributing a build.
+Permissions granted for earlier copies distributed under other licenses
+(including MIT) are not retroactively revoked by this licensing update.
+Third-party libraries and bundled components remain under their own licenses.
+Review the full license and applicable dependency notices before redistribution.
 
 ## Distribution
 

@@ -5,7 +5,7 @@
   <summary>Unofficial LINE desktop client for Linux</summary>
   <developer id="com.cyoriasmp"><name>Cytech Team Development</name></developer>
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>MIT</project_license>
+  <project_license>LicenseRef-TLL-1.0</project_license>
   <launchable type="desktop-id">com.cyoriasmp.Liney.desktop</launchable>
   <url type="homepage">https://github.com/Cytech-Team/Liney</url>
   <url type="bugtracker">https://github.com/Cytech-Team/Liney/issues</url>
