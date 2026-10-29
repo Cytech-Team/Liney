@@ -1,0 +1,42 @@
+name: Liney Native Preview
+
+on:
+  pull_request:
+    paths:
+      - "app/**"
+      - "docs/ARCHITECTURE.md"
+      - ".github/workflows/native-preview.yml"
+  push:
+    branches:
+      - "feat/gtk4-native-shell"
+    paths:
+      - "app/**"
+      - ".github/workflows/native-preview.yml"
+  workflow_dispatch:
+
+jobs:
+  gtk-native-smoke:
+    name: GTK4 + Libadwaita (no WebKit)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native toolkit and headless display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 xvfb xauth dbus-x11
+      - name: Syntax and isolated JSONL bridge tests
+        run: |
+          /usr/bin/python3 -m py_compile app/main.py app/bridge/rpc.py app/ui/window.py
+          /usr/bin/python3 -m unittest discover -s app/tests -p 'test_*.py'
+      - name: Native GUI stays alive under a fake, offline engine
+        env:
+          LINEY_ENGINE_BIN: ${{ github.workspace }}/app/tests/fake_engine.py
+          LINEY_DISABLE_AUTO_RESTORE: "1"
+        run: |
+          set +e
+          timeout --signal=TERM 6s dbus-run-session -- xvfb-run -a /usr/bin/python3 app/main.py
+          result=$?
+          set -e
+          # 124 indicates the native GUI stayed running until the smoke timeout.
+          test "$result" -eq 124
