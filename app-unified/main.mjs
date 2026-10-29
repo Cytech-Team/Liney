@@ -4,7 +4,7 @@
  * Do not use against production LINE credentials until integration is verified.
  */
 import * as slint from "slint-ui";
-slint.setXdgAppId("dev.cytechteam.liney");
+slint.setXdgAppId(process.env.LINEY_XDG_APP_ID || "dev.cytechteam.liney");
 import { Worker } from "node:worker_threads";
 import { randomUUID } from "node:crypto";
 import { ChatController } from "./controller.mjs";

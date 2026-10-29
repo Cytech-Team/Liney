@@ -69,7 +69,7 @@ jobs:
           export LINEY_DATA_DIR="$(mktemp -d)"
           chmod 700 "$LINEY_DATA_DIR"
           set +e
-          timeout -k 2s 7s xvfb-run -a node app-unified/main.mjs > /tmp/liney-native-smoke.log 2>&1
+          timeout -k 2s 20s xvfb-run -a node app-unified/main.mjs > /tmp/liney-native-smoke.log 2>&1
           code=$?
           set -e
           cat /tmp/liney-native-smoke.log
