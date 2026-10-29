@@ -1,4 +1,4 @@
-import { ListView, LineEdit, ScrollView } from "std-widgets.slint";
+import { ListView } from "std-widgets.slint";
 
 // One source of truth for Liney's original React design tokens.
 // This remains a real native Slint scene, not CSS or a web view.
@@ -43,20 +43,20 @@ export struct ChatMessage {
 }
 
 component RailItem inherits Rectangle {
-    in property <string> glyph;
+    in property <image> glyph-icon;
     in property <bool> active: false;
     callback clicked;
     width: 46px;
     height: 48px;
     border-radius: 13px;
     background: active ? #214333 : touch.has-hover ? Theme.nav-hover : transparent;
-    Text {
-        text: root.glyph;
-        color: active ? #58e497 : #b5c4d7;
-        font-size: 23px;
-        font-weight: 650;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    Image {
+        source: root.glyph-icon;
+        width: 23px;
+        height: 23px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        image-fit: contain;
     }
     touch := TouchArea {
         clicked => { root.clicked(); }
@@ -258,13 +258,13 @@ export component LineyNative inherits Window {
                     }
                 }
                 Rectangle { height: 12px; background: transparent; }
-                RailItem { glyph: "◉"; active: true; clicked => { root.change-filter(0); } }
-                RailItem { glyph: "☏"; clicked => { root.notification = "Voice calls are being migrated to native"; } }
-                RailItem { glyph: "♧"; clicked => { root.notification = "Contacts are being migrated"; } }
-                RailItem { glyph: "◈"; clicked => { root.notification = "OpenChat is being migrated"; } }
+                RailItem { glyph-icon: @image-url("assets/icons/chat.svg"); active: true; clicked => { root.change-filter(0); } }
+                RailItem { glyph-icon: @image-url("assets/icons/phone.svg"); clicked => { root.notification = "Voice calls are being migrated to native"; } }
+                RailItem { glyph-icon: @image-url("assets/icons/users.svg"); clicked => { root.notification = "Contacts are being migrated"; } }
+                RailItem { glyph-icon: @image-url("assets/icons/globe.svg"); clicked => { root.notification = "OpenChat is being migrated"; } }
                 Rectangle { vertical-stretch: 1; background: transparent; }
-                RailItem { glyph: Theme.dark ? "☼" : "☾"; clicked => { root.toggle-theme(); } }
-                RailItem { glyph: "⚙"; clicked => { root.notification = "Native settings are in development"; } }
+                RailItem { glyph-icon: Theme.dark ? @image-url("assets/icons/sun.svg") : @image-url("assets/icons/moon.svg"); clicked => { root.toggle-theme(); } }
+                RailItem { glyph-icon: @image-url("assets/icons/settings.svg"); clicked => { root.notification = "Native settings are in development"; } }
             }
         }
         Rectangle {
@@ -347,7 +347,7 @@ export component LineyNative inherits Window {
                                         edited => { root.change-search(self.text); }
                                     }
                                 }
-                                Text { text: "⌘ K"; color: Theme.subtle; font-size: 10px; vertical-alignment: center; }
+
                             }
                         }
                     }
@@ -379,7 +379,34 @@ export component LineyNative inherits Window {
                     }
                 }
                 Rectangle { height: 1px; background: Theme.border; }
-                ListView {
+                if root.chats.length == 0 : Rectangle {
+                    vertical-stretch: 1;
+                    background: Theme.surface;
+                    Text {
+                        x: 12px;
+                        y: parent.height / 2 - 24px;
+                        width: parent.width - 24px;
+                        height: 25px;
+                        text: "No conversations yet";
+                        color: Theme.muted;
+                        font-size: 13px;
+                        font-weight: 650;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        x: 12px;
+                        y: parent.height / 2 + 2px;
+                        width: parent.width - 24px;
+                        height: 22px;
+                        text: "Sign in to sync your chats";
+                        color: Theme.subtle;
+                        font-size: 11px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                if root.chats.length > 0 : ListView {
                     vertical-stretch: 1;
                     for chat in root.chats: ChatTile {
                         chat: chat;
@@ -437,7 +464,13 @@ export component LineyNative inherits Window {
                             height: 43px;
                             border-radius: 23px;
                             background: root.active-chat-color;
-                            Text {
+                            if !root.has-active-chat : Image {
+                                source: @image-url("assets/liney-logo.png");
+                                width: parent.width;
+                                height: parent.height;
+                                image-fit: contain;
+                            }
+                            if root.has-active-chat : Text {
                                 text: root.active-chat-avatar;
                                 font-weight: 800;
                                 font-size: 12px;
@@ -449,14 +482,21 @@ export component LineyNative inherits Window {
                         VerticalLayout {
                             alignment: center;
                             spacing: 3px;
-                            Text { text: root.active-chat-name; color: Theme.text; font-size: 16px; font-weight: 800; overflow: elide; }
-                            Text { text: root.active-chat-subtitle; color: Theme.muted; font-size: 11px; overflow: elide; }
+                            Text { text: root.has-active-chat ? root.active-chat-name : "Liney"; color: Theme.text; font-size: 16px; font-weight: 800; overflow: elide; }
+                            Text { text: root.has-active-chat ? root.active-chat-subtitle : "Your Linux-native LINE client"; color: Theme.muted; font-size: 11px; overflow: elide; }
                         }
                         Rectangle { horizontal-stretch: 1; background: transparent; }
-                        Rectangle {
+                        if root.has-active-chat : Rectangle {
                             width: 37px; height: 37px; border-radius: 11px;
                             background: Theme.raised;
-                            Text { text: "☏"; color: Theme.muted; font-size: 18px; horizontal-alignment: center; vertical-alignment: center; }
+                            Image {
+                                width: 19px;
+                                height: 19px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                source: @image-url("assets/icons/phone.svg");
+                                image-fit: contain;
+                            }
                             TouchArea { clicked => { root.notification = "Native calling is in progress"; } }
                         }
                     }
@@ -465,49 +505,139 @@ export component LineyNative inherits Window {
                     vertical-stretch: 1;
                     for message in root.messages : Bubble { item: message; }
                 }
+                // Empty and sign-in states must be positioned in the CENTER
+                // of the whole conversation canvas, not at its left edge.
                 if !root.has-active-chat : Rectangle {
                     vertical-stretch: 1;
                     background: Theme.background;
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 15px;
-                        Rectangle {
-                            width: 82px;
-                            height: 82px;
-                            border-radius: 22px;
-                            background: Theme.accent-soft;
-                            Text { text: "✉"; font-size: 43px; color: Theme.accent; horizontal-alignment: center; vertical-alignment: center; }
-                        }
-                        Text { text: "It's good to see you here"; color: Theme.text; font-size: 22px; font-weight: 800; horizontal-alignment: center; }
-                        Text { text: root.cache-status; color: Theme.muted; font-size: 13px; horizontal-alignment: center; }
-                        if !root.is-authenticated : Rectangle {
-                            width: 185px; height: 43px; border-radius: 12px; background: Theme.accent;
-                            Text { text: "Sign in with LINE"; color: #052e18; font-weight: 800; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
-                            TouchArea { clicked => { root.login-qr(); } }
-                        }
-                        if root.auth-url != "" : Rectangle {
-                            width: 255px;
-                            height: 263px;
-                            border-radius: 16px;
-                            background: Theme.surface;
-                            VerticalLayout {
-                                alignment: center;
-                                spacing: 7px;
-                                Image {
-                                    width: 210px;
-                                    height: 210px;
-                                    image-fit: contain;
-                                    source: root.auth-qr;
-                                }
-                                Text {
-                                    text: "Scan with LINE on your phone";
-                                    color: Theme.muted;
-                                    font-size: 12px;
-                                    horizontal-alignment: center;
+                    Rectangle {
+                        width: min(460px, parent.width - 44px);
+                        height: min(root.auth-url != "" ? 566px : 372px, parent.height - 32px);
+                        x: (parent.width - self.width) / 2;
+                        y: max(20px, (parent.height - self.height) / 2);
+                        border-radius: 23px;
+                        background: Theme.surface;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        VerticalLayout {
+                            x: 30px;
+                            y: 27px;
+                            width: parent.width - 60px;
+                            height: parent.height - 54px;
+                            spacing: 0px;
+                            Rectangle {
+                                height: root.auth-url != "" && root.height < 700px ? 0px : 88px;
+                                background: transparent;
+                                Rectangle {
+                                    visible: root.auth-url == "" || root.height >= 700px;
+                                    width: 74px;
+                                    height: 74px;
+                                    x: (parent.width - self.width) / 2;
+                                    border-radius: 20px;
+                                    background: Theme.accent-soft;
+                                    Image {
+                                        x: 10px;
+                                        y: 10px;
+                                        width: parent.width - 20px;
+                                        height: parent.height - 20px;
+                                        source: @image-url("assets/liney-logo.png");
+                                        image-fit: contain;
+                                    }
                                 }
                             }
+                            Text {
+                                height: root.height < 700px ? 36px : 42px;
+                                text: root.auth-url != "" ? "Scan to sign in" : "Welcome to Liney";
+                                color: Theme.text;
+                                font-size: 25px;
+                                font-weight: 800;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                height: root.height < 700px ? 36px : 47px;
+                                text: root.auth-url != ""
+                                    ? "Open LINE on your phone and scan this code."
+                                    : "Your conversations, on Linux. Beautifully native.";
+                                color: Theme.muted;
+                                font-size: 13px;
+                                wrap: word-wrap;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            if root.auth-url == "" && !root.is-authenticated : Rectangle {
+                                height: 55px;
+                                background: transparent;
+                                Rectangle {
+                                    width: min(280px, parent.width);
+                                    height: 46px;
+                                    x: (parent.width - self.width) / 2;
+                                    y: 5px;
+                                    border-radius: 12px;
+                                    background: Theme.accent;
+                                    Text {
+                                        text: "Sign in with LINE";
+                                        color: #062916;
+                                        font-size: 14px;
+                                        font-weight: 750;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    TouchArea { clicked => { root.login-qr(); } }
+                                }
+                            }
+                            if root.auth-url == "" && root.is-authenticated : Text {
+                                height: 54px;
+                                text: root.cache-status;
+                                color: Theme.muted;
+                                font-size: 13px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            if root.auth-url != "" : Rectangle {
+                                height: root.height < 700px ? 200px : 250px;
+                                background: transparent;
+                                Rectangle {
+                                    width: root.height < 700px ? 194px : 234px;
+                                    height: root.height < 700px ? 194px : 234px;
+                                    x: (parent.width - self.width) / 2;
+                                    y: 5px;
+                                    border-radius: 13px;
+                                    background: #ffffff;
+                                    Image {
+                                        x: 8px;
+                                        y: 8px;
+                                        width: parent.width - 16px;
+                                        height: parent.height - 16px;
+                                        source: root.auth-qr;
+                                        image-fit: contain;
+                                    }
+                                }
+                            }
+                            if root.auth-pin != "" : Text {
+                                height: 43px;
+                                text: "Verification PIN: " + root.auth-pin;
+                                color: Theme.accent;
+                                font-size: 16px;
+                                font-weight: 800;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            Rectangle { vertical-stretch: 1; background: transparent; }
+                            Rectangle {
+                                height: 1px;
+                                background: Theme.border;
+                            }
+                            Text {
+                                height: root.height < 700px ? 28px : 35px;
+                                text: "PRIVATE  ·  NATIVE LINUX  ·  NO WEBVIEW";
+                                color: Theme.subtle;
+                                font-size: 10px;
+                                font-weight: 650;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
                         }
-                        if root.auth-pin != "" : Text { text: "Verify PIN: " + root.auth-pin; font-size: 17px; font-weight: 800; color: Theme.accent; }
                     }
                 }
                 if root.notification != "" : Rectangle {
@@ -519,7 +649,7 @@ export component LineyNative inherits Window {
                         vertical-alignment: center;
                     }
                 }
-                Rectangle {
+                if root.has-active-chat : Rectangle {
                     height: 82px;
                     background: Theme.surface;
                     border-width: 1px;
