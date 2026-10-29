@@ -8,11 +8,11 @@ The project direction is a clean architecture reset of the presentation layer wh
 
 ## Architecture Rules
 
-1. GTK4 + Libadwaita is the only main desktop UI stack.
-2. Legacy React/Tauri UI is not the future product path. Keep it only for migration/reference until removed or archived.
+1. Slint (native desktop scene rendering) is the main UI stack. No WebKitGTK, Chromium, Electron, HTML/CSS or WebView in the shipping client.
+2. React/Tauri and the GTK4 prototype are only legacy/reference implementations; keep them intact until native UI is feature-complete, then archive safely.
 3. UI must never import or depend on LINEJS directly.
 4. `@evex/linejs` must live behind a LineJS adapter in `liney-engine`.
-5. GTK communicates with `liney-engine` through a stable versioned IPC/RPC contract.
+5. The native Slint UI and LINEJS Engine run within ONE OS process. Node Worker Threads use in-memory messages; never start a separate engine sidecar or local HTTP server.
 6. SQLite is the local source of truth for user-visible cached state.
 7. Startup must be cache-first: render local data first, then restore auth and refresh network state in the background.
 8. Network work must never block the initial usable UI when cached data exists.
@@ -21,7 +21,7 @@ The project direction is a clean architecture reset of the presentation layer wh
 11. Full Sync must not run automatically on normal startup. Normal startup uses delta/background refresh.
 12. Media is lazy-loaded and viewport-driven. Do not warm large batches of media on startup.
 13. Message/chat UI updates must be incremental. Do not clear and rebuild entire lists for normal events.
-14. Prefer GTK model/view APIs such as `gio::ListStore`, `gtk::ListView`, selection models and list-item factories for large dynamic lists.
+14. Prefer Slint ListView with ArrayModel incremental updates; virtualize chat/message lists and never rebuild the whole model on routine events.
 15. Theme values must come from a centralized design system. Do not scatter hard-coded colors, spacing, radii or typography across widgets.
 16. Support System / Light / Dark through a single theme manager; Liney green is the product accent, not a replacement for semantic theme colors.
 17. App state must be explicit and centralized: auth, connection, navigation, selection, sync and UI preferences.
@@ -33,14 +33,12 @@ The project direction is a clean architecture reset of the presentation layer wh
 
 ```text
 Liney/
-├── app/                 # GTK4 + Libadwaita UI v2
-│   ├── application/
-│   ├── state/
-│   ├── repository/
-│   ├── models/
-│   ├── ui/
-│   ├── theme/
-│   └── bridge/
+├── app-unified/         # Slint native UI v2 + one-process Node host
+│   ├── main.mjs          # process owner; launches UI and Engine Worker Thread
+│   ├── controller.mjs    # chat state and cache-first list rendering
+│   ├── ui/               # Slint declarative scenes + bundled brand assets
+│   ├── qr.mjs            # in-memory native QR pixels
+│   └── tests/            # isolated runtime, controller and UI smoke tests
 ├── engine/
 │   ├── protocol/
 │   ├── linejs/
@@ -113,9 +111,9 @@ Target desktop/display environments:
 
 - Wayland
 - X11/XWayland compatibility where needed
-- GNOME, KDE Plasma, XFCE, Cinnamon, MATE, LXQt and other common Linux desktops where GTK4 is supported.
+- GNOME, KDE Plasma, XFCE, Cinnamon, MATE, LXQt and other common Linux desktops where Slint/Winit is supported.
 
-Do not require end users to install Bun, Node.js, Deno or LINEJS manually. Build `liney-engine` as a standalone distributable sidecar with the pinned LINEJS dependency bundled.
+Do not require end users to install Bun, Node.js, Deno or LINEJS manually. Bundle the Node runtime, Slint native library and pinned LINEJS dependency into ONE native application distribution; do NOT ship a separate engine executable. CI may use Bun as a build tool, but must not use Bun+Slint directly until its libuv compatibility is proven.
 
 For x86_64 engine release builds, prefer a broad-compatibility baseline target over CPU-specific optimizations that unnecessarily exclude older supported hardware.
 
@@ -127,7 +125,7 @@ Each release should validate at minimum:
 
 - engine unit tests
 - RPC contract tests
-- native GTK build/check
+- native Slint build/check
 - cache-first startup behavior
 - offline cached startup
 - push/polling fallback behavior
@@ -141,7 +139,7 @@ A release should not be marked stable while normal idle/startup behavior can cau
 
 Use `https://github.com/evex-dev/linejs` / `@evex/linejs` as the current protocol implementation, but treat it as replaceable infrastructure.
 
-Do not spread LINEJS-specific calls throughout the application. Keep compatibility work inside the adapter so future LINEJS API changes, protocol breakage or alternative implementations do not require rewriting the GTK UI.
+Do not spread LINEJS-specific calls throughout the application. Keep compatibility work inside the adapter so future LINEJS API changes, protocol breakage or alternative implementations do not require rewriting the Slint UI.
 
 Pin and document the tested LINEJS version for each release.
 

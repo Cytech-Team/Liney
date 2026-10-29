@@ -33,11 +33,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb xauth dbus-x11 libinput10 libxkbcommon0 libxkbcommon-x11-0 libgl1 libegl1
           npm ci --prefix app-unified --no-audit --no-fund
+      - name: Install pinned LINEJS runtime from JSR
+        run: npm install --ignore-scripts --no-audit --no-fund --omit=dev --no-package-lock
       - name: Build in-process engine modules (without production credentials)
         run: |
           mkdir -p app-unified/dist
           bun build engine/runtime/sqlite.ts --target=node --external bun:sqlite --outfile app-unified/dist/sqlite.mjs
           bun build engine/main.ts --target=node --packages=external --outfile app-unified/dist/engine.mjs
+      - name: Native controller and QR tests
+        run: npm test --prefix app-unified
+      - name: Real LINEJS Engine single-process boot (no LINE account)
+        run: |
+          export LINEY_DISABLE_AUTO_RESTORE=1
+          export LINEY_DATA_DIR="$(mktemp -d)"
+          chmod 700 "$LINEY_DATA_DIR"
+          node --no-warnings app-unified/tests/runtime-probe.mjs
+          rm -rf "$LINEY_DATA_DIR"
       - name: SQLite compatibility contract (Node)
         run: node app-unified/tests/sqlite-contract.mjs
       - name: SQLite compatibility contract (Bun)

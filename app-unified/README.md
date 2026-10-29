@@ -1,60 +1,70 @@
-# Single-Process Native Liney — technical validation branch
+# Liney 0.2 — Native UI and LINEJS Engine in one process
 
-The explicit target is **one operating-system process**, not merely one
-installer bundling separate executables.
+A Linux-native **Slint** presentation layer that follows the original Liney
+React design (70px navy navigation, 309px chat list, LINE-green bubbles,
+penguin logo, light/dark color tokens). It uses Node.js Worker Threads for
+the *existing* LINEJS engine **within the same operating-system process**.
 
-- Native UI: Slint (no browser renderer, WebKitGTK or Chromium).
-- Runtime: Node.js with TypeScript; its worker runs the existing LINEJS
-  Engine in a **Worker Thread**, not a subprocess. Threads share the
-  process/PID but have separate JS isolates and message passing.
-- SQLite: transitional compatibility module connects Bun's `bun:sqlite`
-  to Node's `node:sqlite`. On Node 22, `node:sqlite` is experimental.
-- IPC on native path: `MessagePort`/Worker messages in memory; no child
-  process, stdin pipe, local HTTP server or extra daemon.
-- Legacy Tauri JSONL remains usable until feature parity is reached.
+This implementation does **not** use WebKitGTK, Chromium, HTML/CSS,
+Electron, an HTTP server, or a standalone Bun engine process.
 
-## Development test (isolated account)
+## Native features implemented
 
-From the repository root:
+- Three-column chat UI, search, unread/group filters and virtualized chat list
+- Chat selection, message history, outgoing text UI and pending/error states
+- Cache-first conversation metadata, event-driven list model updates
+- Native dark/light palette (original Liney token values)
+- QR code rendered from an in-memory native RGBA image; no token logs
+- Original Liney brand icon
+- Real LINEJS Engine 3.5.0 loads and responds in same PID via Node Worker
+- SQLite compatibility for Bun and Node without changing schema
+
+## Development smoke test (isolated, NEVER a real account)
+
+Requires a build machine with Node 22, Bun build tool, X11/Wayland and Slint
+Linux native runtime libraries.
+
+From repository root:
 
 ```sh
-bun install
+npm install --ignore-scripts --no-audit --no-fund
+npm ci --prefix app-unified --ignore-scripts
 bun build engine/main.ts --target=node --packages=external --outfile app-unified/dist/engine.mjs
-cd app-unified
-npm install
+bun build engine/runtime/sqlite.ts --target=node --external bun:sqlite --outfile app-unified/dist/sqlite.mjs
+npm test --prefix app-unified
+
 export LINEY_UNIFIED_TEST=1
 export LINEY_DISABLE_AUTO_RESTORE=1
 export LINEY_DATA_DIR="$(mktemp -d)"
-npm run dev
+node app-unified/main.mjs
 ```
 
-Do not run the test against a real account/data directory. The prototype
-does not replace Liney v0.1.3, and doesn't yet provide a full chat view,
-trays, media, complete UI capabilities, binary packaging or live LINE tests.
-The test runner must verify the engine boots and responds to `ping`
-before the unified architecture can be claimed as runtime-proven.
-
-Future packaging must bundle one app and its native libraries. Other
-native media helpers also need auditing before guaranteeing *zero* child
-processes during calls/screen sharing. The UI may be native while bundling
-Node's runtime: the executable size is not expected to equal a Rust-only GUI.
-
-## Tested paths
-
-The mock Worker + Slint proof runs in a single OS process. It does not
-access LINE or real chat history:
+For an offline **mock** demo of the visual conversation UI:
 
 ```sh
-cd app-unified
-npm install
-LINEY_UNIFIED_TEST=1 LINEY_UNIFIED_MOCK_ENGINE=1 LINEY_DATA_DIR="$(mktemp -d)" npm run dev
+LINEY_UNIFIED_TEST=1 LINEY_UNIFIED_MOCK_ENGINE=1 LINEY_DATA_DIR="$(mktemp -d)" node app-unified/main.mjs
 ```
 
-The host verifies the engine-reported process ID equals its own PID before
-reporting success. The full LINEJS Node worker still needs dependency/runtime
-validation on an isolated account.
+The root `.npmrc` pins the `@jsr` scope to JSR's npm-compatible registry;
+`@evex/linejs` is not published to the default npm registry.
 
-Slint's current Node bindings are beta. Direct Bun+Slint was evaluated
-and **failed at runtime** because Bun's libuv compatibility did not support
-`uv_backend_fd` in the tested version. Do not use that path without a new
-passing runtime smoke test.
+## Not ready for production yet
+
+**This is a native migration preview, not a complete Liney replacement.**
+Production LINE QR/email auth, session restore/E2EE, image/avatar/sticker
+rendering, Flex content, calls, media transfer, tray, notifications, offline
+reconnection, and native app packaging need feature parity + real-account
+end-to-end tests. Existing call media helpers can spawn child processes;
+audit them before claiming every optional feature is zero-child-process.
+
+Slint Node bindings are beta and Node 22 `node:sqlite` is experimental.
+Bun + Slint directly crashed in testing due unsupported `uv_backend_fd` in
+Bun 1.4.4; the approved route is **Node + Slint**, with Bun used only for
+builds/legacy runtimes.
+
+Keep the stable 0.1.3 Tauri app and private `~/.local/share/liney` database
+untouched until the new build passes all migration gates. No credentials,
+sessions, QR tokens or real LINE histories belong in the repo or CI.
+
+See [architecture](../docs/ARCHITECTURE.md) and
+[Draft PR #8](https://github.com/Cytech-Team/Liney/pull/8).

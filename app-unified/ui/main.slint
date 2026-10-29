@@ -1,53 +1,579 @@
-export component LineyNative inherits Window {
-    title: "Liney • Native Unified Runtime";
-    width: 900px;
-    height: 560px;
-    background: #111827;
+import { ListView, LineEdit, ScrollView } from "std-widgets.slint";
 
-    in-out property <string> engine-status: "Connecting...";
-    in-out property <string> cache-status: "Loading local state...";
-    in-out property <string> runtime-label: "Native UI";
+// One source of truth for Liney's original React design tokens.
+// This remains a real native Slint scene, not CSS or a web view.
+export global Theme {
+    in-out property <bool> dark: true;
+    out property <brush> background: dark ? #101318 : #edf2f6;
+    out property <brush> surface: dark ? #15191f : #ffffff;
+    out property <brush> raised: dark ? #1a2027 : #f7f9fb;
+    out property <brush> hover: dark ? #20262e : #f1f4f7;
+    out property <brush> border: dark ? #252c35 : #e7ebf0;
+    out property <brush> text: dark ? #edf2f7 : #182033;
+    out property <brush> muted: dark ? #9aa5b5 : #7b8799;
+    out property <brush> subtle: dark ? #6f7b8c : #a4adba;
+    out property <brush> mine: dark ? #183a29 : #dff7e9;
+    out property <brush> accent-soft: dark ? #173a29 : #e8fbf1;
+    out property <brush> accent: #20c96e;
+    out property <brush> nav: #131d2a;
+    out property <brush> nav-hover: #24364b;
+}
 
+export struct ChatItem {
+    id: string,
+    kind: string,
+    title: string,
+    preview: string,
+    time: string,
+    avatar: string,
+    unread: int,
+    pinned: bool,
+    selected: bool,
+    avatar-color: color
+}
+
+export struct ChatMessage {
+    id: string,
+    body: string,
+    time: string,
+    sender: string,
+    mine: bool,
+    pending: bool,
+    status: string
+}
+
+component RailItem inherits Rectangle {
+    in property <string> glyph;
+    in property <bool> active: false;
+    callback clicked;
+    width: 46px;
+    height: 48px;
+    border-radius: 13px;
+    background: active ? #214333 : touch.has-hover ? Theme.nav-hover : transparent;
+    Text {
+        text: root.glyph;
+        color: active ? #58e497 : #b5c4d7;
+        font-size: 23px;
+        font-weight: 650;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+component ChatTile inherits Rectangle {
+    in property <ChatItem> chat;
+    callback clicked(string);
+    height: 76px;
+    border-radius: 13px;
+    background: chat.selected ? Theme.accent-soft : touch.has-hover ? Theme.raised : transparent;
     HorizontalLayout {
-        spacing: 0px;
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 11px;
+        alignment: center;
         Rectangle {
-            width: 280px;
-            background: #1b2532;
-            VerticalLayout {
-                padding: 20px;
-                spacing: 16px;
-                Text { text: "Liney"; color: #66efaa; font-size: 32px; font-weight: 800; }
-                Text { text: "NATIVE • SINGLE PROCESS"; color: #98adbf; font-size: 12px; }
-                Rectangle {
-                    height: 60px; border-radius: 12px; background: #2a3748;
-                    VerticalLayout {
-                        padding: 12px;
-                        Text { text: root.engine-status; color: #c9ffe3; font-size: 15px; }
-                        Text { text: root.runtime-label; color: #a9b8cc; font-size: 12px; }
+            width: 45px;
+            height: 45px;
+            border-radius: 25px;
+            background: root.chat.avatar-color;
+            Text {
+                text: root.chat.avatar;
+                color: #ffffff;
+                font-size: 12px;
+                font-weight: 800;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        VerticalLayout {
+            spacing: 4px;
+            alignment: center;
+            HorizontalLayout {
+                spacing: 6px;
+                Text {
+                    text: root.chat.title;
+                    color: Theme.text;
+                    font-size: 13px;
+                    font-weight: 720;
+                    overflow: elide;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: root.chat.time;
+                    color: Theme.subtle;
+                    font-size: 10px;
+                    vertical-alignment: center;
+                }
+            }
+            HorizontalLayout {
+                spacing: 5px;
+                Text {
+                    text: root.chat.preview;
+                    color: Theme.muted;
+                    font-size: 11px;
+                    overflow: elide;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                if root.chat.unread > 0 : Rectangle {
+                    width: 21px;
+                    height: 21px;
+                    border-radius: 12px;
+                    background: Theme.accent;
+                    Text {
+                        text: root.chat.unread > 99 ? "99+" : root.chat.unread;
+                        color: #ffffff;
+                        font-size: 10px;
+                        font-weight: 750;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
                     }
                 }
-                Rectangle { }
-                Text { text: "Liney for Linux"; color: #a4b9c8; font-size: 13px; }
+            }
+        }
+    }
+    touch := TouchArea {
+        clicked => { root.clicked(root.chat.id); }
+    }
+}
+
+component Bubble inherits Rectangle {
+    in property <ChatMessage> item;
+    height: 12px + bubble-box.height + 13px;
+    background: transparent;
+    bubble-box := Rectangle {
+        // Thread-like chat alignment, matching the legacy chat composer.
+        x: root.item.mine ? parent.width - self.width - 18px : 18px;
+        y: 4px;
+        width: min(435px, parent.width * 0.72);
+        height: bubble-col.preferred-height + 23px;
+        border-radius: 15px;
+        background: root.item.mine ? Theme.mine : Theme.raised;
+        border-width: 1px;
+        border-color: root.item.mine ? Theme.accent-soft : Theme.border;
+        bubble-col := VerticalLayout {
+            x: 15px;
+            y: 11px;
+            width: parent.width - 30px;
+            spacing: 5px;
+            if !root.item.mine && root.item.sender != "" : Text {
+                text: root.item.sender;
+                font-size: 11px;
+                font-weight: 700;
+                color: Theme.accent;
+            }
+            Text {
+                text: root.item.body;
+                color: Theme.text;
+                font-size: 13px;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: end;
+                Text {
+                    text: root.item.pending ? "Sending..." : root.item.status == "error" ? "Not sent" : "";
+                    color: root.item.status == "error" ? #ef6b71 : Theme.subtle;
+                    font-size: 10px;
+                }
+                Text {
+                    text: root.item.time;
+                    color: Theme.muted;
+                    font-size: 10px;
+                    horizontal-alignment: right;
+                }
+            }
+        }
+    }
+}
+
+export component LineyNative inherits Window {
+    title: "Liney — LINE for Linux";
+    preferred-width: 1160px;
+    preferred-height: 745px;
+    min-width: 740px;
+    min-height: 520px;
+    background: Theme.background;
+    default-font-family: "Noto Sans";
+    in-out property <string> engine-status: "Connecting...";
+    in-out property <string> cache-status: "Syncing your conversations";
+    in-out property <string> runtime-label: "Native";
+    in-out property <string> active-chat-name: "Select a conversation";
+    in-out property <string> active-chat-avatar: "L";
+    in-out property <string> active-chat-subtitle: "Your messages appear here.";
+    in-out property <brush> active-chat-color: #20c96e;
+    in-out property <bool> has-active-chat: false;
+    in-out property <bool> is-authenticated: false;
+    in-out property <string> auth-url: "";
+    in-out property <image> auth-qr;
+    in-out property <string> auth-pin: "";
+    in-out property <string> notification: "";
+    in-out property <string> search: "";
+    in-out property <string> draft: "";
+    in-out property <int> active-filter: 0;
+    in-out property <[ChatItem]> chats: [];
+    in-out property <[ChatMessage]> messages: [];
+
+    callback select-chat(string);
+    callback send-message(string);
+    callback refresh-chats();
+    callback login-qr();
+    callback copy-auth-url();
+    callback change-search(string);
+    callback change-filter(int);
+    callback toggle-theme();
+
+    HorizontalLayout {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        spacing: 0px;
+        // Navigation rail: 70px, as in the original React desktop layout.
+        Rectangle {
+            width: 70px;
+            background: Theme.nav;
+            VerticalLayout {
+                alignment: start;
+                padding-top: 19px;
+                padding-bottom: 17px;
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 12px;
+                Rectangle {
+                    width: 46px;
+                    height: 46px;
+                    border-radius: 14px;
+                    background: #10241a;
+                    Image {
+                        x: 1px; y: 1px;
+                        width: parent.width - 2px;
+                        height: parent.height - 2px;
+                        source: @image-url("assets/liney-logo.png");
+                        image-fit: contain;
+                    }
+                }
+                Rectangle { height: 12px; background: transparent; }
+                RailItem { glyph: "◉"; active: true; clicked => { root.change-filter(0); } }
+                RailItem { glyph: "☏"; clicked => { root.notification = "Voice calls are being migrated to native"; } }
+                RailItem { glyph: "♧"; clicked => { root.notification = "Contacts are being migrated"; } }
+                RailItem { glyph: "◈"; clicked => { root.notification = "OpenChat is being migrated"; } }
+                Rectangle { vertical-stretch: 1; background: transparent; }
+                RailItem { glyph: Theme.dark ? "☼" : "☾"; clicked => { root.toggle-theme(); } }
+                RailItem { glyph: "⚙"; clicked => { root.notification = "Native settings are in development"; } }
             }
         }
         Rectangle {
-            background: #111827;
+            width: 309px;
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border;
             VerticalLayout {
-                padding: 24px;
-                spacing: 18px;
-                Text { text: "Welcome back"; color: #f7fbff; font-size: 27px; font-weight: 800; }
+                spacing: 0px;
                 Rectangle {
-                    height: 110px;
-                    background: #25344a;
-                    border-radius: 18px;
+                    height: 89px;
+                    background: Theme.surface;
                     VerticalLayout {
-                        padding: 20px;
-                        Text { text: root.cache-status; color: #dceefb; font-size: 16px; }
-                        Text { text: "SQLite belongs to the Engine Worker (same PID)"; color: #99abc1; font-size: 12px; }
+                        padding-left: 20px;
+                        padding-right: 20px;
+                        padding-top: 17px;
+                        padding-bottom: 11px;
+                        spacing: 4px;
+                        Text {
+                            text: "YOUR MESSAGES";
+                            color: Theme.subtle;
+                            font-size: 10px;
+                            font-weight: 750;
+                        }
+                        HorizontalLayout {
+                            spacing: 9px;
+                            Text {
+                                text: "Chats";
+                                color: Theme.text;
+                                font-size: 24px;
+                                font-weight: 800;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                            Rectangle {
+                                width: 36px;
+                                height: 34px;
+                                border-radius: 11px;
+                                background: Theme.accent-soft;
+                                Text { text: "↻"; color: Theme.accent; font-size: 20px; horizontal-alignment: center; vertical-alignment: center; }
+                                TouchArea { clicked => { root.refresh-chats(); } }
+                            }
+                        }
                     }
                 }
-                Rectangle { }
-                Text { text: "No WebKitGTK • No Chromium • No Engine sidecar"; color: #a7b9c7; font-size: 13px; }
+                Rectangle {
+                    height: 47px;
+                    background: Theme.surface;
+                    HorizontalLayout {
+                        padding-left: 15px;
+                        padding-right: 15px;
+                        padding-bottom: 6px;
+                        spacing: 0px;
+                        Rectangle {
+                            background: Theme.raised;
+                            border-color: Theme.border;
+                            border-width: 1px;
+                            border-radius: 11px;
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 10px;
+                                spacing: 8px;
+                                Text { text: "⌕"; color: Theme.subtle; font-size: 19px; vertical-alignment: center; }
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    background: transparent;
+                                    Text {
+                                        visible: root.search == "";
+                                        text: "Search conversations";
+                                        color: Theme.subtle;
+                                        font-size: 12px;
+                                        vertical-alignment: center;
+                                    }
+                                    TextInput {
+                                        text <=> root.search;
+                                        color: Theme.text;
+                                        font-size: 12px;
+                                        vertical-alignment: center;
+                                        single-line: true;
+                                        edited => { root.change-search(self.text); }
+                                    }
+                                }
+                                Text { text: "⌘ K"; color: Theme.subtle; font-size: 10px; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    height: 51px;
+                    background: Theme.surface;
+                    HorizontalLayout {
+                        padding-left: 15px;
+                        padding-right: 15px;
+                        padding-top: 8px;
+                        padding-bottom: 9px;
+                        spacing: 8px;
+                        for filter[index] in ["All", "Unread", "Groups"] : Rectangle {
+                            height: 33px;
+                            border-radius: 9px;
+                            background: root.active-filter == index ? Theme.accent-soft : Theme.raised;
+                            horizontal-stretch: 1;
+                            Text {
+                                text: filter;
+                                color: root.active-filter == index ? Theme.accent : Theme.muted;
+                                font-size: 11px;
+                                font-weight: root.active-filter == index ? 750 : 550;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            TouchArea { clicked => { root.active-filter = index; root.change-filter(index); } }
+                        }
+                    }
+                }
+                Rectangle { height: 1px; background: Theme.border; }
+                ListView {
+                    vertical-stretch: 1;
+                    for chat in root.chats: ChatTile {
+                        chat: chat;
+                        clicked(id) => { root.select-chat(id); }
+                    }
+                }
+                Rectangle {
+                    height: 43px;
+                    background: Theme.surface;
+                    HorizontalLayout {
+                        padding-left: 17px;
+                        padding-right: 14px;
+                        spacing: 7px;
+                        Rectangle {
+                            width: 7px; height: 7px; border-radius: 4px;
+                            background: root.engine-status == "Engine ready" ? Theme.accent : #e5a65c;
+                        }
+                        Text {
+                            text: root.engine-status;
+                            color: Theme.muted;
+                            font-size: 10px;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        Text {
+                            text: "NATIVE";
+                            color: Theme.accent;
+                            font-size: 9px;
+                            font-weight: 750;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+        // Conversation surface: cache-first, incremental native list.
+        Rectangle {
+            width: parent.width - 379px;
+            background: Theme.background;
+            VerticalLayout {
+                width: parent.width;
+                height: parent.height;
+                spacing: 0px;
+                Rectangle {
+                    height: 78px;
+                    background: Theme.surface;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    HorizontalLayout {
+                        padding-left: 25px;
+                        padding-right: 25px;
+                        spacing: 12px;
+                        Rectangle {
+                            width: 43px;
+                            height: 43px;
+                            border-radius: 23px;
+                            background: root.active-chat-color;
+                            Text {
+                                text: root.active-chat-avatar;
+                                font-weight: 800;
+                                font-size: 12px;
+                                color: white;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 3px;
+                            Text { text: root.active-chat-name; color: Theme.text; font-size: 16px; font-weight: 800; overflow: elide; }
+                            Text { text: root.active-chat-subtitle; color: Theme.muted; font-size: 11px; overflow: elide; }
+                        }
+                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                        Rectangle {
+                            width: 37px; height: 37px; border-radius: 11px;
+                            background: Theme.raised;
+                            Text { text: "☏"; color: Theme.muted; font-size: 18px; horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { clicked => { root.notification = "Native calling is in progress"; } }
+                        }
+                    }
+                }
+                if root.has-active-chat : ListView {
+                    vertical-stretch: 1;
+                    for message in root.messages : Bubble { item: message; }
+                }
+                if !root.has-active-chat : Rectangle {
+                    vertical-stretch: 1;
+                    background: Theme.background;
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 15px;
+                        Rectangle {
+                            width: 82px;
+                            height: 82px;
+                            border-radius: 22px;
+                            background: Theme.accent-soft;
+                            Text { text: "✉"; font-size: 43px; color: Theme.accent; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                        Text { text: "It's good to see you here"; color: Theme.text; font-size: 22px; font-weight: 800; horizontal-alignment: center; }
+                        Text { text: root.cache-status; color: Theme.muted; font-size: 13px; horizontal-alignment: center; }
+                        if !root.is-authenticated : Rectangle {
+                            width: 185px; height: 43px; border-radius: 12px; background: Theme.accent;
+                            Text { text: "Sign in with LINE"; color: #052e18; font-weight: 800; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { clicked => { root.login-qr(); } }
+                        }
+                        if root.auth-url != "" : Rectangle {
+                            width: 255px;
+                            height: 263px;
+                            border-radius: 16px;
+                            background: Theme.surface;
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 7px;
+                                Image {
+                                    width: 210px;
+                                    height: 210px;
+                                    image-fit: contain;
+                                    source: root.auth-qr;
+                                }
+                                Text {
+                                    text: "Scan with LINE on your phone";
+                                    color: Theme.muted;
+                                    font-size: 12px;
+                                    horizontal-alignment: center;
+                                }
+                            }
+                        }
+                        if root.auth-pin != "" : Text { text: "Verify PIN: " + root.auth-pin; font-size: 17px; font-weight: 800; color: Theme.accent; }
+                    }
+                }
+                if root.notification != "" : Rectangle {
+                    height: 37px;
+                    background: Theme.accent-soft;
+                    Text {
+                        x: 15px; text: root.notification;
+                        color: Theme.accent; font-size: 12px;
+                        vertical-alignment: center;
+                    }
+                }
+                Rectangle {
+                    height: 82px;
+                    background: Theme.surface;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    HorizontalLayout {
+                        padding-left: 18px;
+                        padding-right: 18px;
+                        padding-top: 14px;
+                        padding-bottom: 14px;
+                        spacing: 12px;
+                        Rectangle {
+                            width: 41px; height: 41px;
+                            border-radius: 12px; background: Theme.raised;
+                            Text { text: "+"; font-size: 26px; color: Theme.muted; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            height: 49px;
+                            background: Theme.raised;
+                            border-width: 1px; border-color: Theme.border; border-radius: 13px;
+                            HorizontalLayout {
+                                padding-left: 13px;
+                                padding-right: 12px;
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    background: transparent;
+                                    Text {
+                                        visible: root.draft == "";
+                                        text: root.has-active-chat ? "Type a message..." : "Select a conversation to start chatting";
+                                        color: Theme.subtle;
+                                        font-size: 13px;
+                                        vertical-alignment: center;
+                                    }
+                                    TextInput {
+                                        color: Theme.text;
+                                        font-size: 13px;
+                                        text <=> root.draft;
+                                        vertical-alignment: center;
+                                        single-line: true;
+                                        enabled: root.has-active-chat;
+                                        accepted => { root.send-message(self.text); }
+                                    }
+                                }
+                            }
+                        }
+                        Rectangle {
+                            width: 48px; height: 47px;
+                            border-radius: 13px;
+                            background: root.has-active-chat ? Theme.accent : Theme.raised;
+                            Text { text: "➤"; color: root.has-active-chat ? #083a22 : Theme.subtle; font-size: 21px; horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { clicked => { root.send-message(root.draft); } }
+                        }
+                    }
+                }
             }
         }
     }

@@ -3,8 +3,12 @@
   "private": true,
   "type": "module",
   "description": "Experimental one-process Slint + Node host; not a stable Liney release",
-  "scripts": { "dev": "node main.mjs" },
+  "scripts": {
+    "dev": "node main.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
   "dependencies": {
+    "qrcode": "^1.5.4",
     "slint-ui": "1.18.1"
   }
 }

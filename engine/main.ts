@@ -81,7 +81,7 @@ import { PROTOCOL_VERSION } from "./protocol/protocol";
 
 const LINEJS_VERSION = LineJsAdapter.version;
 let ACCOUNT_ID = "default";
-process.umask(0o077);
+if (!parentPort) process.umask(0o077); // Node Workers inherit the host's secure umask.
 let client: LineClient | null = null;
 let loginInFlight = false;
 let authGeneration = 0;

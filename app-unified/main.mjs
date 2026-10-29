@@ -4,16 +4,19 @@
  * Do not use against production LINE credentials until integration is verified.
  */
 import * as slint from "slint-ui";
+slint.setXdgAppId("dev.cytechteam.liney");
 import { Worker } from "node:worker_threads";
 import { randomUUID } from "node:crypto";
+import { ChatController } from "./controller.mjs";
 
+process.umask(0o077); // Set on process owner; Node workers cannot call process.umask().
 const isolated = process.env.LINEY_DATA_DIR;
 if (process.env.LINEY_UNIFIED_TEST === "1" && !isolated) {
   throw new Error("LINEY_DATA_DIR is required for tests to protect real sessions");
 }
 const ui = slint.loadFile(new URL("./ui/main.slint", import.meta.url));
 const window = new ui.LineyNative();
-window.runtime_label = "Node.js + Slint • " + process.pid;
+window.runtime_label = "Slint · Node.js";
 
 const pending = new Map();
 const workerScript = process.env.LINEY_UNIFIED_MOCK_ENGINE === "1"
@@ -34,7 +37,9 @@ function call(method, params = {}, timeoutMs = 20000) {
     engine.postMessage({ id, version: 1, method, params });
   });
 }
+let controller = null;
 engine.on("message", (message) => {
+  if (!message?.id && message?.type) controller?.handleEvent(message);
   const entry = message?.id && pending.get(message.id);
   if (entry) {
     clearTimeout(entry.timer);
@@ -53,31 +58,24 @@ engine.on("exit", () => {
   window.engine_status = "Engine stopped";
 });
 
-// Run the window immediately; boot/sync must never block first paint.
-void (async () => {
-try {
-  const response = await call("ping", {}, 14000);
-  if (response?.protocolVersion !== 1) throw new Error("Protocol mismatch");
-  if (response?.processId !== process.pid) throw new Error("Engine is not sharing the Liney process");
-  window.engine_status = "Engine ready";
-  // Guarded cache read never connects to a live user account during tests.
-  const chats = await call("chats.list", {}, 14000).catch(() => []);
-  window.cache_status = Array.isArray(chats) && chats.length
-    ? "Cached chats: " + chats.length
-    : "No cached chats in this isolated test";
+// No webview, browser runtime, network server, engine child process or sockets.
+controller = new ChatController({
+  window,slint,call,
+  copyText: (value) => {
+    // Clipboard is a native-OS operation. Do not log QR URLs or secrets.
+    console.error("Copy QR URL is not yet available in this preview");
+  }
+});
+void controller.start().then((response) => {
   console.log(JSON.stringify({
-    hostPid: process.pid,
-    workerPid: response.processId,
-    enginePong: true,
-    nativeRenderer: "Slint",
-    childProcess: false,
+    hostPid:process.pid,workerPid:response.processId,
+    enginePong:true,nativeRenderer:"Slint",childProcess:false,
   }));
-} catch (error) {
-  window.engine_status = "Native runtime test failed";
-  window.cache_status = String(error?.message ?? "Engine error");
-  console.error("Native integration:", String(error?.message ?? error));
-}
-})();
+}).catch(error=>{
+  window.engine_status = "Engine unavailable";
+  window.cache_status = "Native engine is not ready";
+  console.error("Native integration:",String(error?.message??error));
+});
 try {
   await window.run();
 } finally {
