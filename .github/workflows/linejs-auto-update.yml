@@ -46,6 +46,8 @@ jobs:
       - name: Verify proposed LINEJS update
         run: |
           bun install --frozen-lockfile
+          # Website tests expect content-hashed website/dist assets.
+          bun website/build.mjs
           bun test
           bun run lint
           bun run web:build
@@ -92,6 +94,7 @@ jobs:
       - name: Verify updated LINEJS
         if: steps.linejs.outputs.updated == 'true'
         run: |
+          bun website/build.mjs
           bun test
           bun run lint
           bun run web:build
