@@ -1,0 +1,112 @@
+name: Electron React Linux Preview
+
+on:
+  push:
+    branches:
+      - feat/electron-react-runtime
+    paths:
+      - "electron/**"
+      - "engine/**"
+      - "src/**"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/electron-stage-helpers.mjs"
+      - "vite.config.ts"
+      - ".github/workflows/electron-react-preview.yml"
+  pull_request:
+    paths:
+      - "electron/**"
+      - "engine/**"
+      - "src/**"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/electron-stage-helpers.mjs"
+      - "vite.config.ts"
+      - ".github/workflows/electron-react-preview.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-electron:
+    name: React + LINEJS Worker + packaged Electron
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - name: Native UI dependencies for isolated Xvfb test
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends xvfb libgtk-3-0 libnss3 libxss1 libgbm1 libasound2t64 libatk-bridge2.0-0
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Build existing LINEJS Engine for Node Worker
+        run: npm run electron:engine
+      - name: Build existing React and CSS through Electron adapters
+        run: npm run electron:web
+      - name: Existing Engine tests
+        run: npm run test:unit
+      - name: Download verified native helpers for single-file packaging
+        run: npm run electron:helpers
+      - name: Verify native helpers can run without missing shared libraries
+        run: |
+          for helper in liney-media liney-audio liney-screen liney-screen-wayland liney-screen-x11; do
+            test -x "electron/native/$helper"
+            test "$(stat -c %s "electron/native/$helper")" -gt 100000
+            ! ldd "electron/native/$helper" | grep -q 'not found'
+          done
+          electron/native/liney-media --liney-keyring-probe | grep -q '"available":'
+      - name: Isolated UI + real LINEJS boot (CI no-sandbox flag only)
+        run: |
+          export LINEY_DATA_DIR="$(mktemp -d)"
+          chmod 700 "$LINEY_DATA_DIR"
+          export LINEY_DISABLE_AUTO_RESTORE=1 LINEY_ELECTRON_SMOKE=1
+          timeout -k 2s 45s xvfb-run -a --server-args="-screen 0 1280x800x24" ./node_modules/.bin/electron . --no-sandbox > /tmp/liney-source-smoke.log 2>&1
+          cat /tmp/liney-source-smoke.log
+          grep -q '"enginePong":true' /tmp/liney-source-smoke.log
+          grep -q '"logoLoaded":true' /tmp/liney-source-smoke.log
+          grep -q '"webkit":false' /tmp/liney-source-smoke.log
+          grep -q '"menuHidden":true' /tmp/liney-source-smoke.log
+          grep -q '"nativeHelpers":5' /tmp/liney-source-smoke.log
+          rm -rf "$LINEY_DATA_DIR"
+      - name: Package standalone AppImage
+        run: npm run electron:build:appimage
+      - name: Test packaged Electron UI and Worker (no LINE account)
+        run: |
+          export LINEY_DATA_DIR="$(mktemp -d)"
+          chmod 700 "$LINEY_DATA_DIR"
+          export LINEY_DISABLE_AUTO_RESTORE=1 LINEY_ELECTRON_SMOKE=1
+          timeout -k 2s 45s xvfb-run -a --server-args="-screen 0 1280x800x24" release-electron/linux-unpacked/liney --no-sandbox > /tmp/liney-packaged-smoke.log 2>&1
+          cat /tmp/liney-packaged-smoke.log
+          grep -q '"enginePong":true' /tmp/liney-packaged-smoke.log
+          grep -q '"authDialog":true' /tmp/liney-packaged-smoke.log
+          grep -q '"menuHidden":true' /tmp/liney-packaged-smoke.log
+          grep -q '"nativeHelpers":5' /tmp/liney-packaged-smoke.log
+          grep -q '"logoLoaded":true' /tmp/liney-packaged-smoke.log
+          rm -rf "$LINEY_DATA_DIR"
+      - name: Verify bundled unpacked helpers
+        run: |
+          native=release-electron/linux-unpacked/resources/app.asar.unpacked/electron/native
+          for helper in liney-media liney-audio liney-screen liney-screen-wayland liney-screen-x11; do
+            test -x "$native/$helper"
+            ! ldd "$native/$helper" | grep -q 'not found'
+          done
+          "$native/liney-media" --liney-keyring-probe | grep -q '"available":'
+      - name: Checksums
+        run: sha256sum release-electron/*.AppImage > release-electron/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: liney-electron-linux-preview
+          path: |
+            release-electron/*.AppImage
+            release-electron/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7

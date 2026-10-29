@@ -63,3 +63,12 @@ website/dist/
 # org.flatpak.Builder local Flathub wrapper output
 /builddir/
 /repo/
+
+# Electron distribution artifacts
+/release-electron/
+
+/electron/dist/
+
+# Verified, packaged Linux Native Helpers (downloaded from pinned release)
+/electron/native/
+/.cache/electron-native/

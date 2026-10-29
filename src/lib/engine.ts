@@ -1,3 +1,4 @@
+import {desktop} from "./electron-bridge";
 import { Command, type Child } from "@tauri-apps/plugin-shell";
 
 const PROTOCOL_VERSION = 1;
@@ -29,6 +30,7 @@ type Pending = {
 
 class LineyEngine {
   private child: Child | null = null;
+  private electronUnsubscribe: (()=>void) | null = null;
   private pending = new Map<string, Pending>();
   private listeners = new Set<(event: EngineEvent) => void>();
   private started = false;
@@ -36,7 +38,7 @@ class LineyEngine {
   private lifecycleGeneration = 0;
   private lineBuffer = "";
   get isNative() {
-    return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    return typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || Boolean(window.lineyDesktop));
   }
 
   async start() {
@@ -54,6 +56,27 @@ class LineyEngine {
 
   private async startInternal(): Promise<boolean> {
     const generation = ++this.lifecycleGeneration;
+    if (window.lineyDesktop) {
+      // Subscribe before starting the engine: restored/auth QR events can
+      // otherwise race through the Electron bridge and be permanently lost.
+      this.electronUnsubscribe = desktop().onEngine((packet)=>{
+        if (generation !== this.lifecycleGeneration) return;
+        const event=packet.type && packet.payload && typeof packet.payload==="object"
+          ? {...packet,...packet.payload as Record<string,unknown>}:packet;
+        this.emit(event as EngineEvent);
+      });
+      try {
+        await desktop().start();
+        this.started=true;
+        await this.request("ping",{},8000);
+        return true;
+      } catch (error) {
+        this.electronUnsubscribe?.();
+        this.electronUnsubscribe=null;
+        this.started=false;
+        throw error;
+      }
+    }
     // Bun's native fetch pool defaults to a very high concurrency. LINEJS's
     // long-lived PUSH/polling traffic can otherwise fan out into hundreds of
     // SYN-SENT sockets when a LINE edge is slow/unreachable, eventually
@@ -107,6 +130,14 @@ class LineyEngine {
 
   async request<T = unknown>(method: string, params: Record<string, unknown> = {}, timeout = 15_000): Promise<T> {
     if (!this.isNative) throw new EngineRequestError("Desktop engine required", "DESKTOP_ONLY");
+    if (window.lineyDesktop) {
+      if (!this.started) throw new EngineRequestError("LINE engine is not running", "ENGINE_CLOSED", true);
+      try {return await desktop().request<T>(method,params,timeout);}
+      catch(e) {
+        const code=(e as {code?:string})?.code||"ENGINE_ERROR";
+        throw new EngineRequestError(e instanceof Error?e.message:String(e),code,true);
+      }
+    }
     if (!this.child) throw new Error("LINE engine is not running");
     const id = crypto.randomUUID();
     const payload = `${JSON.stringify({ id, version: PROTOCOL_VERSION, method, params })}\n`;
@@ -136,6 +167,13 @@ class LineyEngine {
 
   async stop() {
     this.lifecycleGeneration += 1;
+    if (window.lineyDesktop) {
+      this.electronUnsubscribe?.();
+      this.electronUnsubscribe=null;
+      this.started=false;
+      await desktop().stop().catch(()=>undefined);
+      return;
+    }
     const child = this.child;
     this.child = null;
     this.started = false;
