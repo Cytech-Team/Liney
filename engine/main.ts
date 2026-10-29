@@ -21,7 +21,8 @@ import { readFileSync } from "node:fs";
 import { rename as renameAsync, rm as rmAsync, unlink as unlinkAsync, writeFile as writeFileAsync } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
+import { createInterface, type Interface } from "node:readline";
+import { parentPort } from "node:worker_threads";
 import { runFallbackPolling } from "./events/fallback-polling";
 import { OrderedOperationDispatcher, talkOperationIdentity, squareOperationIdentity } from "./events/ordered-operation-dispatcher";
 import { PUSH_STARTUP_GRACE_MS, shouldUsePollingFallback } from "./events/push-health";
@@ -332,7 +333,8 @@ function emit(payload: unknown) {
       return { version: PROTOCOL_VERSION, ...record };
     })()
     : payload;
-  process.stdout.write(`${JSON.stringify(value)}\n`);
+  if (parentPort) parentPort.postMessage(value);
+  else process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
 function dataPath() {
@@ -5060,7 +5062,7 @@ async function handle(request: any) {
   }
 
   if (method === "ping") {
-    emit({ id, ok: true, result: { pong: true, protocolVersion: PROTOCOL_VERSION, linejsVersion: LINEJS_VERSION } });
+    emit({ id, ok: true, result: { pong: true, protocolVersion: PROTOCOL_VERSION, linejsVersion: LINEJS_VERSION, processId: process.pid } });
     return;
   }
 
@@ -6173,16 +6175,32 @@ restorePromise = process.env.LINEY_DISABLE_AUTO_RESTORE === "1"
   ? Promise.resolve()
   : autoRestore();
 
-const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
-rl.on("line", (line) => {
-  const trimmed = line.trim();
-  if (!trimmed) return;
-  try {
-    void handle(JSON.parse(trimmed));
-  } catch (error) {
-    emit({ ok: false, error: errorInfo(error) });
-  }
-});
+// Legacy Tauri uses JSONL over standard IO. The native Slint UI runs
+// this same engine in a Worker Thread, sharing its OS process and Node runtime.
+const rl: Interface | null = parentPort
+  ? null
+  : createInterface({ input: process.stdin, crlfDelay: Infinity });
+if (parentPort) {
+  parentPort.on("message", (request: unknown) => {
+    if (request && typeof request === "object" && !Array.isArray(request)) {
+      if ((request as Record<string, unknown>).type === "liney:shutdown") {
+        void shutdown().finally(() => process.exit(0));
+      } else {
+        void handle(request);
+      }
+    }
+  });
+} else {
+  rl?.on("line", (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    try {
+      void handle(JSON.parse(trimmed));
+    } catch (error) {
+      emit({ ok: false, error: errorInfo(error) });
+    }
+  });
+}
 
 let shutdownInFlight: Promise<void> | null = null;
 const shutdown = async (): Promise<void> => {
@@ -6190,7 +6208,7 @@ const shutdown = async (): Promise<void> => {
   shutdownInFlight = (async () => {
     listenerAbort?.abort();
     await callManager.stop("engine-shutdown").catch(() => undefined);
-    rl.close();
+    rl?.close();
   })();
   return shutdownInFlight;
 };

@@ -1,0 +1,71 @@
+name: Unified Native UI Smoke
+
+on:
+  push:
+    branches: [feat/unified-native-runtime]
+    paths:
+      - 'app-unified/**'
+      - 'engine/main.ts'
+      - 'engine/database.ts'
+      - 'engine/runtime/**'
+      - '.github/workflows/unified-native-smoke.yml'
+  pull_request:
+    paths:
+      - 'app-unified/**'
+      - 'engine/main.ts'
+      - 'engine/database.ts'
+      - 'engine/runtime/**'
+      - '.github/workflows/unified-native-smoke.yml'
+  workflow_dispatch:
+
+jobs:
+  native-host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+      - name: Install native GUI dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb xauth dbus-x11
+          npm ci --prefix app-unified --no-audit --no-fund
+      - name: Build in-process engine modules (without production credentials)
+        run: |
+          mkdir -p app-unified/dist
+          bun build engine/runtime/sqlite.ts --target=node --external bun:sqlite --outfile app-unified/dist/sqlite.mjs
+          bun build engine/main.ts --target=node --packages=external --outfile app-unified/dist/engine.mjs
+      - name: SQLite compatibility contract (Node)
+        run: node app-unified/tests/sqlite-contract.mjs
+      - name: SQLite compatibility contract (Bun)
+        run: |
+          bun --eval '
+          import {Database} from "./engine/runtime/sqlite.ts";
+          const db=new Database(":memory:");
+          db.exec("CREATE TABLE t(body TEXT)");
+          db.query("INSERT INTO t VALUES (?)").run("pass");
+          if(db.query("SELECT body FROM t").get().body!=="pass") throw Error("sqlite failure");
+          db.close();
+          '
+      - name: Slint UI with isolated in-process mock engine
+        env:
+          LINEY_UNIFIED_TEST: '1'
+          LINEY_UNIFIED_MOCK_ENGINE: '1'
+          LINEY_DISABLE_AUTO_RESTORE: '1'
+        run: |
+          set -u
+          export LINEY_DATA_DIR="$(mktemp -d)"
+          chmod 700 "$LINEY_DATA_DIR"
+          set +e
+          timeout -k 2s 7s xvfb-run -a node app-unified/main.mjs > /tmp/liney-native-smoke.log 2>&1
+          code=$?
+          set -e
+          cat /tmp/liney-native-smoke.log
+          rm -rf "$LINEY_DATA_DIR"
+          # 124 is the expected timeout of a responsive GUI that stays open.
+          test "$code" -eq 124
+          grep -q '"enginePong":true' /tmp/liney-native-smoke.log
+          grep -q '"childProcess":false' /tmp/liney-native-smoke.log

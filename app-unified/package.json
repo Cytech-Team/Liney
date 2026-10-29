@@ -1,0 +1,10 @@
+{
+  "name": "liney-native-single-process-prototype",
+  "private": true,
+  "type": "module",
+  "description": "Experimental one-process Slint + Node host; not a stable Liney release",
+  "scripts": { "dev": "node main.mjs" },
+  "dependencies": {
+    "slint-ui": "1.18.1"
+  }
+}

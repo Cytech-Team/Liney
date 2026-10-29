@@ -1,0 +1,54 @@
+export component LineyNative inherits Window {
+    title: "Liney • Native Unified Runtime";
+    width: 900px;
+    height: 560px;
+    background: #111827;
+
+    in-out property <string> engine-status: "Connecting...";
+    in-out property <string> cache-status: "Loading local state...";
+    in-out property <string> runtime-label: "Native UI";
+
+    HorizontalLayout {
+        spacing: 0px;
+        Rectangle {
+            width: 280px;
+            background: #1b2532;
+            VerticalLayout {
+                padding: 20px;
+                spacing: 16px;
+                Text { text: "Liney"; color: #66efaa; font-size: 32px; font-weight: 800; }
+                Text { text: "NATIVE • SINGLE PROCESS"; color: #98adbf; font-size: 12px; }
+                Rectangle {
+                    height: 60px; border-radius: 12px; background: #2a3748;
+                    VerticalLayout {
+                        padding: 12px;
+                        Text { text: root.engine-status; color: #c9ffe3; font-size: 15px; }
+                        Text { text: root.runtime-label; color: #a9b8cc; font-size: 12px; }
+                    }
+                }
+                Rectangle { }
+                Text { text: "Liney for Linux"; color: #a4b9c8; font-size: 13px; }
+            }
+        }
+        Rectangle {
+            background: #111827;
+            VerticalLayout {
+                padding: 24px;
+                spacing: 18px;
+                Text { text: "Welcome back"; color: #f7fbff; font-size: 27px; font-weight: 800; }
+                Rectangle {
+                    height: 110px;
+                    background: #25344a;
+                    border-radius: 18px;
+                    VerticalLayout {
+                        padding: 20px;
+                        Text { text: root.cache-status; color: #dceefb; font-size: 16px; }
+                        Text { text: "SQLite belongs to the Engine Worker (same PID)"; color: #99abc1; font-size: 12px; }
+                    }
+                }
+                Rectangle { }
+                Text { text: "No WebKitGTK • No Chromium • No Engine sidecar"; color: #a7b9c7; font-size: 13px; }
+            }
+        }
+    }
+}
