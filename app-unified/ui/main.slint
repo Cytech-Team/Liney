@@ -1,23 +1,9 @@
 import { ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { AuthGate } from "auth.slint";
 
 // One source of truth for Liney's original React design tokens.
 // This remains a real native Slint scene, not CSS or a web view.
-export global Theme {
-    in-out property <bool> dark: true;
-    out property <brush> background: dark ? #101318 : #edf2f6;
-    out property <brush> surface: dark ? #15191f : #ffffff;
-    out property <brush> raised: dark ? #1a2027 : #f7f9fb;
-    out property <brush> hover: dark ? #20262e : #f1f4f7;
-    out property <brush> border: dark ? #252c35 : #e7ebf0;
-    out property <brush> text: dark ? #edf2f7 : #182033;
-    out property <brush> muted: dark ? #9aa5b5 : #7b8799;
-    out property <brush> subtle: dark ? #6f7b8c : #a4adba;
-    out property <brush> mine: dark ? #183a29 : #dff7e9;
-    out property <brush> accent-soft: dark ? #173a29 : #e8fbf1;
-    out property <brush> accent: #20c96e;
-    out property <brush> nav: #131d2a;
-    out property <brush> nav-hover: #24364b;
-}
 
 export struct ChatItem {
     id: string,
@@ -211,6 +197,12 @@ export component LineyNative inherits Window {
     in-out property <string> auth-url: "";
     in-out property <image> auth-qr;
     in-out property <string> auth-pin: "";
+    in-out property <int> auth-mode: 0;
+    in-out property <bool> auth-risk-acknowledged: false;
+    in-out property <bool> auth-busy: false;
+    in-out property <string> auth-email: "";
+    in-out property <string> auth-password: "";
+    in-out property <string> auth-error: "";
     in-out property <string> notification: "";
     in-out property <string> search: "";
     in-out property <string> draft: "";
@@ -222,12 +214,34 @@ export component LineyNative inherits Window {
     callback send-message(string);
     callback refresh-chats();
     callback login-qr();
+    callback login-password(string, string);
+    callback change-auth-mode(int);
+    callback toggle-auth-risk();
     callback copy-auth-url();
     callback change-search(string);
     callback change-filter(int);
     callback toggle-theme();
 
-    HorizontalLayout {
+    if !root.is-authenticated : AuthGate {
+        width: parent.width;
+        height: parent.height;
+        mode <=> root.auth-mode;
+        risk-acknowledged <=> root.auth-risk-acknowledged;
+        busy <=> root.auth-busy;
+        email <=> root.auth-email;
+        password <=> root.auth-password;
+        qr-url: root.auth-url;
+        qr-image: root.auth-qr;
+        pin: root.auth-pin;
+        error-message: root.auth-error;
+        engine-status: root.engine-status;
+        on-login-qr => { root.login-qr(); }
+        on-login-password(email, password) => { root.login-password(email, password); }
+        on-change-mode(mode) => { root.change-auth-mode(mode); }
+        on-toggle-risk => { root.toggle-auth-risk(); }
+    }
+
+    if root.is-authenticated : HorizontalLayout {
         x: 0px;
         y: 0px;
         width: parent.width;
@@ -259,12 +273,12 @@ export component LineyNative inherits Window {
                 }
                 Rectangle { height: 12px; background: transparent; }
                 RailItem { glyph-icon: @image-url("assets/icons/chat.svg"); active: true; clicked => { root.change-filter(0); } }
-                RailItem { glyph-icon: @image-url("assets/icons/phone.svg"); clicked => { root.notification = "Voice calls are being migrated to native"; } }
-                RailItem { glyph-icon: @image-url("assets/icons/users.svg"); clicked => { root.notification = "Contacts are being migrated"; } }
-                RailItem { glyph-icon: @image-url("assets/icons/globe.svg"); clicked => { root.notification = "OpenChat is being migrated"; } }
+                RailItem { glyph-icon: @image-url("assets/icons/users.svg"); clicked => { root.notification = "กำลังย้ายหน้าเพื่อน"; } }
+                RailItem { glyph-icon: @image-url("assets/icons/sparkles.svg"); clicked => { root.notification = "กำลังย้ายหน้า OpenChat"; } }
+                RailItem { glyph-icon: @image-url("assets/icons/phone.svg"); clicked => { root.notification = "กำลังย้ายประวัติการโทร"; } }
                 Rectangle { vertical-stretch: 1; background: transparent; }
-                RailItem { glyph-icon: Theme.dark ? @image-url("assets/icons/sun.svg") : @image-url("assets/icons/moon.svg"); clicked => { root.toggle-theme(); } }
-                RailItem { glyph-icon: @image-url("assets/icons/settings.svg"); clicked => { root.notification = "Native settings are in development"; } }
+                RailItem { glyph-icon: @image-url("assets/icons/bell.svg"); clicked => { root.active-filter = 1; root.change-filter(1); } }
+                RailItem { glyph-icon: @image-url("assets/icons/settings.svg"); clicked => { root.notification = "กำลังย้ายหน้าตั้งค่า"; } }
             }
         }
         Rectangle {
@@ -284,7 +298,7 @@ export component LineyNative inherits Window {
                         padding-bottom: 11px;
                         spacing: 4px;
                         Text {
-                            text: "YOUR MESSAGES";
+                            text: "LINEY";
                             color: Theme.subtle;
                             font-size: 10px;
                             font-weight: 750;
@@ -292,7 +306,7 @@ export component LineyNative inherits Window {
                         HorizontalLayout {
                             spacing: 9px;
                             Text {
-                                text: "Chats";
+                                text: "แชต";
                                 color: Theme.text;
                                 font-size: 24px;
                                 font-weight: 800;
@@ -304,8 +318,15 @@ export component LineyNative inherits Window {
                                 height: 34px;
                                 border-radius: 11px;
                                 background: Theme.accent-soft;
-                                Text { text: "↻"; color: Theme.accent; font-size: 20px; horizontal-alignment: center; vertical-alignment: center; }
-                                TouchArea { clicked => { root.refresh-chats(); } }
+                                Image {
+                                    width: 20px;
+                                    height: 20px;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    source: @image-url("assets/icons/plus.svg");
+                                    image-fit: contain;
+                                }
+                                TouchArea { clicked => { root.notification = "กำลังย้ายหน้าสร้างแชตใหม่"; } }
                             }
                         }
                     }
@@ -333,7 +354,7 @@ export component LineyNative inherits Window {
                                     background: transparent;
                                     Text {
                                         visible: root.search == "";
-                                        text: "Search conversations";
+                                        text: "ค้นหาแชตหรือเพื่อน";
                                         color: Theme.subtle;
                                         font-size: 12px;
                                         vertical-alignment: center;
@@ -361,7 +382,7 @@ export component LineyNative inherits Window {
                         padding-top: 8px;
                         padding-bottom: 9px;
                         spacing: 8px;
-                        for filter[index] in ["All", "Unread", "Groups"] : Rectangle {
+                        for filter[index] in ["ทั้งหมด", "ยังไม่อ่าน", "เพิ่มเติม"] : Rectangle {
                             height: 33px;
                             border-radius: 9px;
                             background: root.active-filter == index ? Theme.accent-soft : Theme.raised;
@@ -486,6 +507,18 @@ export component LineyNative inherits Window {
                             Text { text: root.has-active-chat ? root.active-chat-subtitle : "Your Linux-native LINE client"; color: Theme.muted; font-size: 11px; overflow: elide; }
                         }
                         Rectangle { horizontal-stretch: 1; background: transparent; }
+                        if root.has-active-chat : Rectangle {
+                            width: 37px; height: 37px; border-radius: 11px;
+                            background: Theme.raised;
+                            Image {
+                                width: 19px; height: 19px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                source: @image-url("assets/icons/video.svg");
+                                image-fit: contain;
+                            }
+                            TouchArea { clicked => { root.notification = "กำลังย้ายระบบวิดีโอคอล"; } }
+                        }
                         if root.has-active-chat : Rectangle {
                             width: 37px; height: 37px; border-radius: 11px;
                             background: Theme.raised;
@@ -661,9 +694,18 @@ export component LineyNative inherits Window {
                         padding-bottom: 14px;
                         spacing: 12px;
                         Rectangle {
-                            width: 41px; height: 41px;
-                            border-radius: 12px; background: Theme.raised;
-                            Text { text: "+"; font-size: 26px; color: Theme.muted; horizontal-alignment: center; vertical-alignment: center; }
+                            width: 35px; height: 40px;
+                            border-radius: 9px;
+                            background: transparent;
+                            Image { width: 22px; height: 22px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; source: @image-url("assets/icons/paperclip.svg"); image-fit: contain; }
+                            TouchArea { clicked => { root.notification = "กำลังย้ายการส่งไฟล์"; } }
+                        }
+                        Rectangle {
+                            width: 35px; height: 40px;
+                            border-radius: 9px;
+                            background: transparent;
+                            Image { width: 22px; height: 22px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; source: @image-url("assets/icons/smile.svg"); image-fit: contain; }
+                            TouchArea { clicked => { root.notification = "กำลังย้ายสติกเกอร์และอีโมจิ"; } }
                         }
                         Rectangle {
                             horizontal-stretch: 1;
@@ -678,7 +720,7 @@ export component LineyNative inherits Window {
                                     background: transparent;
                                     Text {
                                         visible: root.draft == "";
-                                        text: root.has-active-chat ? "Type a message..." : "Select a conversation to start chatting";
+                                        text: root.has-active-chat ? "พิมพ์ข้อความ..." : "เลือกแชตก่อนส่งข้อความ";
                                         color: Theme.subtle;
                                         font-size: 13px;
                                         vertical-alignment: center;

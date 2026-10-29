@@ -1,0 +1,340 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+export component AuthGate inherits Rectangle {
+    in-out property <int> mode: 0;
+    in-out property <bool> risk-acknowledged: false;
+    in-out property <bool> busy: false;
+    in-out property <string> email: "";
+    in-out property <string> password: "";
+    in property <string> qr-url: "";
+    in property <image> qr-image;
+    in property <string> pin: "";
+    in property <string> error-message: "";
+    in property <string> engine-status: "";
+
+    callback on-login-qr();
+    callback on-login-password(string, string);
+    callback on-change-mode(int);
+    callback on-toggle-risk();
+
+    background: Theme.background;
+    border-width: 0px;
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: min(520px, parent.width - 24px);
+        height: min(715px, parent.height - 20px);
+        border-radius: 23px;
+        background: Theme.surface;
+        border-color: Theme.border;
+        border-width: 1px;
+        ScrollView {
+            x: 14px;
+            y: 8px;
+            width: parent.width - 28px;
+            height: parent.height - 16px;
+            viewport-width: self.width;
+            VerticalLayout {
+                width: parent.width;
+                padding-left: 15px;
+                padding-right: 15px;
+                padding-top: 16px;
+                padding-bottom: 13px;
+                spacing: 0px;
+
+                Rectangle {
+                    height: 65px;
+                    background: transparent;
+                    Image {
+                        width: 56px;
+                        height: 56px;
+                        x: (parent.width - self.width) / 2;
+                        source: @image-url("assets/liney-logo.png");
+                        image-fit: contain;
+                    }
+                }
+                Text {
+                    text: "LINEJS  ·  DESKTOPWIN";
+                    font-size: 11px;
+                    height: 26px;
+                    color: Theme.subtle;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "เชื่อมบัญชี LINE";
+                    color: Theme.text;
+                    font-size: 25px;
+                    height: 38px;
+                    font-weight: 800;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "ต้องเข้าสู่ระบบก่อนจึงจะใช้แชตและฟีเจอร์ของ Liney ได้";
+                    color: Theme.muted;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                    height: 42px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                Rectangle {
+                    height: 52px;
+                    background: Theme.hover;
+                    border-radius: 12px;
+                    HorizontalLayout {
+                        padding: 4px;
+                        spacing: 5px;
+                        for option[index] in ["▦  QR Code", "✉  Email / Password"] : Rectangle {
+                            horizontal-stretch: 1;
+                            border-radius: 10px;
+                            background: root.mode == index ? Theme.surface : transparent;
+                            Text {
+                                text: option;
+                                color: root.mode == index ? Theme.accent : Theme.muted;
+                                font-size: 12px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            TouchArea {
+                                clicked => { if (!root.busy) {root.mode=index;root.on-change-mode(index);} }
+                            }
+                        }
+                    }
+                }
+                Rectangle { height: 10px; background: transparent; }
+                if root.mode == 0 && root.qr-url == "" : Rectangle {
+                    height: 176px;
+                    background: Theme.raised;
+                    border-radius: 17px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    Rectangle {
+                        width: 57px;
+                        height: 57px;
+                        x: (parent.width - self.width) / 2;
+                        y: 18px;
+                        border-radius: 17px;
+                        background: Theme.accent-soft;
+                        Text {
+                            text: "▦";
+                            color: Theme.accent;
+                            font-size: 29px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Text {
+                        x: 8px;
+                        y: 83px;
+                        width: parent.width - 16px;
+                        height: 28px;
+                        text: root.busy ? "กำลังสร้าง QR Code" : root.engine-status == "Engine ready" ? "LINE engine พร้อม" : "กำลังเตรียม LINE engine";
+                        color: Theme.text;
+                        font-size: 15px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        x: 10px;
+                        y: 114px;
+                        width: parent.width - 20px;
+                        height: 47px;
+                        text: "สร้าง QR Code แล้วสแกนจากมือถือเพียงครั้งแรก";
+                        color: Theme.muted;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                if root.mode == 0 && root.qr-url != "" : Rectangle {
+                    height: 270px;
+                    border-radius: 17px;
+                    background: Theme.raised;
+                    Image {
+                        width: 209px;
+                        height: 209px;
+                        x: (parent.width - self.width) / 2;
+                        y: 7px;
+                        source: root.qr-image;
+                        image-fit: contain;
+                    }
+                    Text {
+                        y: 221px;
+                        x: 10px;
+                        width: parent.width - 20px;
+                        height: 40px;
+                        text: "เปิด LINE → สแกน QR Code → อนุญาตการเข้าสู่ระบบ";
+                        color: Theme.muted;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                if root.mode == 1 : Rectangle {
+                    height: 164px;
+                    border-radius: 17px;
+                    background: Theme.raised;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    VerticalLayout {
+                        padding: 13px;
+                        spacing: 7px;
+                        Text { height: 22px; text: "Email ของบัญชี LINE"; color: Theme.muted; font-size: 12px; font-weight: 700; }
+                        Rectangle {
+                            height: 37px; border-radius: 10px;
+                            background: Theme.surface;
+                            border-color: Theme.border; border-width: 1px;
+                            TextInput {
+                                x: 11px; width: parent.width - 22px; height: parent.height;
+                                text <=> root.email;
+                                color: Theme.text; font-size: 13px;
+                                single-line: true;
+                            }
+                        }
+                        Text { height: 22px; text: "Password ของบัญชี LINE"; color: Theme.muted; font-size: 12px; font-weight: 700; }
+                        Rectangle {
+                            height: 37px; border-radius: 10px;
+                            background: Theme.surface;
+                            border-color: Theme.border; border-width: 1px;
+                            TextInput {
+                                x: 11px; width: parent.width - 22px; height: parent.height;
+                                text <=> root.password;
+                                color: Theme.text; font-size: 13px;
+                                single-line: true;
+                                input-type: InputType.password;
+                            }
+                        }
+                    }
+                }
+                if root.pin != "" : Rectangle {
+                    height: 43px;
+                    border-radius: 11px;
+                    background: Theme.accent-soft;
+                    Text {
+                        text: "รหัสยืนยันจาก LINE:  " + root.pin;
+                        color: Theme.accent;
+                        font-size: 16px;
+                        font-weight: 750;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                Rectangle { height: 12px; background: transparent; }
+                Rectangle {
+                    height: 67px;
+                    background: #30271b;
+                    border-radius: 12px;
+                    Text {
+                        x: 13px; y: 5px; width: parent.width - 26px;
+                        height: 26px;
+                        text: "⚠  ข้อควรระวังการใช้งาน";
+                        color: #f1c679;
+                        font-size: 12px;
+                        font-weight: 800;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        x: 14px; y: 30px; width: parent.width - 28px;
+                        height: 34px;
+                        text: "Liney ไม่ใช่แอป Official ของ LINE การใช้ LINEJS อาจทำให้บัญชีถูกจำกัดหรือระงับ";
+                        color: #dec7a2;
+                        font-size: 10px;
+                        wrap: word-wrap;
+                    }
+                }
+                Rectangle { height: 9px; background: transparent; }
+                Rectangle {
+                    height: 36px;
+                    background: transparent;
+                    HorizontalLayout {
+                        spacing: 9px;
+                        Rectangle {
+                            width: 22px; height: 22px;
+                            border-radius: 5px;
+                            border-width: 1px;
+                            border-color: root.risk-acknowledged ? Theme.accent : Theme.muted;
+                            background: root.risk-acknowledged ? Theme.accent : transparent;
+                            Text {
+                                text: root.risk-acknowledged ? "✓" : "";
+                                color: #062916; font-size: 16px; font-weight: 800;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                        Text {
+                            text: "ฉันอ่านคำเตือนแล้วและยอมรับความเสี่ยง";
+                            font-size: 11px;
+                            color: Theme.text;
+                            vertical-alignment: center;
+                        }
+                    }
+                    TouchArea { clicked => { root.risk-acknowledged=!root.risk-acknowledged;root.on-toggle-risk(); } }
+                }
+                if root.error-message != "" : Text {
+                    text: root.error-message;
+                    height: 48px;
+                    color: #ff8792;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                }
+                if root.mode == 0 && root.qr-url == "" : Rectangle {
+                    height: 49px;
+                    border-radius: 12px;
+                    background: root.risk-acknowledged && !root.busy ? Theme.accent : Theme.hover;
+                    Text {
+                        text: root.busy ? "กำลังสร้าง QR Code…" : "สร้าง QR Code";
+                        color: root.risk-acknowledged && !root.busy ? #082e19 : Theme.muted;
+                        font-size: 14px;
+                        font-weight: 800;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    TouchArea {
+                        clicked => {
+                            if (root.risk-acknowledged && !root.busy) { root.on-login-qr(); }
+                        }
+                    }
+                }
+                if root.mode == 1 : Rectangle {
+                    height: 49px;
+                    border-radius: 12px;
+                    background: root.risk-acknowledged && !root.busy && root.email != "" && root.password != "" ? Theme.accent : Theme.hover;
+                    Text {
+                        text: "เข้าสู่ระบบด้วย Email";
+                        color: root.risk-acknowledged ? #082e19 : Theme.muted;
+                        font-size: 14px;
+                        font-weight: 800;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    TouchArea {
+                        clicked => {
+                            if (root.risk-acknowledged && !root.busy && root.email != "" && root.password != "") {
+                                root.on-login-password(root.email, root.password); }
+                        }
+                    }
+                }
+                Rectangle { height: 14px; background: transparent; }
+                Text {
+                    height: 37px;
+                    text: "Client: Liney-Linux · Session stored locally · ไม่มี Liney server กลาง";
+                    color: Theme.subtle;
+                    font-size: 10px;
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}

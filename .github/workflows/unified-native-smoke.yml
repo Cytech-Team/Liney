@@ -59,6 +59,23 @@ jobs:
           if(db.query("SELECT body FROM t").get().body!=="pass") throw Error("sqlite failure");
           db.close();
           '
+      - name: Native full-screen authentication gate (offline mock)
+        env:
+          LINEY_UNIFIED_TEST: '1'
+          LINEY_UNIFIED_MOCK_ENGINE: '1'
+          LINEY_MOCK_EMPTY_CHATS: '1'
+          LINEY_DISABLE_AUTO_RESTORE: '1'
+        run: |
+          export LINEY_DATA_DIR="$(mktemp -d)"
+          chmod 700 "$LINEY_DATA_DIR"
+          set +e
+          timeout -k 2s 15s xvfb-run -a node app-unified/main.mjs > /tmp/liney-auth-gate.log 2>&1
+          code=$?
+          set -e
+          cat /tmp/liney-auth-gate.log
+          rm -rf "$LINEY_DATA_DIR"
+          test "$code" -eq 124
+          grep -q '"enginePong":true' /tmp/liney-auth-gate.log
       - name: Slint UI with isolated in-process mock engine
         env:
           LINEY_UNIFIED_TEST: '1'

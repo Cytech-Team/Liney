@@ -93,3 +93,30 @@ test("late responses from another chat never overwrite selection",async()=>{
   assert.equal(window.active_chat_name,"Design Group");
   assert.equal(controller.messageModel.rowData(0).id,"b1");
 });
+
+test("auth mode preserves risk consent and blocks login without acknowledgement", async()=> {
+  let qrCalls=0;
+  const {controller,window}=fixture(async(method)=>{
+    if(method==="auth.qr.start") {qrCalls++;return {authenticated:false};}
+    return null;
+  });
+  window.auth_risk_acknowledged=false;
+  await controller.loginWithQR();
+  assert.equal(qrCalls,0);
+  window.auth_risk_acknowledged=true;
+  await controller.loginWithQR();
+  assert.equal(qrCalls,1);
+  assert.equal(window.auth_busy,false);
+});
+test("email password stays in engine request, not preview logs, then clears UI state",async()=>{
+  let received;
+  const {controller,window}=fixture(async(method,params)=>{
+    if(method==="auth.password.start"){received=params;return {authenticated:false};}
+  });
+  window.auth_risk_acknowledged=true;
+  window.auth_password="temporary";
+  await controller.loginWithPassword("person@example.invalid","temporary");
+  assert.deepEqual(received,{email:"person@example.invalid",password:"temporary"});
+  assert.equal(window.auth_password,"");
+  assert.equal(window.auth_busy,false);
+});

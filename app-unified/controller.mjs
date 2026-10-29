@@ -76,6 +76,16 @@ export class ChatController {
     window.change_search = (q) => { this.query = String(q).toLowerCase(); this.renderChats(); };
     window.change_filter = (f) => { this.filter = Number(f); this.ui.active_filter = this.filter; this.renderChats(); };
     window.login_qr = () => { void this.loginWithQR(); };
+    window.login_password = (email, password) => { void this.loginWithPassword(email, password); };
+    window.change_auth_mode = (mode) => {
+      this.ui.auth_mode = Number(mode);
+      this.ui.auth_url = "";
+      this.ui.auth_pin = "";
+      this.ui.auth_error = "";
+    };
+    // The checkbox uses an in-out property so the value is already updated
+    // before the callback fires: never toggle it a second time in JS.
+    window.toggle_auth_risk = () => {};
     window.copy_auth_url = () => { if (this.ui.auth_url) this.copyText(this.ui.auth_url); };
     window.toggle_theme = () => { window.Theme.dark = !window.Theme.dark; };
   }
@@ -87,6 +97,9 @@ export class ChatController {
     const pong = await this.call("ping", {}, 12000);
     if (!pong?.pong || pong?.processId !== process.pid) throw Error("Native engine is not in the same process");
     this.ui.engine_status = "Engine ready";
+    const capability = await this.call("capabilities", {}, 12000).catch(() => null);
+    this.capabilitiesAvailable = typeof capability?.authenticated === "boolean";
+    if (this.capabilitiesAvailable) this.ui.is_authenticated = capability.authenticated;
     await this.refreshChats();
     return pong;
   }
@@ -131,9 +144,11 @@ export class ChatController {
     try {
       const result = await this.call("chats.list", {}, 16000);
       this.applyChats(result);
-      this.ui.is_authenticated = Array.isArray(result) && result.length > 0;
+      if (!this.capabilitiesAvailable)
+        this.ui.is_authenticated = Array.isArray(result) && result.length > 0;
     } catch (error) {
-      this.ui.engine_status = "Disconnected";
+      this.ui.engine_status = this.capabilitiesAvailable && !this.ui.is_authenticated
+        ? "Engine ready" : "Disconnected";
       this.ui.cache_status = this.allChats.size ? "" : "Sign in with LINE to load your chats";
     }
   }
@@ -205,11 +220,39 @@ export class ChatController {
     }
   }
   async loginWithQR() {
-    this.ui.engine_status = "Waiting for QR login";
+    if (!this.ui.auth_risk_acknowledged || this.ui.auth_busy) return;
+    this.ui.auth_busy = true;
+    this.ui.auth_error = "";
+    this.ui.engine_status = "กำลังสร้าง QR Code";
     try {
-      await this.call("auth.qr.start",{},120000);
+      const result = await this.call("auth.qr.start",{},120000);
+      if (result?.authenticated) {
+        this.ui.is_authenticated = true;
+        await this.refreshChats();
+      }
     } catch {
-      this.ui.engine_status = "QR login unsuccessful";
+      this.ui.auth_error = "สร้าง QR Code ไม่สำเร็จ กรุณาลองใหม่";
+      this.ui.engine_status = "Engine ready";
+    } finally {
+      this.ui.auth_busy = false;
+    }
+  }
+  async loginWithPassword(email, password) {
+    if (!this.ui.auth_risk_acknowledged || this.ui.auth_busy) return;
+    const address = String(email).trim();
+    const secret = String(password);
+    if (!address || !secret) return;
+    this.ui.auth_busy = true;
+    this.ui.auth_error = "";
+    // Clear the UI password promptly; credentials must never be logged.
+    const login = this.call("auth.password.start", {email: address, password: secret}, 120000);
+    this.ui.auth_password = "";
+    try {
+      await login;
+    } catch {
+      this.ui.auth_error = "ไม่สามารถเข้าสู่ระบบได้ โปรดตรวจสอบบัญชีหรือการยืนยันบนมือถือ";
+    } finally {
+      this.ui.auth_busy = false;
     }
   }
   handleEvent(packet) {
@@ -228,6 +271,9 @@ export class ChatController {
       this.ui.is_authenticated = true;
       this.ui.auth_url = "";
       this.ui.auth_pin = "";
+      this.ui.auth_password = "";
+      this.ui.auth_busy = false;
+      this.ui.auth_error = "";
       this.ui.engine_status = "Engine ready";
       void this.refreshChats();
     }

@@ -32,6 +32,7 @@ for (const c of chats) byChat[c.id] ??= [
 ];
 parentPort.on("message", ({id,method,params}) => {
   const result=method==="ping" ? {pong:true,protocolVersion:1,processId:process.pid}
+    : method==="capabilities" ? {authenticated:process.env.LINEY_MOCK_EMPTY_CHATS !== "1"}
     : method==="chats.list" ? (process.env.LINEY_MOCK_EMPTY_CHATS === "1" ? [] : chats)
     : method==="message.list" ? byChat[String(params?.chatId)] || []
     : method==="message.send" ? {localId:String(params?.localId),queued:false,sent:true}
