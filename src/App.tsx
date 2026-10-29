@@ -264,7 +264,8 @@ type AppSettings = {
 };
 
 const defaultSettings: AppSettings = {
-  startup: true,
+  // Electron preview does not silently add autostart entries.
+  startup: typeof window === "undefined" || !window.lineyDesktop,
   tray: true,
   desktopNotifications: true,
   notificationPreview: true,

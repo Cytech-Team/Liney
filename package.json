@@ -20,7 +20,13 @@
     "test:unit": "bun test engine/*.test.ts",
     "verify:release": "bun run doctor && bun test && bun run lint && bun run web:build && bun run engine:build && cargo build --release --manifest-path src-tauri/Cargo.toml && git diff --check",
     "build:rpm": "sh scripts/tauri-build.sh --bundles rpm",
-    "release:local": "sh scripts/package-release.sh"
+    "release:local": "sh scripts/package-release.sh",
+    "electron:engine": "bun build engine/main.ts --target=node --packages=external --outfile electron/dist/engine.mjs",
+    "electron:web": "LINEY_DESKTOP_TARGET=electron npm run web:build",
+    "electron:dev": "LINEY_DESKTOP_TARGET=electron electron .",
+    "electron:build": "npm run electron:engine && npm run electron:web && electron-builder --linux AppImage deb rpm",
+    "electron:build:appimage": "npm run electron:engine && npm run electron:web && electron-builder --linux AppImage",
+    "electron:smoke": "LINEY_DISABLE_AUTO_RESTORE=1 LINEY_ELECTRON_SMOKE=1 electron ."
   },
   "dependencies": {
     "@evex/linejs": "npm:@jsr/evex__linejs@3.5.0",
@@ -42,6 +48,9 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.1.0",
+    "bun": "^1.4.4",
+    "electron": "^45.1.0",
+    "electron-builder": "^26.18.0",
     "oxlint": "^1.79.0",
     "typescript": "~6.0.2",
     "vite": "^8.2.2"
@@ -52,5 +61,47 @@
   "patchedDependencies": {
     "@jsr/evex__linejs@3.4.2": "patches/@jsr%2Fevex__linejs@3.4.2.patch",
     "lucide-react@1.41.0": "patches/lucide-react@1.41.0.patch"
-  }
+  },
+  "main": "electron/main.mjs",
+  "build": {
+    "appId": "dev.cytechteam.liney.electron-preview",
+    "productName": "Liney Electron Preview",
+    "asar": true,
+    "directories": {
+      "output": "release-electron"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "electron/dist/engine.mjs",
+      "src-tauri/icons/128x128.png",
+      "package.json",
+      "!**/node_modules/.cache/**"
+    ],
+    "linux": {
+      "category": "Network;InstantMessaging",
+      "icon": "src-tauri/icons",
+      "target": [
+        "AppImage",
+        "deb",
+        "rpm"
+      ],
+      "syncDesktopName": true
+    },
+    "appImage": {
+      "artifactName": "Liney-Electron-Preview-${version}-${arch}.AppImage"
+    },
+    "deb": {
+      "artifactName": "Liney-Electron-Preview-${version}-${arch}.deb"
+    },
+    "rpm": {
+      "artifactName": "Liney-Electron-Preview-${version}-${arch}.rpm"
+    },
+    "publish": null,
+    "asarUnpack": [
+      "electron/dist/engine.mjs",
+      "node_modules/**"
+    ]
+  },
+  "desktopName": "dev.cytechteam.liney.electron-preview"
 }
