@@ -38,7 +38,12 @@
 
 ---
 
-Liney is an independent Linux desktop client for LINE. The UI is built with
+> **Native migration (Liney 0.2):** A GTK4 + Libadwaita UI without
+> WebKitGTK/WebView is under development in [app/](app/README.md).
+> The current published v0.1.3 still uses React/Tauri until feature parity
+> is verified. See [architecture](docs/ARCHITECTURE.md).
+
+Liney is an independent Linux desktop client for LINE. The current published UI is built with
 React + Tauri (WebView), the protocol engine is a standalone TypeScript/Bun
 sidecar, and it uses SQLite + LINEJS. The application connects to LINE
 directly from the user's device; Liney does not operate a relay server or
