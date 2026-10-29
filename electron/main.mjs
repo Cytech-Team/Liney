@@ -116,6 +116,7 @@ function loadApp(win, pathQuery="") {
 }
 function createWindow(label="main", opts={}) {
   const win = new BrowserWindow({
+    autoHideMenuBar:true,
     width:opts.width||1160,height:opts.height||760,
     minWidth:opts.minWidth||740,minHeight:opts.minHeight||520,
     title: opts.title||"Liney",icon,
@@ -129,6 +130,8 @@ function createWindow(label="main", opts={}) {
       devTools:!bundled
     }
   });
+  win.setMenuBarVisibility(false);
+  win.removeMenu();
   windows.set(label,win);
   win.on("closed",()=>windows.delete(label));
   win.on("close",event=>{
@@ -147,9 +150,9 @@ function createWindow(label="main", opts={}) {
           })`);
           await ensureEngine();
           const pong=await requestEngine("ping");
-          const outcome={...checks,enginePong:Boolean(pong),renderer:"React original",system:"Electron"};
+          const outcome={...checks,menuHidden:!win.isMenuBarVisible() && Menu.getApplicationMenu()===null,enginePong:Boolean(pong),renderer:"React original",system:"Electron"};
           console.log("LINEY_ELECTRON_SMOKE_RESULT="+JSON.stringify(outcome));
-          app.exit(checks.authDialog && checks.logoLoaded && checks.bridge && !checks.webkit && Boolean(pong) ? 0 : 3);
+          app.exit(checks.authDialog && checks.logoLoaded && checks.bridge && !checks.webkit && outcome.menuHidden && Boolean(pong) ? 0 : 3);
         }catch(e){console.error("LINEY_ELECTRON_SMOKE_ERROR="+String(e));app.exit(4);}
       },1000);
     });
@@ -220,6 +223,8 @@ async function runDesktopCommand(command,args={}) {
   }
 }
 app.whenReady().then(async()=>{
+  // No browser-style File/Edit/View/Window menu in a standalone messenger.
+  Menu.setApplicationMenu(null);
   protocol.handle("lineyapp",request=>{
     const url=new URL(request.url);
     if(url.hostname!=="app")return new Response("Unknown app host",{status:403});

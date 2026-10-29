@@ -62,6 +62,7 @@ jobs:
           grep -q '"enginePong":true' /tmp/liney-source-smoke.log
           grep -q '"logoLoaded":true' /tmp/liney-source-smoke.log
           grep -q '"webkit":false' /tmp/liney-source-smoke.log
+          grep -q '"menuHidden":true' /tmp/liney-source-smoke.log
           rm -rf "$LINEY_DATA_DIR"
       - name: Package standalone AppImage
         run: npm run electron:build:appimage
@@ -74,6 +75,7 @@ jobs:
           cat /tmp/liney-packaged-smoke.log
           grep -q '"enginePong":true' /tmp/liney-packaged-smoke.log
           grep -q '"authDialog":true' /tmp/liney-packaged-smoke.log
+          grep -q '"menuHidden":true' /tmp/liney-packaged-smoke.log
           grep -q '"logoLoaded":true' /tmp/liney-packaged-smoke.log
           rm -rf "$LINEY_DATA_DIR"
       - name: Checksums

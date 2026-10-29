@@ -1,4 +1,5 @@
 import { bindClientStorage, createTemporaryQrStorage, getTargetProfiles, LineJsAdapter, parseE2EEKeyData, type LineClient, type LineyPollingSession } from "./linejs/adapter";
+import { resolveTalkOwnership, reconcileTalkOwnership } from "./talk-ownership";
 import { presentOwnProfile } from "./linejs/profile-display";
 // Keep all LINEJS values behind the adapter boundary. This makes replacing the
 // protocol implementation a local engine change instead of a repository-wide
@@ -2735,7 +2736,7 @@ async function fetchTalkMessagesNormalized(
         : contentType === 17 ? (rich?.altText || "Rich message") : displayMessageText(message?.text, contentType, raw),
       from,
       to,
-      isMine: Boolean(message?.isMyMessage),
+      isMine: resolveTalkOwnership(selfMid, from, message?.isMyMessage),
       createdTime: Number(raw?.createdTime ?? Date.now()),
       contentType,
       readCount: Math.max(0, Number(raw?.readCount ?? 0)),
@@ -2882,12 +2883,15 @@ function decorateReplyReferences(messages: any[]): any[] {
     if (!replyId) return message;
     const chatId = String(message?.chatId ?? "").trim();
     const target = byId.get(replyId) ?? (chatId ? database.getMessage(ACCOUNT_ID, chatId, replyId) : null);
+    const selfMid = client ? midString(LineJsAdapter.profileMid(client)) : "";
+    const correctedTarget = target && target.kind !== "openchat"
+      ? reconcileTalkOwnership(target, selfMid) : target;
     return {
       ...message,
       replyTo: {
         id: replyId,
-        text: String(target?.text ?? "ข้อความ"),
-        author: target?.isMine ? "me" : "them",
+        text: String(correctedTarget?.text ?? "ข้อความ"),
+        author: correctedTarget?.isMine ? "me" : "them",
         ...(target?.senderName ? { senderName: target.senderName } : {}),
       },
     };
@@ -2895,7 +2899,10 @@ function decorateReplyReferences(messages: any[]): any[] {
 }
 
 function decorateStoredMessages(messages: DatabaseMessage[]): any[] {
-  const decorated = messages.map((message) => {
+  const selfMid = client ? midString(LineJsAdapter.profileMid(client)) : "";
+  const decorated = messages.map((cachedMessage) => {
+    const message = cachedMessage.kind === "openchat" ? cachedMessage
+      : reconcileTalkOwnership(cachedMessage, selfMid);
     const stickerUrl = messageStickerUrl(message);
     const flex = messageFlex(message);
     const rich = Number(message.contentType ?? 0) === 17 ? parseRichMessage(message.raw) : undefined;
@@ -2970,6 +2977,9 @@ function listCallHistory(limit = 200): any[] {
 
 async function enrichStoredTalkSenders(messages: DatabaseMessage[]): Promise<DatabaseMessage[]> {
   if (!client) return messages;
+  const selfMid = midString(LineJsAdapter.profileMid(client));
+  messages = messages.map((message) => message.kind === "openchat"
+    ? message : reconcileTalkOwnership(message, selfMid));
   const senderMidForMessage = (message: DatabaseMessage): string => {
     const senderId = String(message.senderId ?? "").trim();
     return senderId || midString((message.raw as any)?.from);
