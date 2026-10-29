@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { Database } from "./runtime/sqlite";
 import { chmodSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { ensurePrivateDirectory } from "./secure-storage";

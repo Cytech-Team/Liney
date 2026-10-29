@@ -1,0 +1,752 @@
+import { ListView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { AuthGate } from "auth.slint";
+
+// One source of truth for Liney's original React design tokens.
+// This remains a real native Slint scene, not CSS or a web view.
+
+export struct ChatItem {
+    id: string,
+    kind: string,
+    title: string,
+    preview: string,
+    time: string,
+    avatar: string,
+    unread: int,
+    pinned: bool,
+    selected: bool,
+    avatar-color: color
+}
+
+export struct ChatMessage {
+    id: string,
+    body: string,
+    time: string,
+    sender: string,
+    mine: bool,
+    pending: bool,
+    status: string
+}
+
+component RailItem inherits Rectangle {
+    in property <image> glyph-icon;
+    in property <bool> active: false;
+    callback clicked;
+    width: 46px;
+    height: 48px;
+    border-radius: 13px;
+    background: active ? #214333 : touch.has-hover ? Theme.nav-hover : transparent;
+    Image {
+        source: root.glyph-icon;
+        width: 23px;
+        height: 23px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        image-fit: contain;
+    }
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+component ChatTile inherits Rectangle {
+    in property <ChatItem> chat;
+    callback clicked(string);
+    height: 76px;
+    border-radius: 13px;
+    background: chat.selected ? Theme.accent-soft : touch.has-hover ? Theme.raised : transparent;
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 11px;
+        alignment: center;
+        Rectangle {
+            width: 45px;
+            height: 45px;
+            border-radius: 25px;
+            background: root.chat.avatar-color;
+            Text {
+                text: root.chat.avatar;
+                color: #ffffff;
+                font-size: 12px;
+                font-weight: 800;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        VerticalLayout {
+            spacing: 4px;
+            alignment: center;
+            HorizontalLayout {
+                spacing: 6px;
+                Text {
+                    text: root.chat.title;
+                    color: Theme.text;
+                    font-size: 13px;
+                    font-weight: 720;
+                    overflow: elide;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: root.chat.time;
+                    color: Theme.subtle;
+                    font-size: 10px;
+                    vertical-alignment: center;
+                }
+            }
+            HorizontalLayout {
+                spacing: 5px;
+                Text {
+                    text: root.chat.preview;
+                    color: Theme.muted;
+                    font-size: 11px;
+                    overflow: elide;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                if root.chat.unread > 0 : Rectangle {
+                    width: 21px;
+                    height: 21px;
+                    border-radius: 12px;
+                    background: Theme.accent;
+                    Text {
+                        text: root.chat.unread > 99 ? "99+" : root.chat.unread;
+                        color: #ffffff;
+                        font-size: 10px;
+                        font-weight: 750;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+    touch := TouchArea {
+        clicked => { root.clicked(root.chat.id); }
+    }
+}
+
+component Bubble inherits Rectangle {
+    in property <ChatMessage> item;
+    height: 12px + bubble-box.height + 13px;
+    background: transparent;
+    bubble-box := Rectangle {
+        // Thread-like chat alignment, matching the legacy chat composer.
+        x: root.item.mine ? parent.width - self.width - 18px : 18px;
+        y: 4px;
+        width: min(435px, parent.width * 0.72);
+        height: bubble-col.preferred-height + 23px;
+        border-radius: 15px;
+        background: root.item.mine ? Theme.mine : Theme.raised;
+        border-width: 1px;
+        border-color: root.item.mine ? Theme.accent-soft : Theme.border;
+        bubble-col := VerticalLayout {
+            x: 15px;
+            y: 11px;
+            width: parent.width - 30px;
+            spacing: 5px;
+            if !root.item.mine && root.item.sender != "" : Text {
+                text: root.item.sender;
+                font-size: 11px;
+                font-weight: 700;
+                color: Theme.accent;
+            }
+            Text {
+                text: root.item.body;
+                color: Theme.text;
+                font-size: 13px;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: end;
+                Text {
+                    text: root.item.pending ? "Sending..." : root.item.status == "error" ? "Not sent" : "";
+                    color: root.item.status == "error" ? #ef6b71 : Theme.subtle;
+                    font-size: 10px;
+                }
+                Text {
+                    text: root.item.time;
+                    color: Theme.muted;
+                    font-size: 10px;
+                    horizontal-alignment: right;
+                }
+            }
+        }
+    }
+}
+
+export component LineyNative inherits Window {
+    title: "Liney — LINE for Linux";
+    preferred-width: 1160px;
+    preferred-height: 745px;
+    min-width: 740px;
+    min-height: 520px;
+    background: Theme.background;
+    default-font-family: "Noto Sans";
+    in-out property <string> engine-status: "Connecting...";
+    in-out property <string> cache-status: "Syncing your conversations";
+    in-out property <string> runtime-label: "Native";
+    in-out property <string> active-chat-name: "Select a conversation";
+    in-out property <string> active-chat-avatar: "L";
+    in-out property <string> active-chat-subtitle: "Your messages appear here.";
+    in-out property <brush> active-chat-color: #20c96e;
+    in-out property <bool> has-active-chat: false;
+    in-out property <bool> is-authenticated: false;
+    in-out property <string> auth-url: "";
+    in-out property <image> auth-qr;
+    in-out property <string> auth-pin: "";
+    in-out property <int> auth-mode: 0;
+    in-out property <bool> auth-risk-acknowledged: false;
+    in-out property <bool> auth-busy: false;
+    in-out property <string> auth-email: "";
+    in-out property <string> auth-password: "";
+    in-out property <string> auth-error: "";
+    in-out property <string> notification: "";
+    in-out property <string> search: "";
+    in-out property <string> draft: "";
+    in-out property <int> active-filter: 0;
+    in-out property <[ChatItem]> chats: [];
+    in-out property <[ChatMessage]> messages: [];
+
+    callback select-chat(string);
+    callback send-message(string);
+    callback refresh-chats();
+    callback login-qr();
+    callback login-password(string, string);
+    callback change-auth-mode(int);
+    callback toggle-auth-risk();
+    callback copy-auth-url();
+    callback change-search(string);
+    callback change-filter(int);
+    callback toggle-theme();
+
+    if !root.is-authenticated : AuthGate {
+        width: parent.width;
+        height: parent.height;
+        mode <=> root.auth-mode;
+        risk-acknowledged <=> root.auth-risk-acknowledged;
+        busy <=> root.auth-busy;
+        email <=> root.auth-email;
+        password <=> root.auth-password;
+        qr-url: root.auth-url;
+        qr-image: root.auth-qr;
+        pin: root.auth-pin;
+        error-message: root.auth-error;
+        engine-status: root.engine-status;
+        on-login-qr => { root.login-qr(); }
+        on-login-password(email, password) => { root.login-password(email, password); }
+        on-change-mode(mode) => { root.change-auth-mode(mode); }
+        on-toggle-risk => { root.toggle-auth-risk(); }
+    }
+
+    if root.is-authenticated : HorizontalLayout {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        spacing: 0px;
+        // Navigation rail: 70px, as in the original React desktop layout.
+        Rectangle {
+            width: 70px;
+            background: Theme.nav;
+            VerticalLayout {
+                alignment: start;
+                padding-top: 19px;
+                padding-bottom: 17px;
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 12px;
+                Rectangle {
+                    width: 46px;
+                    height: 46px;
+                    border-radius: 14px;
+                    background: #10241a;
+                    Image {
+                        x: 1px; y: 1px;
+                        width: parent.width - 2px;
+                        height: parent.height - 2px;
+                        source: @image-url("assets/liney-logo.png");
+                        image-fit: contain;
+                    }
+                }
+                Rectangle { height: 12px; background: transparent; }
+                RailItem { glyph-icon: @image-url("assets/icons/chat.svg"); active: true; clicked => { root.change-filter(0); } }
+                RailItem { glyph-icon: @image-url("assets/icons/users.svg"); clicked => { root.notification = "กำลังย้ายหน้าเพื่อน"; } }
+                RailItem { glyph-icon: @image-url("assets/icons/sparkles.svg"); clicked => { root.notification = "กำลังย้ายหน้า OpenChat"; } }
+                RailItem { glyph-icon: @image-url("assets/icons/phone.svg"); clicked => { root.notification = "กำลังย้ายประวัติการโทร"; } }
+                Rectangle { vertical-stretch: 1; background: transparent; }
+                RailItem { glyph-icon: @image-url("assets/icons/bell.svg"); clicked => { root.active-filter = 1; root.change-filter(1); } }
+                RailItem { glyph-icon: @image-url("assets/icons/settings.svg"); clicked => { root.notification = "กำลังย้ายหน้าตั้งค่า"; } }
+            }
+        }
+        Rectangle {
+            width: 309px;
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border;
+            VerticalLayout {
+                spacing: 0px;
+                Rectangle {
+                    height: 89px;
+                    background: Theme.surface;
+                    VerticalLayout {
+                        padding-left: 20px;
+                        padding-right: 20px;
+                        padding-top: 17px;
+                        padding-bottom: 11px;
+                        spacing: 4px;
+                        Text {
+                            text: "LINEY";
+                            color: Theme.subtle;
+                            font-size: 10px;
+                            font-weight: 750;
+                        }
+                        HorizontalLayout {
+                            spacing: 9px;
+                            Text {
+                                text: "แชต";
+                                color: Theme.text;
+                                font-size: 24px;
+                                font-weight: 800;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                            Rectangle {
+                                width: 36px;
+                                height: 34px;
+                                border-radius: 11px;
+                                background: Theme.accent-soft;
+                                Image {
+                                    width: 20px;
+                                    height: 20px;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    source: @image-url("assets/icons/plus.svg");
+                                    image-fit: contain;
+                                }
+                                TouchArea { clicked => { root.notification = "กำลังย้ายหน้าสร้างแชตใหม่"; } }
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    height: 47px;
+                    background: Theme.surface;
+                    HorizontalLayout {
+                        padding-left: 15px;
+                        padding-right: 15px;
+                        padding-bottom: 6px;
+                        spacing: 0px;
+                        Rectangle {
+                            background: Theme.raised;
+                            border-color: Theme.border;
+                            border-width: 1px;
+                            border-radius: 11px;
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 10px;
+                                spacing: 8px;
+                                Text { text: "⌕"; color: Theme.subtle; font-size: 19px; vertical-alignment: center; }
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    background: transparent;
+                                    Text {
+                                        visible: root.search == "";
+                                        text: "ค้นหาแชตหรือเพื่อน";
+                                        color: Theme.subtle;
+                                        font-size: 12px;
+                                        vertical-alignment: center;
+                                    }
+                                    TextInput {
+                                        text <=> root.search;
+                                        color: Theme.text;
+                                        font-size: 12px;
+                                        vertical-alignment: center;
+                                        single-line: true;
+                                        edited => { root.change-search(self.text); }
+                                    }
+                                }
+
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    height: 51px;
+                    background: Theme.surface;
+                    HorizontalLayout {
+                        padding-left: 15px;
+                        padding-right: 15px;
+                        padding-top: 8px;
+                        padding-bottom: 9px;
+                        spacing: 8px;
+                        for filter[index] in ["ทั้งหมด", "ยังไม่อ่าน", "เพิ่มเติม"] : Rectangle {
+                            height: 33px;
+                            border-radius: 9px;
+                            background: root.active-filter == index ? Theme.accent-soft : Theme.raised;
+                            horizontal-stretch: 1;
+                            Text {
+                                text: filter;
+                                color: root.active-filter == index ? Theme.accent : Theme.muted;
+                                font-size: 11px;
+                                font-weight: root.active-filter == index ? 750 : 550;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            TouchArea { clicked => { root.active-filter = index; root.change-filter(index); } }
+                        }
+                    }
+                }
+                Rectangle { height: 1px; background: Theme.border; }
+                if root.chats.length == 0 : Rectangle {
+                    vertical-stretch: 1;
+                    background: Theme.surface;
+                    Text {
+                        x: 12px;
+                        y: parent.height / 2 - 24px;
+                        width: parent.width - 24px;
+                        height: 25px;
+                        text: "No conversations yet";
+                        color: Theme.muted;
+                        font-size: 13px;
+                        font-weight: 650;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        x: 12px;
+                        y: parent.height / 2 + 2px;
+                        width: parent.width - 24px;
+                        height: 22px;
+                        text: "Sign in to sync your chats";
+                        color: Theme.subtle;
+                        font-size: 11px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                if root.chats.length > 0 : ListView {
+                    vertical-stretch: 1;
+                    for chat in root.chats: ChatTile {
+                        chat: chat;
+                        clicked(id) => { root.select-chat(id); }
+                    }
+                }
+                Rectangle {
+                    height: 43px;
+                    background: Theme.surface;
+                    HorizontalLayout {
+                        padding-left: 17px;
+                        padding-right: 14px;
+                        spacing: 7px;
+                        Rectangle {
+                            width: 7px; height: 7px; border-radius: 4px;
+                            background: root.engine-status == "Engine ready" ? Theme.accent : #e5a65c;
+                        }
+                        Text {
+                            text: root.engine-status;
+                            color: Theme.muted;
+                            font-size: 10px;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        Text {
+                            text: "NATIVE";
+                            color: Theme.accent;
+                            font-size: 9px;
+                            font-weight: 750;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+        // Conversation surface: cache-first, incremental native list.
+        Rectangle {
+            width: parent.width - 379px;
+            background: Theme.background;
+            VerticalLayout {
+                width: parent.width;
+                height: parent.height;
+                spacing: 0px;
+                Rectangle {
+                    height: 78px;
+                    background: Theme.surface;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    HorizontalLayout {
+                        padding-left: 25px;
+                        padding-right: 25px;
+                        spacing: 12px;
+                        Rectangle {
+                            width: 43px;
+                            height: 43px;
+                            border-radius: 23px;
+                            background: root.active-chat-color;
+                            if !root.has-active-chat : Image {
+                                source: @image-url("assets/liney-logo.png");
+                                width: parent.width;
+                                height: parent.height;
+                                image-fit: contain;
+                            }
+                            if root.has-active-chat : Text {
+                                text: root.active-chat-avatar;
+                                font-weight: 800;
+                                font-size: 12px;
+                                color: white;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 3px;
+                            Text { text: root.has-active-chat ? root.active-chat-name : "Liney"; color: Theme.text; font-size: 16px; font-weight: 800; overflow: elide; }
+                            Text { text: root.has-active-chat ? root.active-chat-subtitle : "Your Linux-native LINE client"; color: Theme.muted; font-size: 11px; overflow: elide; }
+                        }
+                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                        if root.has-active-chat : Rectangle {
+                            width: 37px; height: 37px; border-radius: 11px;
+                            background: Theme.raised;
+                            Image {
+                                width: 19px; height: 19px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                source: @image-url("assets/icons/video.svg");
+                                image-fit: contain;
+                            }
+                            TouchArea { clicked => { root.notification = "กำลังย้ายระบบวิดีโอคอล"; } }
+                        }
+                        if root.has-active-chat : Rectangle {
+                            width: 37px; height: 37px; border-radius: 11px;
+                            background: Theme.raised;
+                            Image {
+                                width: 19px;
+                                height: 19px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                source: @image-url("assets/icons/phone.svg");
+                                image-fit: contain;
+                            }
+                            TouchArea { clicked => { root.notification = "Native calling is in progress"; } }
+                        }
+                    }
+                }
+                if root.has-active-chat : ListView {
+                    vertical-stretch: 1;
+                    for message in root.messages : Bubble { item: message; }
+                }
+                // Empty and sign-in states must be positioned in the CENTER
+                // of the whole conversation canvas, not at its left edge.
+                if !root.has-active-chat : Rectangle {
+                    vertical-stretch: 1;
+                    background: Theme.background;
+                    Rectangle {
+                        width: min(460px, parent.width - 44px);
+                        height: min(root.auth-url != "" ? 566px : 372px, parent.height - 32px);
+                        x: (parent.width - self.width) / 2;
+                        y: max(20px, (parent.height - self.height) / 2);
+                        border-radius: 23px;
+                        background: Theme.surface;
+                        border-width: 1px;
+                        border-color: Theme.border;
+                        VerticalLayout {
+                            x: 30px;
+                            y: 27px;
+                            width: parent.width - 60px;
+                            height: parent.height - 54px;
+                            spacing: 0px;
+                            Rectangle {
+                                height: root.auth-url != "" && root.height < 700px ? 0px : 88px;
+                                background: transparent;
+                                Rectangle {
+                                    visible: root.auth-url == "" || root.height >= 700px;
+                                    width: 74px;
+                                    height: 74px;
+                                    x: (parent.width - self.width) / 2;
+                                    border-radius: 20px;
+                                    background: Theme.accent-soft;
+                                    Image {
+                                        x: 10px;
+                                        y: 10px;
+                                        width: parent.width - 20px;
+                                        height: parent.height - 20px;
+                                        source: @image-url("assets/liney-logo.png");
+                                        image-fit: contain;
+                                    }
+                                }
+                            }
+                            Text {
+                                height: root.height < 700px ? 36px : 42px;
+                                text: root.auth-url != "" ? "Scan to sign in" : "Welcome to Liney";
+                                color: Theme.text;
+                                font-size: 25px;
+                                font-weight: 800;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                height: root.height < 700px ? 36px : 47px;
+                                text: root.auth-url != ""
+                                    ? "Open LINE on your phone and scan this code."
+                                    : "Your conversations, on Linux. Beautifully native.";
+                                color: Theme.muted;
+                                font-size: 13px;
+                                wrap: word-wrap;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            if root.auth-url == "" && !root.is-authenticated : Rectangle {
+                                height: 55px;
+                                background: transparent;
+                                Rectangle {
+                                    width: min(280px, parent.width);
+                                    height: 46px;
+                                    x: (parent.width - self.width) / 2;
+                                    y: 5px;
+                                    border-radius: 12px;
+                                    background: Theme.accent;
+                                    Text {
+                                        text: "Sign in with LINE";
+                                        color: #062916;
+                                        font-size: 14px;
+                                        font-weight: 750;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    TouchArea { clicked => { root.login-qr(); } }
+                                }
+                            }
+                            if root.auth-url == "" && root.is-authenticated : Text {
+                                height: 54px;
+                                text: root.cache-status;
+                                color: Theme.muted;
+                                font-size: 13px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            if root.auth-url != "" : Rectangle {
+                                height: root.height < 700px ? 200px : 250px;
+                                background: transparent;
+                                Rectangle {
+                                    width: root.height < 700px ? 194px : 234px;
+                                    height: root.height < 700px ? 194px : 234px;
+                                    x: (parent.width - self.width) / 2;
+                                    y: 5px;
+                                    border-radius: 13px;
+                                    background: #ffffff;
+                                    Image {
+                                        x: 8px;
+                                        y: 8px;
+                                        width: parent.width - 16px;
+                                        height: parent.height - 16px;
+                                        source: root.auth-qr;
+                                        image-fit: contain;
+                                    }
+                                }
+                            }
+                            if root.auth-pin != "" : Text {
+                                height: 43px;
+                                text: "Verification PIN: " + root.auth-pin;
+                                color: Theme.accent;
+                                font-size: 16px;
+                                font-weight: 800;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            Rectangle { vertical-stretch: 1; background: transparent; }
+                            Rectangle {
+                                height: 1px;
+                                background: Theme.border;
+                            }
+                            Text {
+                                height: root.height < 700px ? 28px : 35px;
+                                text: "PRIVATE  ·  NATIVE LINUX  ·  NO WEBVIEW";
+                                color: Theme.subtle;
+                                font-size: 10px;
+                                font-weight: 650;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+                if root.notification != "" : Rectangle {
+                    height: 37px;
+                    background: Theme.accent-soft;
+                    Text {
+                        x: 15px; text: root.notification;
+                        color: Theme.accent; font-size: 12px;
+                        vertical-alignment: center;
+                    }
+                }
+                if root.has-active-chat : Rectangle {
+                    height: 82px;
+                    background: Theme.surface;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    HorizontalLayout {
+                        padding-left: 18px;
+                        padding-right: 18px;
+                        padding-top: 14px;
+                        padding-bottom: 14px;
+                        spacing: 12px;
+                        Rectangle {
+                            width: 35px; height: 40px;
+                            border-radius: 9px;
+                            background: transparent;
+                            Image { width: 22px; height: 22px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; source: @image-url("assets/icons/paperclip.svg"); image-fit: contain; }
+                            TouchArea { clicked => { root.notification = "กำลังย้ายการส่งไฟล์"; } }
+                        }
+                        Rectangle {
+                            width: 35px; height: 40px;
+                            border-radius: 9px;
+                            background: transparent;
+                            Image { width: 22px; height: 22px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; source: @image-url("assets/icons/smile.svg"); image-fit: contain; }
+                            TouchArea { clicked => { root.notification = "กำลังย้ายสติกเกอร์และอีโมจิ"; } }
+                        }
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            height: 49px;
+                            background: Theme.raised;
+                            border-width: 1px; border-color: Theme.border; border-radius: 13px;
+                            HorizontalLayout {
+                                padding-left: 13px;
+                                padding-right: 12px;
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    background: transparent;
+                                    Text {
+                                        visible: root.draft == "";
+                                        text: root.has-active-chat ? "พิมพ์ข้อความ..." : "เลือกแชตก่อนส่งข้อความ";
+                                        color: Theme.subtle;
+                                        font-size: 13px;
+                                        vertical-alignment: center;
+                                    }
+                                    TextInput {
+                                        color: Theme.text;
+                                        font-size: 13px;
+                                        text <=> root.draft;
+                                        vertical-alignment: center;
+                                        single-line: true;
+                                        enabled: root.has-active-chat;
+                                        accepted => { root.send-message(self.text); }
+                                    }
+                                }
+                            }
+                        }
+                        Rectangle {
+                            width: 48px; height: 47px;
+                            border-radius: 13px;
+                            background: root.has-active-chat ? Theme.accent : Theme.raised;
+                            Text { text: "➤"; color: root.has-active-chat ? #083a22 : Theme.subtle; font-size: 21px; horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { clicked => { root.send-message(root.draft); } }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
