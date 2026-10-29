@@ -68,3 +68,7 @@ website/dist/
 /release-electron/
 
 /electron/dist/
+
+# Verified, packaged Linux Native Helpers (downloaded from pinned release)
+/electron/native/
+/.cache/electron-native/

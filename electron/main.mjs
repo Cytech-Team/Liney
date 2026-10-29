@@ -6,7 +6,7 @@ import { app, BrowserWindow, ipcMain, dialog, Notification, shell, clipboard, Me
 import { Worker } from "node:worker_threads";
 import { randomUUID } from "node:crypto";
 import { writeFile, mkdir, stat } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,6 +25,36 @@ const stateDir = process.env.LINEY_DATA_DIR || path.join(
 if (preview || process.env.LINEY_DATA_DIR) app.setPath("userData", stateDir);
 process.umask(0o077);
 const icon = path.join(root, "src-tauri/icons/128x128.png");
+
+// Bundled helpers are executed by LINEJS's Node Worker, not by Chromium.
+// When packaged, all five are unpacked next to app.asar, so we never depend
+// on a previously installed /usr/bin/liney-* or a developer's build folder.
+const nativeRoot = bundled && root.endsWith(".asar")
+  ? root.slice(0,-5)+".asar.unpacked"
+  : root;
+const nativeDir = path.join(nativeRoot,"electron/native");
+const helperNames = ["liney-media","liney-audio","liney-screen","liney-screen-wayland","liney-screen-x11"];
+const helperVariables = {
+  "liney-media":"LINEY_MEDIA_BINARY",
+  "liney-audio":"LINEY_AUDIO_BINARY",
+  "liney-screen":"LINEY_SCREEN_BINARY",
+  "liney-screen-wayland":"LINEY_SCREEN_WAYLAND_BINARY",
+  "liney-screen-x11":"LINEY_SCREEN_X11_BINARY"
+};
+function bundledHelperEnvironment() {
+  const env={};
+  for (const name of helperNames) {
+    const filename=path.join(nativeDir,name);
+    let details;
+    try {details=statSync(filename);} catch {
+      throw new Error("Required native helper missing from Liney package: "+name);
+    }
+    if (!details.isFile() || details.size<100000 || !(details.mode & 0o111))
+      throw new Error("Native helper cannot execute: "+name);
+    env[helperVariables[name]]=filename;
+  }
+  return env;
+}
 const windows = new Map();
 let engine = null;
 let engineStarting = null;
@@ -51,13 +81,10 @@ async function ensureEngine() {
   if (engineStarting) return engineStarting;
   engineStarting = (async () => {
     await mkdir(stateDir, {recursive:true,mode:0o700});
-    const engineRoot = bundled && root.endsWith(".asar")
-      ? root.slice(0,-5)+".asar.unpacked"
-      : root;
-    const location = path.join(engineRoot, "electron/dist/engine.mjs");
+    const location = path.join(nativeRoot, "electron/dist/engine.mjs");
     if (!existsSync(location)) throw new Error("LINEJS Engine bundle missing. Run npm run electron:engine");
     const worker = new Worker(location, {
-      env: {...process.env, LINEY_DATA_DIR:stateDir},
+      env: {...process.env, ...bundledHelperEnvironment(), LINEY_DATA_DIR:stateDir},
     });
     engine = worker;
     worker.on("message", (packet) => {
@@ -150,9 +177,10 @@ function createWindow(label="main", opts={}) {
           })`);
           await ensureEngine();
           const pong=await requestEngine("ping");
-          const outcome={...checks,menuHidden:!win.isMenuBarVisible() && Menu.getApplicationMenu()===null,enginePong:Boolean(pong),renderer:"React original",system:"Electron"};
+          const helpers=bundledHelperEnvironment();
+          const outcome={...checks,nativeHelpers:Object.keys(helpers).length,menuHidden:!win.isMenuBarVisible() && Menu.getApplicationMenu()===null,enginePong:Boolean(pong),renderer:"React original",system:"Electron"};
           console.log("LINEY_ELECTRON_SMOKE_RESULT="+JSON.stringify(outcome));
-          app.exit(checks.authDialog && checks.logoLoaded && checks.bridge && !checks.webkit && outcome.menuHidden && Boolean(pong) ? 0 : 3);
+          app.exit(checks.authDialog && checks.logoLoaded && checks.bridge && !checks.webkit && outcome.nativeHelpers===5 && outcome.menuHidden && Boolean(pong) ? 0 : 3);
         }catch(e){console.error("LINEY_ELECTRON_SMOKE_ERROR="+String(e));app.exit(4);}
       },1000);
     });

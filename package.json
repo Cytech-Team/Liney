@@ -24,9 +24,10 @@
     "electron:engine": "bun build engine/main.ts --target=node --packages=external --outfile electron/dist/engine.mjs",
     "electron:web": "LINEY_DESKTOP_TARGET=electron npm run web:build",
     "electron:dev": "LINEY_DESKTOP_TARGET=electron electron .",
-    "electron:build": "npm run electron:engine && npm run electron:web && electron-builder --linux AppImage deb rpm",
-    "electron:build:appimage": "npm run electron:engine && npm run electron:web && electron-builder --linux AppImage",
-    "electron:smoke": "LINEY_DISABLE_AUTO_RESTORE=1 LINEY_ELECTRON_SMOKE=1 electron ."
+    "electron:build": "npm run electron:engine && npm run electron:web && npm run electron:helpers && electron-builder --linux AppImage deb rpm",
+    "electron:build:appimage": "npm run electron:engine && npm run electron:web && npm run electron:helpers && electron-builder --linux AppImage",
+    "electron:smoke": "LINEY_DISABLE_AUTO_RESTORE=1 LINEY_ELECTRON_SMOKE=1 electron .",
+    "electron:helpers": "node scripts/electron-stage-helpers.mjs"
   },
   "dependencies": {
     "@evex/linejs": "npm:@jsr/evex__linejs@3.5.0",
@@ -100,6 +101,7 @@
     "publish": null,
     "asarUnpack": [
       "electron/dist/engine.mjs",
+      "electron/native/**",
       "node_modules/**"
     ]
   },

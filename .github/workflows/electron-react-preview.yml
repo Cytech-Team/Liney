@@ -10,6 +10,7 @@ on:
       - "src/**"
       - "package.json"
       - "package-lock.json"
+      - "scripts/electron-stage-helpers.mjs"
       - "vite.config.ts"
       - ".github/workflows/electron-react-preview.yml"
   pull_request:
@@ -19,6 +20,7 @@ on:
       - "src/**"
       - "package.json"
       - "package-lock.json"
+      - "scripts/electron-stage-helpers.mjs"
       - "vite.config.ts"
       - ".github/workflows/electron-react-preview.yml"
   workflow_dispatch:
@@ -52,6 +54,16 @@ jobs:
         run: npm run electron:web
       - name: Existing Engine tests
         run: npm run test:unit
+      - name: Download verified native helpers for single-file packaging
+        run: npm run electron:helpers
+      - name: Verify native helpers can run without missing shared libraries
+        run: |
+          for helper in liney-media liney-audio liney-screen liney-screen-wayland liney-screen-x11; do
+            test -x "electron/native/$helper"
+            test "$(stat -c %s "electron/native/$helper")" -gt 100000
+            ! ldd "electron/native/$helper" | grep -q 'not found'
+          done
+          electron/native/liney-media --liney-keyring-probe | grep -q '"available":'
       - name: Isolated UI + real LINEJS boot (CI no-sandbox flag only)
         run: |
           export LINEY_DATA_DIR="$(mktemp -d)"
@@ -63,6 +75,7 @@ jobs:
           grep -q '"logoLoaded":true' /tmp/liney-source-smoke.log
           grep -q '"webkit":false' /tmp/liney-source-smoke.log
           grep -q '"menuHidden":true' /tmp/liney-source-smoke.log
+          grep -q '"nativeHelpers":5' /tmp/liney-source-smoke.log
           rm -rf "$LINEY_DATA_DIR"
       - name: Package standalone AppImage
         run: npm run electron:build:appimage
@@ -76,8 +89,17 @@ jobs:
           grep -q '"enginePong":true' /tmp/liney-packaged-smoke.log
           grep -q '"authDialog":true' /tmp/liney-packaged-smoke.log
           grep -q '"menuHidden":true' /tmp/liney-packaged-smoke.log
+          grep -q '"nativeHelpers":5' /tmp/liney-packaged-smoke.log
           grep -q '"logoLoaded":true' /tmp/liney-packaged-smoke.log
           rm -rf "$LINEY_DATA_DIR"
+      - name: Verify bundled unpacked helpers
+        run: |
+          native=release-electron/linux-unpacked/resources/app.asar.unpacked/electron/native
+          for helper in liney-media liney-audio liney-screen liney-screen-wayland liney-screen-x11; do
+            test -x "$native/$helper"
+            ! ldd "$native/$helper" | grep -q 'not found'
+          done
+          "$native/liney-media" --liney-keyring-probe | grep -q '"available":'
       - name: Checksums
         run: sha256sum release-electron/*.AppImage > release-electron/SHA256SUMS
       - uses: actions/upload-artifact@v4
