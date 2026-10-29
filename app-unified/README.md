@@ -17,6 +17,7 @@ Electron, an HTTP server, or a standalone Bun engine process.
 - QR code rendered from an in-memory native RGBA image; no token logs
 - Original Liney brand icon
 - Real LINEJS Engine 3.5.0 loads and responds in same PID via Node Worker
+- App dependencies include the pinned LINEJS package; no additional engine install
 - SQLite compatibility for Bun and Node without changing schema
 
 ## Development smoke test (isolated, NEVER a real account)
@@ -27,7 +28,6 @@ Linux native runtime libraries.
 From repository root:
 
 ```sh
-npm install --ignore-scripts --no-audit --no-fund
 npm ci --prefix app-unified --ignore-scripts
 bun build engine/main.ts --target=node --packages=external --outfile app-unified/dist/engine.mjs
 bun build engine/runtime/sqlite.ts --target=node --external bun:sqlite --outfile app-unified/dist/sqlite.mjs
@@ -45,7 +45,7 @@ For an offline **mock** demo of the visual conversation UI:
 LINEY_UNIFIED_TEST=1 LINEY_UNIFIED_MOCK_ENGINE=1 LINEY_DATA_DIR="$(mktemp -d)" node app-unified/main.mjs
 ```
 
-The root `.npmrc` pins the `@jsr` scope to JSR's npm-compatible registry;
+The app's `.npmrc` pins the `@jsr` scope to JSR's npm-compatible registry;
 `@evex/linejs` is not published to the default npm registry.
 
 ## Not ready for production yet

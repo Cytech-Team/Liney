@@ -33,8 +33,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb xauth dbus-x11 libinput10 libxkbcommon0 libxkbcommon-x11-0 libgl1 libegl1
           npm ci --prefix app-unified --no-audit --no-fund
-      - name: Install pinned LINEJS runtime from JSR
-        run: npm install --ignore-scripts --no-audit --no-fund --omit=dev --no-package-lock
       - name: Build in-process engine modules (without production credentials)
         run: |
           mkdir -p app-unified/dist
