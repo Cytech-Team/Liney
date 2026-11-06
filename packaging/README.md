@@ -26,6 +26,7 @@ Install the resulting `release-electron/Liney-Electron-Preview-<version>-x86_64.
 
 ```sh
 flatpak install --user ./release-electron/Liney-Electron-Preview-<version>-x86_64.flatpak
+flatpak run com.cyoriasmp.liney
 ```
 
-The build requires `flatpak`, `flatpak-builder`, and the Flathub GNOME 50 runtime/SDK. The Flatpak application ID is `com.cyoriasmp.liney` (lowercase, standards-compliant). The Flatpak application ID is `com.cyoriasmp.liney` (lowercase, standards-compliant). The manifest grants network, desktop/audio, Secret Service, StatusNotifier, and PipeWire portal access; it does not grant unrestricted host filesystem access.
+The build requires `flatpak`, `flatpak-builder`, and the Flathub GNOME 50 runtime/SDK. The Flatpak application ID is `com.cyoriasmp.liney` (lowercase, standards-compliant); the bundle uses the `preview` branch. The manifest grants network, desktop/audio, Secret Service, StatusNotifier, and PipeWire portal access; it does not grant unrestricted host filesystem access.
