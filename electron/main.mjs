@@ -421,7 +421,7 @@ async function verifyNativeEditShortcuts(win) {
   const focusedX11Window = execFileSync("xdotool", ["getwindowfocus"], { encoding: "utf8", timeout: 3000 }).trim();
   const beforeInputEvents = [];
   const beforeInputListener = (_event, input) => {
-    if (input.type === "keyDown" && input.control) beforeInputEvents.push({ key: input.key, code: input.code, type: input.type });
+    if (input.type === "keyDown") beforeInputEvents.push({ key: input.key, code: input.code, control: input.control, meta: input.meta, shift: input.shift });
   };
   win.webContents.on("before-input-event", beforeInputListener);
   const sendChord = (key) => {
@@ -472,7 +472,9 @@ async function verifyNativeEditShortcuts(win) {
     sendChord("V");
     stage = "verify-ctrl-v";
     const pasted = await win.webContents.executeJavaScript(`document.getElementById("${fieldId}").value === "liney-native-paste-test"`);
-    return { selectAll: allSelected, copy: copied, cut, paste: pasted };
+    const menuActionCalls = getEditActionCalls();
+    const focusState = await win.webContents.executeJavaScript(`({ activeElementId: document.activeElement?.id, hasFocus: document.hasFocus() })`);
+    return { selectAll: allSelected, copy: copied, copiedText, selectionAfterCopy, copyMenuAction, cut, paste: pasted, menuActionCalls, x11WindowIds: windowIds, x11WindowNames, x11WindowId, focusedX11Window, beforeInputEvents, focusState };
   } catch (error) {
     throw new Error(`Native edit shortcut smoke failed at ${stage}: ${error?.stack || error}`);
   } finally {
