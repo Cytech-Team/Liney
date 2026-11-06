@@ -1,6 +1,19 @@
 import { describe, expect, test } from "bun:test";
+import { createPrivateKey, createPublicKey } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { BaseClient } from "@evex/linejs/base";
 import { LineJsAdapter, createPollingSession, fetchMessageAsset, getChatMetadataBatch, getTalkMessageReadRanges, getTargetProfiles, LINEJS_VERSION, updateOwnProfile, markTalkMessageRead, normalizeTalkMessageReadRanges, parseE2EEKeyData, replyTargetMessageId, sendTalkMessage, sendTalkMediaE2EE, talkMessageEditState } from "./adapter";
+
+function publicKeyFromX25519PrivateKey(privateKey: Buffer): Buffer {
+  const pkcs8Prefix = Buffer.from("302e020100300506032b656e04220420", "hex");
+  const key = createPrivateKey({ key: Buffer.concat([pkcs8Prefix, privateKey]), format: "der", type: "pkcs8" });
+  return Buffer.from(createPublicKey(key).export({ format: "der", type: "spki" })).subarray(-32);
+}
+
+function createRealE2EEKeyVerifier(): (privateKey: Buffer, publicKey: Buffer) => boolean {
+  const client = new BaseClient({ device: "ANDROID" });
+  return client.e2ee.verifyE2EEKeyPair.bind(client.e2ee);
+}
 
 describe("LineJsAdapter sender metadata", () => {
   test("deduplicates sender MIDs and requests target profiles through LINEJS", async () => {
@@ -129,14 +142,15 @@ describe("LineJsAdapter E2EE Talk media", () => {
   test("keeps media replies encrypted and attaches the relation to the final Talk message", async () => {
     const uploads: Array<Record<string, unknown>> = [];
     let sent: Record<string, unknown> | undefined;
-    const privateKey = Buffer.alloc(32, 1);
-    const publicKey = Buffer.alloc(32, 2);
+    const privateKey = Buffer.alloc(32, 11);
+    const publicKey = publicKeyFromX25519PrivateKey(privateKey);
+    const verifyKeyPair = createRealE2EEKeyVerifier();
     const client = {
       base: {
         profile: { mid: "u-self" },
         e2ee: {
           getE2EESelfKeyData: async () => ({ keyId: 7, privKey: privateKey.toString("base64"), pubKey: publicKey.toString("base64") }),
-          verifyE2EEKeyPair: (_privateKey: Buffer, candidate: Buffer) => candidate.equals(publicKey),
+          verifyE2EEKeyPair: verifyKeyPair,
           encryptByKeyMaterial: async () => ({ keyMaterial: Buffer.alloc(32, 1).toString("base64"), encryptedData: Buffer.from("encrypted") }),
           encryptE2EEMessage: async () => ["chunk-a", "chunk-b"],
         },
@@ -181,15 +195,16 @@ describe("LineJsAdapter E2EE Talk media", () => {
   });
 
   test("accepts LINE's registered sender key returned as a raw binary string", async () => {
-    const privateKey = Buffer.alloc(32, 4);
-    const publicKey = Buffer.alloc(32, 5);
+    const privateKey = Buffer.alloc(32, 14);
+    const publicKey = publicKeyFromX25519PrivateKey(privateKey);
+    const verifyKeyPair = createRealE2EEKeyVerifier();
     let uploadCalls = 0;
     const client = {
       base: {
         profile: { mid: "u-self" },
         e2ee: {
           getE2EESelfKeyData: async () => ({ keyId: 8, privKey: privateKey.toString("base64"), pubKey: publicKey.toString("base64") }),
-          verifyE2EEKeyPair: (_privateKey: Buffer, candidate: Buffer) => candidate.equals(publicKey),
+          verifyE2EEKeyPair: verifyKeyPair,
           encryptByKeyMaterial: async () => ({ keyMaterial: Buffer.alloc(32, 1).toString("base64"), encryptedData: Buffer.from("encrypted") }),
           encryptE2EEMessage: async () => ["chunk-a"],
         },
@@ -215,15 +230,16 @@ describe("LineJsAdapter E2EE Talk media", () => {
   test("stops before upload when the active sender key differs from LINE's registered key", async () => {
     const uploads: Array<Record<string, unknown>> = [];
     let encryptionCalls = 0;
-    const privateKey = Buffer.alloc(32, 1);
-    const localPublicKey = Buffer.alloc(32, 2);
-    const registeredPublicKey = Buffer.alloc(32, 3);
+    const privateKey = Buffer.alloc(32, 21);
+    const localPublicKey = publicKeyFromX25519PrivateKey(privateKey);
+    const registeredPublicKey = publicKeyFromX25519PrivateKey(Buffer.alloc(32, 22));
+    const verifyKeyPair = createRealE2EEKeyVerifier();
     const client = {
       base: {
         profile: { mid: "u-self" },
         e2ee: {
           getE2EESelfKeyData: async () => ({ keyId: 7, privKey: privateKey.toString("base64"), pubKey: localPublicKey.toString("base64") }),
-          verifyE2EEKeyPair: (_privateKey: Buffer, candidate: Buffer) => candidate.equals(localPublicKey),
+          verifyE2EEKeyPair: verifyKeyPair,
           encryptByKeyMaterial: async () => { encryptionCalls += 1; return { keyMaterial: "", encryptedData: Buffer.from("encrypted") }; },
           encryptE2EEMessage: async () => ["chunk-a"],
         },
@@ -246,6 +262,39 @@ describe("LineJsAdapter E2EE Talk media", () => {
 
     expect(encryptionCalls).toBe(0);
     expect(uploads).toHaveLength(0);
+  });
+
+  test("stops before upload when the stored private key does not derive the stored public key", async () => {
+    const privateKey = Buffer.alloc(32, 31);
+    const wrongPublicKey = publicKeyFromX25519PrivateKey(Buffer.alloc(32, 32));
+    const verifyKeyPair = createRealE2EEKeyVerifier();
+    let uploadCalls = 0;
+    const client = {
+      base: {
+        profile: { mid: "u-self" },
+        e2ee: {
+          getE2EESelfKeyData: async () => ({ keyId: 9, privKey: privateKey.toString("base64"), pubKey: wrongPublicKey.toString("base64") }),
+          verifyE2EEKeyPair: verifyKeyPair,
+          encryptByKeyMaterial: async () => ({ keyMaterial: "", encryptedData: Buffer.from("encrypted") }),
+          encryptE2EEMessage: async () => ["chunk-a"],
+        },
+        obs: {
+          uploadObjectForService: async () => { uploadCalls += 1; return { objId: "must-not-upload" }; },
+        },
+        talk: {
+          getE2EEPublicKeys: async () => [{ keyId: 9, keyData: wrongPublicKey }],
+          sendMessage: async () => ({ id: "must-not-send" }),
+        },
+      },
+    } as any;
+
+    await expect(sendTalkMediaE2EE(client, {
+      to: "u-peer",
+      oType: "file",
+      data: new Blob(["secret file"]),
+      filename: "secret.txt",
+    })).rejects.toThrow("active LINE E2EE keypair is invalid");
+    expect(uploadCalls).toBe(0);
   });
 });
 
