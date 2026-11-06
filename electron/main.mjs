@@ -282,7 +282,7 @@ function createWindow(label="main", opts={}) {
           console.log("LINEY_ELECTRON_SMOKE_RESULT="+JSON.stringify(outcome));
           const shortcutsPassed=Object.values(nativeEditShortcuts).every(Boolean);
           app.exit(checks.authDialog && checks.logoLoaded && checks.bridge && outcome.nativeHelpers===5 && outcome.menuHidden && outcome.nativeEditMenu && shortcutsPassed && Boolean(pong) ? 0 : 3);
-        }catch(e){console.error("LINEY_ELECTRON_SMOKE_ERROR="+String(e));app.exit(4);}
+        }catch(e){console.error("LINEY_ELECTRON_SMOKE_ERROR="+(e?.stack || String(e)));app.exit(4);}
       },1000);
     });
   }
@@ -395,8 +395,10 @@ async function runDesktopCommand(command,args={}) {
   }
 }
 async function verifyNativeEditShortcuts(win) {
+  let stage = "show-window";
   win.show();
   win.focus();
+  stage = "read-clipboard";
   const previousClipboard = clipboard.readText();
   const fieldId = "liney-native-edit-shortcut-smoke";
   const sendChord = (key) => {
@@ -404,6 +406,7 @@ async function verifyNativeEditShortcuts(win) {
     win.webContents.sendInputEvent({ type: "keyUp", keyCode: key, modifiers: ["control"] });
   };
   try {
+    stage = "create-test-textarea";
     await win.webContents.executeJavaScript(`(() => {
       const field = document.createElement("textarea");
       field.id = "${fieldId}";
@@ -416,20 +419,32 @@ async function verifyNativeEditShortcuts(win) {
     })()`);
 
     const selectAll = async () => {
+      stage = "focus-and-select-all";
       await win.webContents.executeJavaScript(`(() => { const field = document.getElementById("${fieldId}"); field.focus(); field.setSelectionRange(0, 0); })()`);
+      stage = "send-ctrl-a";
       sendChord("A");
+      stage = "verify-ctrl-a";
       return win.webContents.executeJavaScript(`(() => { const field = document.getElementById("${fieldId}"); return field.selectionStart === 0 && field.selectionEnd === field.value.length; })()`);
     };
 
     const allSelected = await selectAll();
+    stage = "send-ctrl-c";
     sendChord("C");
+    stage = "read-copy-clipboard";
     const copied = clipboard.readText() === "liney-native-edit-test";
+    stage = "send-ctrl-x";
     sendChord("X");
+    stage = "verify-ctrl-x";
     const cut = await win.webContents.executeJavaScript(`document.getElementById("${fieldId}").value === ""`);
+    stage = "write-paste-clipboard";
     clipboard.writeText("liney-native-paste-test");
+    stage = "send-ctrl-v";
     sendChord("V");
+    stage = "verify-ctrl-v";
     const pasted = await win.webContents.executeJavaScript(`document.getElementById("${fieldId}").value === "liney-native-paste-test"`);
     return { selectAll: allSelected, copy: copied, cut, paste: pasted };
+  } catch (error) {
+    throw new Error(`Native edit shortcut smoke failed at ${stage}: ${error?.stack || error}`);
   } finally {
     try {
       await win.webContents.executeJavaScript(`document.getElementById("${fieldId}")?.remove()`);
