@@ -449,7 +449,8 @@ async function verifyNativeEditShortcuts(win) {
     try {
       await win.webContents.executeJavaScript(`document.getElementById("${fieldId}")?.remove()`);
     } finally {
-      clipboard.writeText(previousClipboard);
+      if (previousClipboard) clipboard.writeText(previousClipboard);
+      else clipboard.clear();
     }
   }
 }
