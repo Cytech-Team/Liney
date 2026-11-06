@@ -2,7 +2,7 @@
  * Liney Electron shell. React UI and LINEJS are reused verbatim.
  * This is an isolated preview until live session, packaging and security QA pass.
  */
-import { app, BrowserWindow, ipcMain, dialog, Notification, shell, clipboard, Menu, Tray, protocol, net } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, Notification, shell, clipboard, ClipboardItem, Menu, Tray, protocol, net } from "electron";
 import updater from "electron-updater";
 const { autoUpdater } = updater;
 import { Worker } from "node:worker_threads";
@@ -405,6 +405,10 @@ async function verifyNativeEditShortcuts(win) {
   win.focus();
   stage = "snapshot-clipboard";
   const previousClipboard = await clipboard.read();
+  const restorableClipboardItems = await Promise.all(previousClipboard.map(async (item) => {
+    const entries = await Promise.all(item.types.map(async (type) => [type, await item.getType(type)]));
+    return new ClipboardItem(Object.fromEntries(entries));
+  }));
   resetEditActionCalls();
   const fieldId = "liney-native-edit-shortcut-smoke";
   stage = "find-electron-x11-window";
@@ -526,7 +530,7 @@ async function verifyNativeEditShortcuts(win) {
       await win.webContents.executeJavaScript(fieldSelector + "?.remove()");
     } finally {
       await clipboard.clear();
-      if (previousClipboard.length > 0) await clipboard.write(previousClipboard);
+      if (restorableClipboardItems.length > 0) await clipboard.write(restorableClipboardItems);
     }
   }
 }
