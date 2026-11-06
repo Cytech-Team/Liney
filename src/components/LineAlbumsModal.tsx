@@ -3,6 +3,7 @@ import { AlbumThumbnail } from "./AlbumThumbnail";
 import { AlbumThumbnailLoader } from "../lib/album-thumbnail-loader";
 import { Image as ImageIcon, LoaderCircle, X, ArrowLeft } from "lucide-react";
 import { lineyEngine } from "../lib/engine";
+import { useAppTranslation } from "../lib/i18n";
 import "./LineAlbumsModal.css";
 
 type Album = {
@@ -17,6 +18,7 @@ type PhotoPage = { photos: AlbumPhoto[]; nextCursor?: string };
 type PhotoPreview = { dataUrl: string; bytes: number };
 
 export function LineAlbumsModal({ onClose }: { onClose: () => void }) {
+  const { t } = useAppTranslation();
   const [albums, setAlbums] = useState<Album[]>([]);
   const [albumCursor, setAlbumCursor] = useState<string>();
   const [selected, setSelected] = useState<Album>();
@@ -99,22 +101,22 @@ export function LineAlbumsModal({ onClose }: { onClose: () => void }) {
     <div className="modal-backdrop liney-albums-backdrop" role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
-      <section className="liney-albums-panel" role="dialog" aria-modal="true" aria-label="อัลบั้ม LINE">
+      <section className="liney-albums-panel" role="dialog" aria-modal="true" aria-label={t("LINE albums")}>
         <header className="liney-albums-head">
           {selected ? (
             <button type="button" className="icon-button" onClick={() => {
               setSelected(undefined); setPhotos([]); setError(""); setPreview(undefined); setLoading(false);
-            }} aria-label="กลับไปยังรายการอัลบั้ม"><ArrowLeft size={18}/></button>
+            }} aria-label={t("Back to albums")}><ArrowLeft size={18}/></button>
           ) : <ImageIcon size={20} />}
           <div>
-            <strong>{selected?.title ?? "อัลบั้ม LINE"}</strong>
-            <small>{selected ? `รูปในอัลบั้ม · ${photos.length} รายการ` : "อัลบั้มทั้งหมดของบัญชี · อ่านอย่างเดียว"}</small>
+            <strong>{selected?.title ?? t("LINE albums")}</strong>
+            <small>{selected ? t("{{count}} photos in album", { count: photos.length }) : t("All albums in this account · Read only")}</small>
           </div>
-          <button className="icon-button" type="button" onClick={onClose} aria-label="ปิดอัลบั้ม"><X size={19}/></button>
+          <button className="icon-button" type="button" onClick={onClose} aria-label={t("Close albums")}><X size={19}/></button>
         </header>
         {error ? <p role="alert" className="liney-albums-error">{error}</p> : null}
-        {loading ? <div className="liney-albums-empty"><LoaderCircle className="spin" size={22}/> กำลังโหลด…</div> : null}
-        {!loading && !selected && albums.length === 0 && !error ? <p className="liney-albums-empty">ไม่มีอัลบั้มหรือบัญชีนี้ไม่รองรับบริการ Album</p> : null}
+        {loading ? <div className="liney-albums-empty"><LoaderCircle className="spin" size={22}/> {t("Loading…")}</div> : null}
+        {!loading && !selected && albums.length === 0 && !error ? <p className="liney-albums-empty">{t("No albums found, or Album service is not supported for this account.")}</p> : null}
         {!loading && !selected ? (
           <div className="liney-albums-list">
             {albums.map((album) => (
@@ -124,10 +126,10 @@ export function LineAlbumsModal({ onClose }: { onClose: () => void }) {
                       loader={thumbnailLoader}
                       cacheKey={`cover:${album.chatId}:${album.albumId}`}
                       request={{ method: "album.cover.preview", params: { chatId: album.chatId, albumId: album.albumId } }}
-                      className="liney-albums-cover" alt={`ภาพปก ${album.title}`}
+                      className="liney-albums-cover" alt={t("Album cover: {{title}}", { title: album.title })}
                     />
                   : <span className="liney-albums-cover"><ImageIcon aria-hidden="true" size={21}/></span>}
-                <span><strong>{album.title}</strong><small>รูป {album.photoCount} · ห้อง {album.chatId.slice(0, 10)}…</small></span>
+                <span><strong>{album.title}</strong><small>{t("{{count}} photos", { count: album.photoCount })} · {t("Chat")} {album.chatId.slice(0, 10)}…</small></span>
                 <span aria-hidden="true">›</span>
               </button>
             ))}
@@ -135,7 +137,7 @@ export function LineAlbumsModal({ onClose }: { onClose: () => void }) {
         ) : null}
         {!loading && selected ? (
           <div className="liney-albums-photo-list">
-            {photos.length === 0 && !error ? <p className="liney-albums-empty">ไม่พบรูปภาพในอัลบั้มนี้</p> : null}
+            {photos.length === 0 && !error ? <p className="liney-albums-empty">{t("No photos found in this album.")}</p> : null}
             {photos.map((photo) => {
               const video = photo.sid === "v" || /video/i.test(photo.resourceType);
               return (
@@ -146,9 +148,9 @@ export function LineAlbumsModal({ onClose }: { onClose: () => void }) {
                         loader={thumbnailLoader}
                         cacheKey={`photo:${selected.chatId}:${selected.albumId}:${photo.oid}`}
                         request={{ method: "album.photo.preview", params: { chatId: selected.chatId, albumId: selected.albumId, oid: photo.oid } }}
-                        className="liney-albums-photo-thumb" alt={`ภาพย่อรูป ${photo.id}`}
+                        className="liney-albums-photo-thumb" alt={t("Thumbnail for photo {{id}}", { id: photo.id })}
                       />}
-                  <small>{video ? "วิดีโอ (ยังไม่มีพรีวิว)" : previewLoading === photo.id ? "กำลังโหลด…" : `รูป ${photo.id}`}</small>
+                  <small>{video ? t("Video (no preview available)") : previewLoading === photo.id ? t("Loading…") : t("Photo {{id}}", { id: photo.id })}</small>
                 </button>
               );
             })}
@@ -156,15 +158,15 @@ export function LineAlbumsModal({ onClose }: { onClose: () => void }) {
         ) : null}
         {!loading && (selected ? photoCursor : albumCursor) ? (
           <button className="liney-albums-more" disabled={moreLoading} type="button" onClick={() => void loadMore()}>
-            {moreLoading ? "กำลังโหลด…" : "โหลดเพิ่มเติม"}
+            {moreLoading ? t("Loading…") : t("Load more")}
           </button>
         ) : null}
         {preview ? (
-          <div className="liney-albums-preview" role="dialog" aria-modal="true" aria-label="ดูรูปภาพ" onMouseDown={(event) => {
+          <div className="liney-albums-preview" role="dialog" aria-modal="true" aria-label={t("View image")} onMouseDown={(event) => {
             if (event.target === event.currentTarget) setPreview(undefined);
           }}>
-            <button type="button" className="icon-button" onClick={() => setPreview(undefined)} aria-label="ปิดรูป"><X size={20}/></button>
-            <img src={preview.dataUrl} alt={`รูปภาพ ${preview.photo.id}`} />
+            <button type="button" className="icon-button" onClick={() => setPreview(undefined)} aria-label={t("Close image")}><X size={20}/></button>
+            <img src={preview.dataUrl} alt={t("Image {{id}}", { id: preview.photo.id })} />
           </div>
         ) : null}
       </section>

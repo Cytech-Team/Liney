@@ -1,10 +1,12 @@
 import { motion } from "motion/react";
+import { useAppTranslation } from "../lib/i18n";
 import { Minus, Plus, Trash, Undo2, X } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 type ImageEditorTool = "view" | "draw" | "blur" | "text";
 
 export function ImageViewerOverlay({ src, onClose }: { src: string; onClose: () => void }) {
+  const { t } = useAppTranslation();
   const [error, setError] = useState("");
   const [zoom, setZoom] = useState(1);
   const [tool, setTool] = useState<ImageEditorTool>("view");
@@ -86,7 +88,7 @@ export function ImageViewerOverlay({ src, onClose }: { src: string; onClose: () 
     if (!ready || tool === "view") return;
     const point = pointFor(event);
     if (tool === "text") {
-      const text = window.prompt("ใส่ข้อความ");
+      const text = window.prompt(t("Enter text"));
       if (!text?.trim()) return;
       const canvas = canvasRef.current;
       const ctx = context();
@@ -161,28 +163,28 @@ export function ImageViewerOverlay({ src, onClose }: { src: string; onClose: () 
 
   return (
     <motion.div className="image-viewer-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-      <button className="image-viewer-backdrop" type="button" aria-label="ปิดหน้าดูรูปภาพ" onClick={onClose} />
-      <main className="image-viewer-window" role="dialog" aria-modal="true" aria-label="ดูรูปภาพ">
+      <button className="image-viewer-backdrop" type="button" aria-label={t("Close image viewer")} onClick={onClose} />
+      <main className="image-viewer-window" role="dialog" aria-modal="true" aria-label={t("Image viewer")}>
       <header className="image-viewer-toolbar">
-        <strong>ดูรูปภาพ</strong>
+        <strong>{t("Image viewer")}</strong>
         <div>
-          <button className={tool === "view" ? "active" : ""} type="button" title="เลื่อนดูรูป" onClick={() => setTool("view")}>ดู</button>
-          <button className={tool === "draw" ? "active" : ""} type="button" title="วาดรูป" onClick={() => setTool("draw")}>วาด</button>
-          <button className={tool === "blur" ? "active" : ""} type="button" title="เบลอ" onClick={() => setTool("blur")}>เบลอ</button>
-          <button className={tool === "text" ? "active" : ""} type="button" title="ใส่ข้อความ" onClick={() => setTool("text")}>Text</button>
-          <button type="button" title="ย้อนกลับ" disabled={!undoCount} onClick={undo}><Undo2 size={17} /></button>
-          <button type="button" title="ล้างการแก้ไข" disabled={!ready} onClick={clearEdits}><Trash size={17} /></button>
-          <button type="button" title="บันทึกรูปที่แก้ไข" disabled={!ready} onClick={saveImage}>บันทึก</button>
-          <button type="button" title="ย่อ" onClick={() => setZoom((value) => Math.max(0.4, Number((value - 0.2).toFixed(1))))}><Minus size={17} /></button>
-          <button type="button" title="ขนาดจริง" onClick={() => setZoom(1)}>{Math.round(zoom * 100)}%</button>
-          <button type="button" title="ขยาย" onClick={() => setZoom((value) => Math.min(3, Number((value + 0.2).toFixed(1))))}><Plus size={17} /></button>
-          <button type="button" title="ปิด" onClick={onClose}><X size={17} /></button>
+          <button className={tool === "view" ? "active" : ""} type="button" title={t("Pan image")} onClick={() => setTool("view")}>{t("View")}</button>
+          <button className={tool === "draw" ? "active" : ""} type="button" title={t("Draw")} onClick={() => setTool("draw")}>{t("Draw")}</button>
+          <button className={tool === "blur" ? "active" : ""} type="button" title={t("Blur")} onClick={() => setTool("blur")}>{t("Blur")}</button>
+          <button className={tool === "text" ? "active" : ""} type="button" title={t("Add text")} onClick={() => setTool("text")}>{t("Text")}</button>
+          <button type="button" title={t("Undo")} disabled={!undoCount} onClick={undo}><Undo2 size={17} /></button>
+          <button type="button" title={t("Clear edits")} disabled={!ready} onClick={clearEdits}><Trash size={17} /></button>
+          <button type="button" title={t("Save edited image")} disabled={!ready} onClick={saveImage}>{t("Save")}</button>
+          <button type="button" title={t("Zoom out")} onClick={() => setZoom((value) => Math.max(0.4, Number((value - 0.2).toFixed(1))))}><Minus size={17} /></button>
+          <button type="button" title={t("Actual size")} onClick={() => setZoom(1)}>{Math.round(zoom * 100)}%</button>
+          <button type="button" title={t("Zoom in")} onClick={() => setZoom((value) => Math.min(3, Number((value + 0.2).toFixed(1))))}><Plus size={17} /></button>
+          <button type="button" title={t("Close")} onClick={onClose}><X size={17} /></button>
         </div>
       </header>
       <section className="image-viewer-canvas">
-        <img ref={sourceRef} className="image-viewer-source" src={src} alt="" onLoad={initialiseCanvas} onError={() => setError("ไม่สามารถโหลดไฟล์รูปภาพนี้ได้")} />
+        <img ref={sourceRef} className="image-viewer-source" src={src} alt="" onLoad={initialiseCanvas} onError={() => setError(t("Unable to load this image file"))} />
         <canvas ref={canvasRef} className={`image-editor-canvas ${tool === "draw" || tool === "blur" ? "editing" : ""}`} style={{ transform: `scale(${zoom})` }} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={stopDrawing} onPointerCancel={stopDrawing} />
-        {!ready && !error ? <span>กำลังเปิดรูปภาพ…</span> : null}
+        {!ready && !error ? <span>{t("Opening image…")}</span> : null}
         {error ? <span className="image-viewer-error">{error}</span> : null}
       </section>
       </main>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Camera, Check, CircleAlert, LoaderCircle, RotateCcw, Save, ShieldCheck, UserRound } from "lucide-react";
 import { lineyEngine } from "../lib/engine";
+import { useAppTranslation } from "../lib/i18n";
 import { RemoteImage } from "./RemoteImage";
 import "./LineWorkspacePolish.css";
 
@@ -32,6 +33,7 @@ function imageSource(profile: EditableLineProfile | null): string | undefined {
 }
 
 export function LineProfileSettings({ onUpdated }: { onUpdated: (profile: EditableLineProfile) => void }) {
+  const { t } = useAppTranslation();
   const [original, setOriginal] = useState<EditableLineProfile | null>(null);
   const [displayName, setDisplayName] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
@@ -86,7 +88,7 @@ export function LineProfileSettings({ onUpdated }: { onUpdated: (profile: Editab
     setError("");
     setSuccess("");
     if (!["image/png", "image/jpeg"].includes(file.type) || !file.size || file.size > 8 * 1024 * 1024) {
-      setError("รองรับเฉพาะ PNG หรือ JPEG ขนาดไม่เกิน 8 MB");
+      setError(t("รองรับเฉพาะ PNG หรือ JPEG ขนาดไม่เกิน 8 MB"));
       return;
     }
     setPreview("");
@@ -101,8 +103,8 @@ export function LineProfileSettings({ onUpdated }: { onUpdated: (profile: Editab
     try {
       const imageData = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("อ่านรูปไม่สำเร็จ"));
-        reader.onerror = () => reject(reader.error ?? new Error("อ่านรูปไม่สำเร็จ"));
+        reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error(t("อ่านรูปไม่สำเร็จ")));
+        reader.onerror = () => reject(reader.error ?? new Error(t("อ่านรูปไม่สำเร็จ")));
         reader.readAsDataURL(pendingFile);
       });
       const response = await lineyEngine.request<{ profile: EditableLineProfile }>("profile.avatar.upload", { imageData }, 60_000);
@@ -110,7 +112,7 @@ export function LineProfileSettings({ onUpdated }: { onUpdated: (profile: Editab
       onUpdated(response.profile);
       setPendingFile(null);
       setPreview("");
-      setSuccess("อัปโหลดรูปโปรไฟล์บน LINE สำเร็จ");
+      setSuccess(t("อัปโหลดรูปโปรไฟล์บน LINE สำเร็จ"));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -132,7 +134,7 @@ export function LineProfileSettings({ onUpdated }: { onUpdated: (profile: Editab
       setDisplayName(response.profile.displayName ?? "");
       setStatusMessage(response.profile.statusMessage ?? "");
       onUpdated(response.profile);
-      setSuccess("บันทึกข้อมูลโปรไฟล์บน LINE สำเร็จ");
+      setSuccess(t("บันทึกข้อมูลโปรไฟล์บน LINE สำเร็จ"));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -144,55 +146,55 @@ export function LineProfileSettings({ onUpdated }: { onUpdated: (profile: Editab
     <div className="liney-profile-heading">
       <div>
         <span className="liney-kicker">ACCOUNT / LINE PROFILE</span>
-        <h3>โปรไฟล์ของคุณ</h3>
-        <p>จัดการข้อมูลที่แสดงให้ผู้ใช้ LINE คนอื่นเห็น</p>
+        <h3>{t("โปรไฟล์ของคุณ")}</h3>
+        <p>{t("จัดการข้อมูลที่แสดงให้ผู้ใช้ LINE คนอื่นเห็น")}</p>
       </div>
-      <span className="liney-live-pill"><span/> เชื่อมผ่าน LINEJS</span>
+      <span className="liney-live-pill"><span/> {t("เชื่อมผ่าน LINEJS")}</span>
     </div>
 
     <section className="liney-profile-hero">
-      <div className="liney-profile-avatar" aria-label="รูปโปรไฟล์">
-        {image ? <RemoteImage src={image} alt="รูปโปรไฟล์ LINE" loading="eager" fallback={<UserRound size={35} />} /> : <UserRound size={35} />}
+      <div className="liney-profile-avatar" aria-label={t("รูปโปรไฟล์")}>
+        {image ? <RemoteImage src={image} alt={t("รูปโปรไฟล์ LINE")} loading="eager" fallback={<UserRound size={35} />} /> : <UserRound size={35} />}
       </div>
       <div className="liney-profile-hero-info">
-        <strong>{original?.displayName || (loading ? "กำลังโหลดบัญชี…" : "บัญชี LINE")}</strong>
-        <p>{original?.statusMessage || "รูปโปรไฟล์และข้อมูลบัญชี LINE"}</p>
+        <strong>{original?.displayName || (loading ? t("กำลังโหลดบัญชี…") : t("บัญชี LINE"))}</strong>
+        <p>{original?.statusMessage || t("รูปโปรไฟล์และข้อมูลบัญชี LINE")}</p>
         <div className="liney-profile-pic-actions">
-          <input ref={pickerRef} className="liney-visually-hidden" type="file" accept="image/png,image/jpeg" aria-label="เลือกรูปโปรไฟล์" disabled={pending || !original} onChange={event => {
+          <input ref={pickerRef} className="liney-visually-hidden" type="file" accept="image/png,image/jpeg" aria-label={t("เลือกรูปโปรไฟล์")} disabled={pending || !original} onChange={event => {
             selectAvatar(event.currentTarget.files?.[0]);
             event.currentTarget.value = "";
           }}/>
-          <button type="button" className="liney-button liney-button-secondary" disabled={pending || !original} onClick={() => pickerRef.current?.click()}><Camera size={16}/> เปลี่ยนรูป</button>
-          {pendingFile && <button type="button" className="liney-button liney-button-primary" disabled={pending} onClick={() => void uploadAvatar()}>{uploading ? <LoaderCircle className="spin" size={15}/> : <Check size={15}/>} อัปโหลดรูป</button>}
-          {pendingFile && <button type="button" className="liney-button liney-button-quiet" disabled={pending} onClick={() => { setPendingFile(null); setPreview(""); }}>ยกเลิก</button>}
+          <button type="button" className="liney-button liney-button-secondary" disabled={pending || !original} onClick={() => pickerRef.current?.click()}><Camera size={16}/> {t("เปลี่ยนรูป")}</button>
+          {pendingFile && <button type="button" className="liney-button liney-button-primary" disabled={pending} onClick={() => void uploadAvatar()}>{uploading ? <LoaderCircle className="spin" size={15}/> : <Check size={15}/>} {t("อัปโหลดรูป")}</button>}
+          {pendingFile && <button type="button" className="liney-button liney-button-quiet" disabled={pending} onClick={() => { setPendingFile(null); setPreview(""); }}>{t("ยกเลิก")}</button>}
         </div>
-        <small>รูป PNG / JPEG · ไม่เกิน 8 MB {pendingFile ? "· รูปยังไม่ได้อัปโหลด" : ""}</small>
+        <small>{t("รูป PNG / JPEG · ไม่เกิน 8 MB")} {pendingFile ? t("· รูปยังไม่ได้อัปโหลด") : ""}</small>
       </div>
     </section>
 
     <section className="liney-editor-card">
       <div className="liney-editor-card-heading">
-        <div><h4>ข้อมูลที่แสดงบน LINE</h4><p>แก้ไขชื่อและข้อความสถานะของบัญชี</p></div>
-        {dirty && <span className="liney-unsaved-badge">ยังไม่ได้บันทึก</span>}
+        <div><h4>{t("ข้อมูลที่แสดงบน LINE")}</h4><p>{t("แก้ไขชื่อและข้อความสถานะของบัญชี")}</p></div>
+        {dirty && <span className="liney-unsaved-badge">{t("ยังไม่ได้บันทึก")}</span>}
       </div>
       <div className="liney-editor-fields">
         <label className="liney-field" htmlFor="liney-profile-name">
-          <span>ชื่อที่แสดง <small>{displayName.length}/50</small></span>
-          <input id="liney-profile-name" type="text" maxLength={50} value={displayName} disabled={pending || !original} onChange={event => setDisplayName(event.target.value)} placeholder="ชื่อบัญชี LINE" />
+          <span>{t("ชื่อที่แสดง")} <small>{displayName.length}/50</small></span>
+          <input id="liney-profile-name" type="text" maxLength={50} value={displayName} disabled={pending || !original} onChange={event => setDisplayName(event.target.value)} placeholder={t("ชื่อบัญชี LINE")} />
         </label>
         <label className="liney-field" htmlFor="liney-profile-status">
-          <span>ข้อความสถานะ <small>{statusMessage.length}/500</small></span>
-          <textarea id="liney-profile-status" rows={4} maxLength={500} value={statusMessage} disabled={pending || !original} onChange={event => setStatusMessage(event.target.value)} placeholder="เพิ่มข้อความสถานะของคุณ…" />
+          <span>{t("ข้อความสถานะ")} <small>{statusMessage.length}/500</small></span>
+          <textarea id="liney-profile-status" rows={4} maxLength={500} value={statusMessage} disabled={pending || !original} onChange={event => setStatusMessage(event.target.value)} placeholder={t("เพิ่มข้อความสถานะของคุณ…")} />
         </label>
       </div>
-      {loading && <div className="liney-inline-message"><LoaderCircle size={16} className="spin"/> กำลังดึงข้อมูลโปรไฟล์…</div>}
-      {error && <div className="liney-inline-message liney-inline-error" role="alert"><CircleAlert size={17}/> <span>{error}</span>{!original && <button type="button" onClick={() => { setLoading(true); setAttempt(x => x + 1); }}>ลองใหม่</button>}</div>}
+      {loading && <div className="liney-inline-message"><LoaderCircle size={16} className="spin"/> {t("กำลังดึงข้อมูลโปรไฟล์…")}</div>}
+      {error && <div className="liney-inline-message liney-inline-error" role="alert"><CircleAlert size={17}/> <span>{error}</span>{!original && <button type="button" onClick={() => { setLoading(true); setAttempt(x => x + 1); }}>{t("ลองใหม่")}</button>}</div>}
       {success && <div className="liney-inline-message liney-inline-success" role="status"><Check size={17}/> {success}</div>}
       <div className="liney-editor-footer">
-        <span><ShieldCheck size={15}/> บันทึกผ่าน LINEJS โดยตรง</span>
+        <span><ShieldCheck size={15}/> {t("บันทึกผ่าน LINEJS โดยตรง")}</span>
         <div>
-          <button type="button" className="liney-button liney-button-secondary" disabled={!dirty || pending} onClick={reset}><RotateCcw size={15}/> คืนค่าเดิม</button>
-          <button type="button" className="liney-button liney-button-primary" disabled={pending || !original || !dirty || !displayName.trim()} onClick={() => void save()}>{saving ? <LoaderCircle className="spin" size={16}/> : <Save size={16}/>} {saving ? "กำลังบันทึก…" : "บันทึกการเปลี่ยนแปลง"}</button>
+          <button type="button" className="liney-button liney-button-secondary" disabled={!dirty || pending} onClick={reset}><RotateCcw size={15}/> {t("คืนค่าเดิม")}</button>
+          <button type="button" className="liney-button liney-button-primary" disabled={pending || !original || !dirty || !displayName.trim()} onClick={() => void save()}>{saving ? <LoaderCircle className="spin" size={16}/> : <Save size={16}/>} {saving ? t("กำลังบันทึก…") : t("บันทึกการเปลี่ยนแปลง")}</button>
         </div>
       </div>
     </section>
