@@ -194,6 +194,70 @@ describe("LineJsAdapter E2EE Talk media", () => {
     });
   });
 
+  test("round-trips an uploaded file through two real LINEJS E2EE clients offline", async () => {
+    const alicePrivateKey = Buffer.alloc(32, 41);
+    const alicePublicKey = publicKeyFromX25519PrivateKey(alicePrivateKey);
+    const bobPrivateKey = Buffer.alloc(32, 42);
+    const bobPublicKey = publicKeyFromX25519PrivateKey(bobPrivateKey);
+    const aliceBase = new BaseClient({ device: "ANDROID" });
+    const bobBase = new BaseClient({ device: "ANDROID" });
+    aliceBase.profile = { mid: "u-alice" } as any;
+    bobBase.profile = { mid: "u-bob" } as any;
+    aliceBase.getToType = () => 0;
+    aliceBase.e2ee.getE2EESelfKeyData = async () => ({
+      keyId: 41, privKey: alicePrivateKey.toString("base64"), pubKey: alicePublicKey.toString("base64"),
+    });
+    aliceBase.talk.negotiateE2EEPublicKey = async () => ({
+      specVersion: 2, publicKey: { keyId: 42, keyData: bobPublicKey },
+    }) as any;
+    aliceBase.talk.getE2EEPublicKeys = async () => [{ keyId: 41, keyData: alicePublicKey }] as any;
+
+    let uploadedCiphertext: Blob | undefined;
+    let sentMessage: Record<string, unknown> | undefined;
+    aliceBase.obs.uploadObjectForService = async (options: any) => {
+      uploadedCiphertext = options.data;
+      return { objId: "offline-e2ee-object", objHash: "offline-hash", headers: new Headers() };
+    };
+    aliceBase.talk.sendMessage = async (message: any) => {
+      sentMessage = message;
+      return { id: "offline-e2ee-message" } as any;
+    };
+
+    bobBase.e2ee.getE2EESelfKeyDataByKeyId = async () => ({
+      keyId: 42, privKey: bobPrivateKey.toString("base64"), pubKey: bobPublicKey.toString("base64"),
+    });
+    bobBase.e2ee.getE2EELocalPublicKey = async () => alicePublicKey;
+
+    const original = Buffer.from("Liney E2EE file round-trip — receiver must read these exact bytes.", "utf8");
+    const sendResult = await sendTalkMediaE2EE({ base: aliceBase } as any, {
+      to: "u-bob",
+      oType: "file",
+      data: new Blob([original], { type: "text/plain" }),
+      filename: "round-trip.txt",
+    });
+
+    expect(sendResult).toEqual({ id: "offline-e2ee-message" });
+    expect(uploadedCiphertext).toBeInstanceOf(Blob);
+    expect(sentMessage).toMatchObject({
+      to: "u-bob", contentType: 14, e2ee: true,
+      contentMetadata: { SID: "emf", OID: "offline-e2ee-object", e2eeVersion: "2" },
+    });
+
+    const receivedMeta = await bobBase.e2ee.decryptE2EEDataMessage({
+      id: "offline-e2ee-message", from: "u-alice", to: "u-bob", toType: "USER",
+      contentType: 14, contentMetadata: { e2eeVersion: "2" },
+      chunks: (sentMessage as any).chunks,
+    } as any);
+    expect(receivedMeta.fileName).toBe("round-trip.txt");
+    expect(Buffer.from(receivedMeta.keyMaterial, "base64")).toHaveLength(32);
+
+    const recovered = await bobBase.e2ee.decryptByKeyMaterial(
+      Buffer.from(await uploadedCiphertext!.arrayBuffer()),
+      receivedMeta.keyMaterial,
+    );
+    expect(recovered).toEqual(original);
+  });
+
   test("accepts LINE's registered sender key returned as a raw binary string", async () => {
     const privateKey = Buffer.alloc(32, 14);
     const publicKey = publicKeyFromX25519PrivateKey(privateKey);
