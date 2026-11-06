@@ -405,9 +405,17 @@ async function verifyNativeEditShortcuts(win) {
   const previousClipboard = clipboard.readText();
   resetEditActionCalls();
   const fieldId = "liney-native-edit-shortcut-smoke";
+  stage = "find-electron-x11-window";
+  const windowIds = execFileSync("xdotool", ["search", "--onlyvisible", "--pid", String(process.pid)], {
+    encoding: "utf8",
+    timeout: 3000,
+  }).trim().split(/\s+/).filter(Boolean);
+  if (windowIds.length === 0) throw new Error(`No visible X11 window found for Electron PID ${process.pid}`);
+  const x11WindowId = windowIds[windowIds.length - 1];
+  execFileSync("xdotool", ["windowraise", x11WindowId], { stdio: "ignore", timeout: 3000 });
+  execFileSync("xdotool", ["windowfocus", "--sync", x11WindowId], { stdio: "ignore", timeout: 3000 });
   const sendChord = (key) => {
-    // Use X11 input injection in Xvfb so the accelerator traverses the same
-    // platform menu registration path as a physical Linux keyboard.
+    // Send through X11 to the focused Electron window, like a physical keyboard.
     execFileSync("xdotool", ["key", "--clearmodifiers", `ctrl+${key.toLowerCase()}`], {
       stdio: "ignore",
       timeout: 3000,
@@ -425,6 +433,7 @@ async function verifyNativeEditShortcuts(win) {
       field.focus();
       return true;
     })()`);
+    execFileSync("xdotool", ["windowfocus", "--sync", x11WindowId], { stdio: "ignore", timeout: 3000 });
 
     const selectAll = async () => {
       stage = "focus-and-select-all";
