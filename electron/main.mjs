@@ -278,7 +278,9 @@ function createWindow(label="main", opts={}) {
           const pong=await requestEngine("ping");
           const helpers=bundledHelperEnvironment();
           const appMenu=Menu.getApplicationMenu();
-          const outcome={...checks,nativeHelpers:Object.keys(helpers).length,menuHidden:!win.isMenuBarVisible(),nativeEditMenu:hasNativeEditShortcuts(appMenu),nativeEditShortcuts,enginePong:Boolean(pong),renderer:"React original",system:"Electron"};
+          const editMenu=appMenu?.items?.find(item=>item.label==="Edit");
+          const editItems=(editMenu?.submenu?.items ?? []).map(item=>({label:item.label,role:item.role,accelerator:item.accelerator,registerAccelerator:item.registerAccelerator}));
+          const outcome={...checks,nativeHelpers:Object.keys(helpers).length,menuHidden:!win.isMenuBarVisible(),nativeEditMenu:hasNativeEditShortcuts(appMenu),editItems,nativeEditShortcuts,enginePong:Boolean(pong),renderer:"React original",system:"Electron"};
           console.log("LINEY_ELECTRON_SMOKE_RESULT="+JSON.stringify(outcome));
           const shortcutsPassed=Object.values(nativeEditShortcuts).every(Boolean);
           app.exit(checks.authDialog && checks.logoLoaded && checks.bridge && outcome.nativeHelpers===5 && outcome.menuHidden && outcome.nativeEditMenu && shortcutsPassed && Boolean(pong) ? 0 : 3);
@@ -430,6 +432,8 @@ async function verifyNativeEditShortcuts(win) {
     const allSelected = await selectAll();
     stage = "send-ctrl-c";
     sendChord("C");
+    stage = "wait-for-copy-clipboard";
+    await new Promise((resolve) => setTimeout(resolve, 40));
     stage = "read-copy-clipboard";
     const copied = clipboard.readText() === "liney-native-edit-test";
     stage = "send-ctrl-x";
