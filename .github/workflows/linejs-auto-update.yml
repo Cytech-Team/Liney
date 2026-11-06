@@ -30,19 +30,6 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.4.2'
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: 'src-tauri -> target'
-      - name: Install Linux native build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config patchelf libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev librsvg2-dev libasound2-dev \
-            libpipewire-0.3-dev libwayland-dev libx11-dev \
-            libxext-dev libxfixes-dev libxdamage-dev libxcomposite-dev \
-            libxrandr-dev libxdo-dev libssl-dev
       - name: Verify proposed LINEJS update
         run: |
           bun install --frozen-lockfile
@@ -67,20 +54,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.4.2'
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: 'src-tauri -> target'
 
-      - name: Install Linux native build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config patchelf libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev librsvg2-dev libasound2-dev \
-            libpipewire-0.3-dev libwayland-dev libx11-dev \
-            libxext-dev libxfixes-dev libxdamage-dev libxcomposite-dev \
-            libxrandr-dev libxdo-dev libssl-dev
 
       - name: Install current dependencies
         run: bun install --frozen-lockfile

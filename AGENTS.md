@@ -4,15 +4,15 @@
 
 Liney 0.2 is a Linux-first unofficial LINE desktop client designed to run across as many desktop Linux distributions as practical.
 
-The project direction is a clean architecture reset of the presentation layer while preserving the useful protocol/core work that already exists.
+The project direction is Electron (Chromium) as the desktop shell, reusing the existing React UI and the `liney-engine` core verbatim — no UI reimplementation. See `docs/ELECTRON_MIGRATION.md` for the preview scope and the feature gates before merge/release.
 
 ## Architecture Rules
 
-1. GTK4 + Libadwaita is the only main desktop UI stack.
-2. Legacy React/Tauri UI is not the future product path. Keep it only for migration/reference until removed or archived.
-3. UI must never import or depend on LINEJS directly.
+1. Electron is the main desktop shell: Chromium renderer + Node.js Worker thread running `engine/main.ts` in-process. No separate engine service process, no localhost HTTP port.
+2. The React UI in `src/` is the product UI. Electron is the only desktop shell; do not add a second desktop runtime.
+3. Renderer must never import or depend on LINEJS directly.
 4. `@evex/linejs` must live behind a LineJS adapter in `liney-engine`.
-5. GTK communicates with `liney-engine` through a stable versioned IPC/RPC contract.
+5. Renderer talks to the engine only through the preload bridge (`electron/preload.cjs`) and the `src/lib/desktop-api/` typed adapter layer mapping desktop commands/events to Electron IPC. No direct Node access from the renderer (`contextIsolation=true`, `sandbox=true`).
 6. SQLite is the local source of truth for user-visible cached state.
 7. Startup must be cache-first: render local data first, then restore auth and refresh network state in the background.
 8. Network work must never block the initial usable UI when cached data exists.
@@ -21,7 +21,7 @@ The project direction is a clean architecture reset of the presentation layer wh
 11. Full Sync must not run automatically on normal startup. Normal startup uses delta/background refresh.
 12. Media is lazy-loaded and viewport-driven. Do not warm large batches of media on startup.
 13. Message/chat UI updates must be incremental. Do not clear and rebuild entire lists for normal events.
-14. Prefer GTK model/view APIs such as `gio::ListStore`, `gtk::ListView`, selection models and list-item factories for large dynamic lists.
+14. Large dynamic lists must stay virtualized (`@tanstack/react-virtual`) with incremental updates. Do not clear and rebuild entire lists for normal events.
 15. Theme values must come from a centralized design system. Do not scatter hard-coded colors, spacing, radii or typography across widgets.
 16. Support System / Light / Dark through a single theme manager; Liney green is the product accent, not a replacement for semantic theme colors.
 17. App state must be explicit and centralized: auth, connection, navigation, selection, sync and UI preferences.
@@ -33,15 +33,14 @@ The project direction is a clean architecture reset of the presentation layer wh
 
 ```text
 Liney/
-├── app/                 # GTK4 + Libadwaita UI v2
-│   ├── application/
-│   ├── state/
-│   ├── repository/
-│   ├── models/
-│   ├── ui/
-│   ├── theme/
-│   └── bridge/
-├── engine/
+├── electron/            # Electron shell: main.mjs, preload.cjs, staged native helpers
+│   ├── main.mjs
+│   ├── preload.cjs
+│   └── native/          # staged liney-media/audio/screen/wayland/x11 (gitignored, CI-staged)
+├── src/                 # React product UI (reused verbatim under Electron)
+│   ├── lib/desktop-api/     # typed desktop API mapped to the Electron preload bridge
+│   └── components/
+├── engine/              # liney-engine core, runs in Node Worker under Electron
 │   ├── protocol/
 │   ├── linejs/
 │   ├── auth/
@@ -50,6 +49,7 @@ Liney/
 │   ├── media/
 │   ├── outbox/
 │   └── repository/
+├── electron/            # main process, preload and worker runtime
 ├── packaging/
 │   ├── flatpak/
 │   ├── appimage/
@@ -57,11 +57,11 @@ Liney/
 │   ├── rpm/
 │   └── arch/
 ├── tests/
-├── docs/
+├── docs/                # ELECTRON_MIGRATION.md is the gate list
 └── website/
 ```
 
-Migration may be incremental, but new code should converge toward this structure instead of extending legacy UI architecture.
+New desktop functionality must use Electron main-process APIs and the narrow preload bridge.
 
 ## Startup Workflow
 
@@ -113,9 +113,9 @@ Target desktop/display environments:
 
 - Wayland
 - X11/XWayland compatibility where needed
-- GNOME, KDE Plasma, XFCE, Cinnamon, MATE, LXQt and other common Linux desktops where GTK4 is supported.
+- GNOME, KDE Plasma, XFCE, Cinnamon, MATE, LXQt and other common Linux desktops where Electron/Chromium runs.
 
-Do not require end users to install Bun, Node.js, Deno or LINEJS manually. Build `liney-engine` as a standalone distributable sidecar with the pinned LINEJS dependency bundled.
+Do not require end users to install Bun, Node.js, Deno or LINEJS manually. The Electron AppImage/DEB/RPM must bundle the engine Worker, its pinned LINEJS dependency and the verified native helpers.
 
 For x86_64 engine release builds, prefer a broad-compatibility baseline target over CPU-specific optimizations that unnecessarily exclude older supported hardware.
 
@@ -127,7 +127,7 @@ Each release should validate at minimum:
 
 - engine unit tests
 - RPC contract tests
-- native GTK build/check
+- Electron source + packaged smoke (engine pong, auth dialog, preload bridge, no WebKit, sandbox on)
 - cache-first startup behavior
 - offline cached startup
 - push/polling fallback behavior
@@ -141,7 +141,7 @@ A release should not be marked stable while normal idle/startup behavior can cau
 
 Use `https://github.com/evex-dev/linejs` / `@evex/linejs` as the current protocol implementation, but treat it as replaceable infrastructure.
 
-Do not spread LINEJS-specific calls throughout the application. Keep compatibility work inside the adapter so future LINEJS API changes, protocol breakage or alternative implementations do not require rewriting the GTK UI.
+Do not spread LINEJS-specific calls throughout the application. Keep compatibility work inside the adapter so future LINEJS API changes, protocol breakage or alternative implementations do not require rewriting the React UI or the Electron shell.
 
 Pin and document the tested LINEJS version for each release.
 

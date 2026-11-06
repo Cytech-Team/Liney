@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.cyoriasmp.liney</id>
+  <name>Liney</name>
+  <summary>Independent unofficial LINE desktop client</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <developer id="dev.cytechteam">
+    <name>Cytech Team Development</name>
+  </developer>
+  <description>
+    <p>Liney is an independent, unofficial desktop client for LINE. This preview build uses the Electron desktop runtime.</p>
+  </description>
+  <launchable type="desktop-id">com.cyoriasmp.liney.desktop</launchable>
+  <url type="homepage">https://github.com/Cytech-Team/Liney</url>
+  <url type="bugtracker">https://github.com/Cytech-Team/Liney/issues</url>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.1.3" date="2026-11-06" />
+  </releases>
+</component>

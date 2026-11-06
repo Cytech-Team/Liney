@@ -128,7 +128,7 @@ export const messages: Record<string, Message[]> = {
   ],
   cytech: [
     { id: "c1", author: "them", text: "mock LINE client ตัวใหม่เป็นไงบ้าง", time: "10:41" },
-    { id: "c2", author: "me", text: "กำลังยกขึ้น Tauri + LINEJS อยู่", time: "10:43" },
+    { id: "c2", author: "me", text: "กำลังย้ายมา Electron + LINEJS อยู่", time: "10:43" },
     { id: "c3", author: "them", text: "เอา UI ให้สวยก่อน ที่เหลือค่อยเสียบ", time: "10:44", reaction: "✓" },
   ],
   study: [

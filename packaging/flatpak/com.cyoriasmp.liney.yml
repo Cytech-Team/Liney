@@ -1,0 +1,41 @@
+app-id: com.cyoriasmp.liney
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+command: liney-electron-preview
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=dri
+  - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=org.freedesktop.portal.Desktop
+  - --filesystem=xdg-run/pipewire-0
+modules:
+  - name: liney-electron-preview
+    buildsystem: simple
+    build-commands:
+      - install -d /app/opt
+      - mkdir -p deb-extract
+      - ar x Liney-Electron-Preview.deb
+      - tar -xJf data.tar.xz -C deb-extract
+      - install -d "/app/opt/Liney Electron Preview"
+      - cp -a "deb-extract/opt/Liney Electron Preview/." "/app/opt/Liney Electron Preview/"
+      - install -Dm755 liney-electron-preview.sh /app/bin/liney-electron-preview
+      - install -Dm644 com.cyoriasmp.liney.desktop /app/share/applications/com.cyoriasmp.liney.desktop
+      - install -Dm644 icon.png /app/share/icons/hicolor/512x512/apps/com.cyoriasmp.liney.png
+      - install -Dm644 com.cyoriasmp.liney.metainfo.xml /app/share/metainfo/com.cyoriasmp.liney.metainfo.xml
+    sources:
+      - type: file
+        path: Liney-Electron-Preview.deb
+      - type: file
+        path: liney-electron-preview.sh
+      - type: file
+        path: com.cyoriasmp.liney.desktop
+      - type: file
+        path: com.cyoriasmp.liney.metainfo.xml
+      - type: file
+        path: ../../branding/icons/icon.png

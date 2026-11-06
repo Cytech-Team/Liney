@@ -26,18 +26,7 @@ function resolveNamedLineySidecar(
     addSiblingCandidates(readlinkSync("/proc/" + process.ppid + "/exe"));
   } catch {}
 
-  const triple = process.arch === "x64"
-    ? "x86_64-unknown-linux-gnu"
-    : process.arch === "arm64"
-      ? "aarch64-unknown-linux-gnu"
-      : "";
-
   candidates.push(join(homedir(), ".local", "lib", "liney", name));
-  candidates.push(join(process.cwd(), "src-tauri", "target", "release", name));
-  if (triple) {
-    candidates.push(join(process.cwd(), "src-tauri", "binaries", name + "-" + triple));
-    candidates.push(join(process.cwd(), "build", name + "-" + triple));
-  }
 
   for (const candidate of candidates) {
     if (!candidate || !existsSync(candidate)) continue;
@@ -69,18 +58,7 @@ export function resolveLineyMediaBinary(): string | undefined {
     // /proc may be unavailable in containers or non-Linux development shells.
   }
 
-  const triple = process.arch === "x64"
-    ? "x86_64-unknown-linux-gnu"
-    : process.arch === "arm64"
-      ? "aarch64-unknown-linux-gnu"
-      : "";
-
   candidates.push(join(homedir(), ".local", "lib", "liney", "liney-media"));
-  candidates.push(join(process.cwd(), "src-tauri", "target", "release", "liney-media"));
-  if (triple) {
-    candidates.push(join(process.cwd(), "src-tauri", "binaries", "liney-media-" + triple));
-    candidates.push(join(process.cwd(), "build", "liney-media-" + triple));
-  }
 
   for (const candidate of candidates) {
     if (!candidate || !existsSync(candidate)) continue;
@@ -111,18 +89,7 @@ export function resolveLineyAudioBinary(): string | undefined {
     addSiblingCandidates(readlinkSync("/proc/" + process.ppid + "/exe"));
   } catch {}
 
-  const triple = process.arch === "x64"
-    ? "x86_64-unknown-linux-gnu"
-    : process.arch === "arm64"
-      ? "aarch64-unknown-linux-gnu"
-      : "";
-
   candidates.push(join(homedir(), ".local", "lib", "liney", "liney-audio"));
-  candidates.push(join(process.cwd(), "src-tauri", "target", "release", "liney-audio"));
-  if (triple) {
-    candidates.push(join(process.cwd(), "src-tauri", "binaries", "liney-audio-" + triple));
-    candidates.push(join(process.cwd(), "build", "liney-audio-" + triple));
-  }
 
   for (const candidate of candidates) {
     if (!candidate || !existsSync(candidate)) continue;
@@ -153,18 +120,7 @@ export function resolveLineyScreenBinary(): string | undefined {
     addSiblingCandidates(readlinkSync("/proc/" + process.ppid + "/exe"));
   } catch {}
 
-  const triple = process.arch === "x64"
-    ? "x86_64-unknown-linux-gnu"
-    : process.arch === "arm64"
-      ? "aarch64-unknown-linux-gnu"
-      : "";
-
   candidates.push(join(homedir(), ".local", "lib", "liney", "liney-screen"));
-  candidates.push(join(process.cwd(), "src-tauri", "target", "release", "liney-screen"));
-  if (triple) {
-    candidates.push(join(process.cwd(), "src-tauri", "binaries", "liney-screen-" + triple));
-    candidates.push(join(process.cwd(), "build", "liney-screen-" + triple));
-  }
 
   for (const candidate of candidates) {
     if (!candidate || !existsSync(candidate)) continue;

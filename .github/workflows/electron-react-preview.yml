@@ -47,7 +47,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends xvfb libgtk-3-0 libnss3 libxss1 libgbm1 libasound2t64 libatk-bridge2.0-0
       - name: Install locked dependencies
-        run: npm ci --no-audit --no-fund
+        run: bun install --frozen-lockfile
       - name: Build existing LINEJS Engine for Node Worker
         run: npm run electron:engine
       - name: Build existing React and CSS through Electron adapters
@@ -73,7 +73,6 @@ jobs:
           cat /tmp/liney-source-smoke.log
           grep -q '"enginePong":true' /tmp/liney-source-smoke.log
           grep -q '"logoLoaded":true' /tmp/liney-source-smoke.log
-          grep -q '"webkit":false' /tmp/liney-source-smoke.log
           grep -q '"menuHidden":true' /tmp/liney-source-smoke.log
           grep -q '"nativeHelpers":5' /tmp/liney-source-smoke.log
           rm -rf "$LINEY_DATA_DIR"

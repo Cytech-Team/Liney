@@ -6,20 +6,20 @@
   "type": "module",
   "scripts": {
     "doctor": "sh scripts/check-linux-deps.sh",
-    "dev": "sh scripts/tauri-static-dev.sh",
-    "dev:web": "sh scripts/tauri-dev.sh",
-    "build": "sh scripts/tauri-build.sh",
-    "build:deb": "sh scripts/tauri-build.sh --bundles deb",
-    "build:appimage": "sh scripts/tauri-build.sh --bundles appimage",
-    "engine:build": "sh scripts/build-sidecar.sh",
+    "dev": "npm run electron:dev",
+    "dev:web": "vite",
+    "build": "npm run electron:build",
+    "build:deb": "npm run electron:engine && npm run electron:web && npm run electron:helpers && electron-builder --linux deb",
+    "build:appimage": "npm run electron:build:appimage",
+    "engine:build": "npm run electron:engine",
     "web:dev": "vite",
     "web:build": "tsc -b && vite build",
     "web:preview": "vite preview",
     "lint": "oxlint",
     "test": "bun test",
     "test:unit": "bun test engine/*.test.ts",
-    "verify:release": "bun run doctor && bun test && bun run lint && bun run web:build && bun run engine:build && cargo build --release --manifest-path src-tauri/Cargo.toml && git diff --check",
-    "build:rpm": "sh scripts/tauri-build.sh --bundles rpm",
+    "verify:release": "npm run doctor && npm test && npm run lint && npm run electron:engine && npm run electron:web && git diff --check",
+    "build:rpm": "npm run electron:engine && npm run electron:web && npm run electron:helpers && electron-builder --linux rpm",
     "release:local": "sh scripts/package-release.sh",
     "electron:engine": "bun build engine/main.ts --target=node --packages=external --outfile electron/dist/engine.mjs",
     "electron:web": "LINEY_DESKTOP_TARGET=electron npm run web:build",
@@ -27,15 +27,13 @@
     "electron:build": "npm run electron:engine && npm run electron:web && npm run electron:helpers && electron-builder --linux AppImage deb rpm",
     "electron:build:appimage": "npm run electron:engine && npm run electron:web && npm run electron:helpers && electron-builder --linux AppImage",
     "electron:smoke": "LINEY_DISABLE_AUTO_RESTORE=1 LINEY_ELECTRON_SMOKE=1 electron .",
-    "electron:helpers": "node scripts/electron-stage-helpers.mjs"
+    "electron:helpers": "node scripts/electron-stage-helpers.mjs",
+    "build:flatpak": "sh scripts/build-flatpak.sh"
   },
   "dependencies": {
     "@evex/linejs": "npm:@jsr/evex__linejs@3.5.0",
     "@tanstack/react-virtual": "^3.14.13",
-    "@tauri-apps/api": "^2.11.1",
-    "@tauri-apps/plugin-dialog": "^2",
-    "@tauri-apps/plugin-notification": "^2",
-    "@tauri-apps/plugin-shell": "~2",
+    "electron-updater": "6.8.11",
     "lucide-react": "^1.41.0",
     "motion": "^13.2.0",
     "qrcode.react": "^4.2.0",
@@ -44,7 +42,6 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.11.4",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
@@ -60,7 +57,6 @@
   "author": "Cytech Team Development",
   "repository": "https://github.com/Cytech-Team/Liney",
   "patchedDependencies": {
-    "@jsr/evex__linejs@3.4.2": "patches/@jsr%2Fevex__linejs@3.4.2.patch",
     "lucide-react@1.41.0": "patches/lucide-react@1.41.0.patch"
   },
   "main": "electron/main.mjs",
@@ -75,19 +71,20 @@
       "dist/**/*",
       "electron/**/*",
       "electron/dist/engine.mjs",
-      "src-tauri/icons/128x128.png",
+      "branding/icons/128x128.png",
       "package.json",
       "!**/node_modules/.cache/**"
     ],
     "linux": {
       "category": "Network;InstantMessaging",
-      "icon": "src-tauri/icons",
+      "icon": "branding/icons",
       "target": [
         "AppImage",
         "deb",
         "rpm"
       ],
-      "syncDesktopName": true
+      "syncDesktopName": true,
+      "maintainer": "Cytech Team Development"
     },
     "appImage": {
       "artifactName": "Liney-Electron-Preview-${version}-${arch}.AppImage"

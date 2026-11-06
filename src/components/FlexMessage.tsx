@@ -448,7 +448,7 @@ function FlexAction({
         title={label}
         style={style}
         onClick={(event) => {
-          // Tauri's WebView does not reliably hand target=_blank links to the
+          // Electron's Chromium renderer does not reliably hand target=_blank links to the
           // desktop browser.  Delegate to the app so it can use the native
           // opener, while retaining a normal anchor for accessibility/fallback.
           event.preventDefault();
@@ -514,6 +514,7 @@ function FlexImage({ node, context, icon = false }: { node: FlexNode; context: F
   const [failed, setFailed] = useState(false);
   const alt = asString(node.altText ?? node.text) || "Flex image";
   const frameStyle = imageFrameStyle(node, context, icon);
+  const absolute = asString(node.position).toLowerCase() === "absolute";
   const aspectRatio = safeAspectRatio(node.aspectRatio);
   const imageStyle: CSSProperties = {
     display: "block",
@@ -522,7 +523,7 @@ function FlexImage({ node, context, icon = false }: { node: FlexNode; context: F
     objectFit: asString(node.aspectMode).toLowerCase() === "cover" ? "cover" : "contain",
   };
   const placeholder = (
-    <div className={`flex-image-placeholder ${icon ? "flex-icon-placeholder" : ""}`}>
+    <div className={`flex-image-placeholder ${icon ? "flex-icon-placeholder" : ""}${absolute ? " flex-image-placeholder-absolute" : ""}`}>
       {alt}
     </div>
   );
@@ -621,6 +622,7 @@ function FlexText({ node, context, inline = false }: { node: FlexNode; context: 
     textAlign: alignValue(node.align),
     whiteSpace: wrap ? "pre-wrap" : "nowrap",
     overflow: inline ? "visible" : "hidden",
+    textOverflow: inline || wrap ? undefined : "ellipsis",
     textDecoration: decoration,
   };
   const lineSpacing = safeDimension(node.lineSpacing, false);

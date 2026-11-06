@@ -1,6 +1,7 @@
 import { bindClientStorage, createTemporaryQrStorage, getTargetProfiles, LineJsAdapter, parseE2EEKeyData, type LineClient, type LineyPollingSession } from "./linejs/adapter";
 import { resolveTalkOwnership, reconcileTalkOwnership } from "./talk-ownership";
 import { presentOwnProfile } from "./linejs/profile-display";
+import { resolveFavoriteTime } from "./linejs/favorite-state";
 // Keep all LINEJS values behind the adapter boundary. This makes replacing the
 // protocol implementation a local engine change instead of a repository-wide
 // import migration.
@@ -2385,6 +2386,9 @@ async function loadFriendsList(persist = true, canPersist: () => boolean = () =>
   const users: any[] = retryOnly
     ? await LineJsAdapter.retryMissingFriendProfiles(client)
     : await LineJsAdapter.fetchUsers(client);
+  const cachedFriends = new Map(
+    database.listChats(ACCOUNT_ID, "dm").map((chat) => [chat.id, chat]),
+  );
   const contacts = users.map((user) => {
     const raw = user?.raw ?? {};
     const mid = String(user?.mid ?? raw?.targetUserMid ?? "").trim();
@@ -2393,7 +2397,11 @@ async function loadFriendsList(persist = true, canPersist: () => boolean = () =>
   }).filter(({ mid }) => mid.startsWith("u"));
   const friendsByMid = new Map<string, any>();
   for (const { mid, raw, contact } of contacts) {
-    const favoriteTime = Number(contact?.favoriteTime ?? raw?.favoriteTime ?? 0);
+    // Contact profile endpoints often omit favoriteTime entirely. Treat an
+    // omitted field as unknown and retain the last known state; an explicit
+    // zero remains authoritative so removing a Favorite still takes effect.
+    const favoriteValue = contact?.favoriteTime ?? raw?.favoriteTime;
+    const favoriteTime = resolveFavoriteTime(favoriteValue, cachedFriends.get(mid)?.favoriteTime);
     const identity = talkContactIdentity(mid, raw);
     const previousIdentity = talkSenderCache.get(mid);
     const currentName = usefulTalkName(identity.name);
@@ -3979,7 +3987,7 @@ function attachEvents(next: LineClient) {
 async function finishAuthentication(next: LineClient, restored: boolean) {
   // Validate the session against LINE before declaring it ready.  Full sync is
   // deliberately *not* part of this critical path: waiting for hundreds of
-  // rooms here held the entire Tauri login screen in "starting" state.
+  // rooms here held the entire desktop login screen in "starting" state.
   const profile: any = await next.getMyProfile();
   const account = await activateAccount(profile);
   database.consolidateTalkIdentityAliases(ACCOUNT_ID);
@@ -6185,7 +6193,7 @@ restorePromise = process.env.LINEY_DISABLE_AUTO_RESTORE === "1"
   ? Promise.resolve()
   : autoRestore();
 
-// Legacy Tauri uses JSONL over standard IO. The native Slint UI runs
+// The Electron main process communicates with the engine worker over JSONL. The native Slint UI runs
 // this same engine in a Worker Thread, sharing its OS process and Node runtime.
 const rl: Interface | null = parentPort
   ? null

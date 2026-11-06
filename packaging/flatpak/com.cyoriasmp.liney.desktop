@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Liney Electron Preview
+Comment=Independent unofficial LINE desktop client for Linux
+Exec=liney-electron-preview %U
+Terminal=false
+Type=Application
+Icon=com.cyoriasmp.liney
+StartupWMClass=dev.cytechteam.liney.electron-preview
+Categories=Network;InstantMessaging;
