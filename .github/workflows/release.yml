@@ -11,8 +11,9 @@ permissions:
 
 jobs:
   release-linux:
+    name: Build AppImage, DEB and RPM
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -23,7 +24,7 @@ jobs:
         with:
           bun-version: '1.4.4'
       - name: Install Electron Linux runtime dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-3-0 libnss3 libxss1 libgbm1 libasound2t64 libatk-bridge2.0-0 rpm file patchelf flatpak flatpak-builder
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-3-0 libnss3 libxss1 libgbm1 libasound2t64 libatk-bridge2.0-0 rpm file patchelf
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
       - name: Verify tag version
@@ -32,26 +33,91 @@ jobs:
         run: test "${GITHUB_REF_NAME#v}" = "$(node -p 'require("./package.json").version')"
       - name: Build engine and desktop packages
         run: npm run electron:build
-      - name: Set up Flathub runtime
+      - name: Verify desktop packages
+        shell: bash
         run: |
-          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-          flatpak install --user --noninteractive flathub org.gnome.Platform//50 org.gnome.Sdk//50
-      - name: Build Electron Flatpak
-        run: npm run build:flatpak
-      - name: Upload build artifacts
-        if: github.event_name == 'workflow_dispatch'
+          set -euo pipefail
+          ls -lh release-electron/*.AppImage release-electron/*.deb release-electron/*.rpm
+          test -s release-electron/Liney-Electron-Preview-$(node -p 'require("./package.json").version')-x86_64.AppImage
+          test -s release-electron/Liney-Electron-Preview-$(node -p 'require("./package.json").version')-amd64.deb
+          test -s release-electron/Liney-Electron-Preview-$(node -p 'require("./package.json").version')-x86_64.rpm
+      - name: Upload desktop package artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: liney-electron-linux-${{ github.sha }}
+          name: liney-electron-packages-${{ github.sha }}
           path: |
             release-electron/*.AppImage
             release-electron/*.deb
             release-electron/*.rpm
-            release-electron/*.flatpak
           if-no-files-found: error
           retention-days: 14
+
+  flatpak:
+    name: Build Electron Flatpak
+    needs: release-linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Download desktop packages
+        uses: actions/download-artifact@v4
+        with:
+          name: liney-electron-packages-${{ github.sha }}
+          path: release-electron
+      - name: Install Flatpak build tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends flatpak flatpak-builder file
+      - name: Set up Flathub runtime
+        run: |
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user --noninteractive --assumeyes flathub org.gnome.Platform//50 org.gnome.Sdk//50
+      - name: Build Electron Flatpak (without FUSE)
+        env:
+          G_MESSAGES_DEBUG: all
+        run: npm run build:flatpak
+      - name: Verify Flatpak bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p 'require("./package.json").version')
+          BUNDLE="release-electron/Liney-Electron-Preview-${VERSION}-x86_64.flatpak"
+          test -s "$BUNDLE"
+          ls -lh "$BUNDLE"
+          flatpak build-bundle --help >/dev/null
+      - name: Upload Flatpak artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: liney-electron-flatpak-${{ github.sha }}
+          path: release-electron/*.flatpak
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - release-linux
+      - flatpak
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download desktop packages
+        uses: actions/download-artifact@v4
+        with:
+          name: liney-electron-packages-${{ github.sha }}
+          path: release-electron
+      - name: Download Flatpak bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: liney-electron-flatpak-${{ github.sha }}
+          path: release-electron
+      - name: Verify release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -lh release-electron/*.AppImage release-electron/*.deb release-electron/*.rpm release-electron/*.flatpak
       - name: Publish GitHub Release assets
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true

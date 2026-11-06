@@ -21,6 +21,6 @@ done
 cleanup() { rm -f "$SOURCE"; }
 trap cleanup EXIT HUP INT TERM
 cp "$DEB" "$SOURCE"
-flatpak-builder --force-clean --repo="$REPO" "$BUILD_DIR" "$MANIFEST"
+flatpak-builder --verbose --disable-rofiles-fuse --default-branch=preview --force-clean --repo="$REPO" "$BUILD_DIR" "$MANIFEST"
 flatpak build-bundle "$REPO" "$OUTPUT" com.cyoriasmp.liney preview
 echo "Built $OUTPUT"
