@@ -19,7 +19,11 @@ describe("Electron native Edit menu", () => {
     const fakeMenu = {
       items: [{
         label: "Edit",
-        submenu: { items: EDIT_MENU_TEMPLATE[0].submenu },
+        submenu: { items: EDIT_MENU_TEMPLATE[0].submenu.map((item) => ({
+          ...item,
+          role: item.role === "selectAll" ? "selectall" : item.role,
+          accelerator: item.role ? "CommandOrControl+A" : undefined,
+        })) },
       }],
     };
     const fakeElectronMenu = {
@@ -39,7 +43,7 @@ describe("Electron native Edit menu", () => {
 
   test("fails closed when an editing accelerator role is missing", () => {
     const incompleteMenu = {
-      items: [{ label: "Edit", submenu: { items: [{ role: "copy", registerAccelerator: false }, { role: "paste", registerAccelerator: true }] } }],
+      items: [{ label: "Edit", submenu: { items: [{ role: "copy", registerAccelerator: false, accelerator: "CommandOrControl+C" }, { role: "paste", registerAccelerator: true, accelerator: "CommandOrControl+V" }] } }],
     };
 
     expect(hasNativeEditShortcuts(incompleteMenu)).toBe(false);

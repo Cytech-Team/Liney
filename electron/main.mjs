@@ -433,9 +433,11 @@ async function verifyNativeEditShortcuts(win) {
     stage = "send-ctrl-c";
     sendChord("C");
     stage = "wait-for-copy-clipboard";
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await new Promise((resolve) => setTimeout(resolve, 150));
     stage = "read-copy-clipboard";
-    const copied = clipboard.readText() === "liney-native-edit-test";
+    const copiedText = clipboard.readText("clipboard");
+    const selectionAfterCopy = await win.webContents.executeJavaScript(`(() => { const field = document.getElementById("${fieldId}"); return { start: field.selectionStart, end: field.selectionEnd, value: field.value }; })()`);
+    const copied = copiedText === "liney-native-edit-test";
     stage = "send-ctrl-x";
     sendChord("X");
     stage = "verify-ctrl-x";

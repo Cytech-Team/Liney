@@ -20,7 +20,7 @@ export const EDIT_MENU_TEMPLATE = [
   },
 ];
 
-const REQUIRED_EDIT_ROLES = ["cut", "copy", "paste", "selectAll"];
+const REQUIRED_EDIT_ROLES = ["cut", "copy", "paste", "selectall"];
 
 export function installNativeEditMenu(Menu) {
   const menu = Menu.buildFromTemplate(EDIT_MENU_TEMPLATE);
@@ -32,6 +32,11 @@ export function hasNativeEditShortcuts(menu) {
   const editMenu = menu?.items?.find((item) => item.label === "Edit");
   const items = editMenu?.submenu?.items ?? [];
   return REQUIRED_EDIT_ROLES.every((role) => (
-    items.some((item) => item.role === role && item.registerAccelerator === true)
+    items.some((item) => (
+      String(item.role ?? "").toLowerCase() === role.toLowerCase()
+      && item.registerAccelerator === true
+      && typeof item.accelerator === "string"
+      && item.accelerator.length > 0
+    ))
   ));
 }
