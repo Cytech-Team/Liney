@@ -1,5 +1,7 @@
 import { bindClientStorage, createTemporaryQrStorage, getTargetProfiles, LineJsAdapter, parseE2EEKeyData, type LineClient, type LineyPollingSession } from "./linejs/adapter";
+import { resolveTalkOwnership, reconcileTalkOwnership } from "./talk-ownership";
 import { presentOwnProfile } from "./linejs/profile-display";
+import { resolveFavoriteTime } from "./linejs/favorite-state";
 // Keep all LINEJS values behind the adapter boundary. This makes replacing the
 // protocol implementation a local engine change instead of a repository-wide
 // import migration.
@@ -21,7 +23,8 @@ import { readFileSync } from "node:fs";
 import { rename as renameAsync, rm as rmAsync, unlink as unlinkAsync, writeFile as writeFileAsync } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
+import { createInterface, type Interface } from "node:readline";
+import { parentPort } from "node:worker_threads";
 import { runFallbackPolling } from "./events/fallback-polling";
 import { OrderedOperationDispatcher, talkOperationIdentity, squareOperationIdentity } from "./events/ordered-operation-dispatcher";
 import { PUSH_STARTUP_GRACE_MS, shouldUsePollingFallback } from "./events/push-health";
@@ -80,7 +83,7 @@ import { PROTOCOL_VERSION } from "./protocol/protocol";
 
 const LINEJS_VERSION = LineJsAdapter.version;
 let ACCOUNT_ID = "default";
-process.umask(0o077);
+if (!parentPort) process.umask(0o077); // Node Workers inherit the host's secure umask.
 let client: LineClient | null = null;
 let loginInFlight = false;
 let authGeneration = 0;
@@ -332,7 +335,8 @@ function emit(payload: unknown) {
       return { version: PROTOCOL_VERSION, ...record };
     })()
     : payload;
-  process.stdout.write(`${JSON.stringify(value)}\n`);
+  if (parentPort) parentPort.postMessage(value);
+  else process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
 function dataPath() {
@@ -2382,6 +2386,9 @@ async function loadFriendsList(persist = true, canPersist: () => boolean = () =>
   const users: any[] = retryOnly
     ? await LineJsAdapter.retryMissingFriendProfiles(client)
     : await LineJsAdapter.fetchUsers(client);
+  const cachedFriends = new Map(
+    database.listChats(ACCOUNT_ID, "dm").map((chat) => [chat.id, chat]),
+  );
   const contacts = users.map((user) => {
     const raw = user?.raw ?? {};
     const mid = String(user?.mid ?? raw?.targetUserMid ?? "").trim();
@@ -2390,7 +2397,11 @@ async function loadFriendsList(persist = true, canPersist: () => boolean = () =>
   }).filter(({ mid }) => mid.startsWith("u"));
   const friendsByMid = new Map<string, any>();
   for (const { mid, raw, contact } of contacts) {
-    const favoriteTime = Number(contact?.favoriteTime ?? raw?.favoriteTime ?? 0);
+    // Contact profile endpoints often omit favoriteTime entirely. Treat an
+    // omitted field as unknown and retain the last known state; an explicit
+    // zero remains authoritative so removing a Favorite still takes effect.
+    const favoriteValue = contact?.favoriteTime ?? raw?.favoriteTime;
+    const favoriteTime = resolveFavoriteTime(favoriteValue, cachedFriends.get(mid)?.favoriteTime);
     const identity = talkContactIdentity(mid, raw);
     const previousIdentity = talkSenderCache.get(mid);
     const currentName = usefulTalkName(identity.name);
@@ -2733,7 +2744,7 @@ async function fetchTalkMessagesNormalized(
         : contentType === 17 ? (rich?.altText || "Rich message") : displayMessageText(message?.text, contentType, raw),
       from,
       to,
-      isMine: Boolean(message?.isMyMessage),
+      isMine: resolveTalkOwnership(selfMid, from, message?.isMyMessage),
       createdTime: Number(raw?.createdTime ?? Date.now()),
       contentType,
       readCount: Math.max(0, Number(raw?.readCount ?? 0)),
@@ -2880,12 +2891,15 @@ function decorateReplyReferences(messages: any[]): any[] {
     if (!replyId) return message;
     const chatId = String(message?.chatId ?? "").trim();
     const target = byId.get(replyId) ?? (chatId ? database.getMessage(ACCOUNT_ID, chatId, replyId) : null);
+    const selfMid = client ? midString(LineJsAdapter.profileMid(client)) : "";
+    const correctedTarget = target && target.kind !== "openchat"
+      ? reconcileTalkOwnership(target, selfMid) : target;
     return {
       ...message,
       replyTo: {
         id: replyId,
-        text: String(target?.text ?? "ข้อความ"),
-        author: target?.isMine ? "me" : "them",
+        text: String(correctedTarget?.text ?? "ข้อความ"),
+        author: correctedTarget?.isMine ? "me" : "them",
         ...(target?.senderName ? { senderName: target.senderName } : {}),
       },
     };
@@ -2893,7 +2907,10 @@ function decorateReplyReferences(messages: any[]): any[] {
 }
 
 function decorateStoredMessages(messages: DatabaseMessage[]): any[] {
-  const decorated = messages.map((message) => {
+  const selfMid = client ? midString(LineJsAdapter.profileMid(client)) : "";
+  const decorated = messages.map((cachedMessage) => {
+    const message = cachedMessage.kind === "openchat" ? cachedMessage
+      : reconcileTalkOwnership(cachedMessage, selfMid);
     const stickerUrl = messageStickerUrl(message);
     const flex = messageFlex(message);
     const rich = Number(message.contentType ?? 0) === 17 ? parseRichMessage(message.raw) : undefined;
@@ -2968,6 +2985,9 @@ function listCallHistory(limit = 200): any[] {
 
 async function enrichStoredTalkSenders(messages: DatabaseMessage[]): Promise<DatabaseMessage[]> {
   if (!client) return messages;
+  const selfMid = midString(LineJsAdapter.profileMid(client));
+  messages = messages.map((message) => message.kind === "openchat"
+    ? message : reconcileTalkOwnership(message, selfMid));
   const senderMidForMessage = (message: DatabaseMessage): string => {
     const senderId = String(message.senderId ?? "").trim();
     return senderId || midString((message.raw as any)?.from);
@@ -3967,7 +3987,7 @@ function attachEvents(next: LineClient) {
 async function finishAuthentication(next: LineClient, restored: boolean) {
   // Validate the session against LINE before declaring it ready.  Full sync is
   // deliberately *not* part of this critical path: waiting for hundreds of
-  // rooms here held the entire Tauri login screen in "starting" state.
+  // rooms here held the entire desktop login screen in "starting" state.
   const profile: any = await next.getMyProfile();
   const account = await activateAccount(profile);
   database.consolidateTalkIdentityAliases(ACCOUNT_ID);
@@ -5060,7 +5080,7 @@ async function handle(request: any) {
   }
 
   if (method === "ping") {
-    emit({ id, ok: true, result: { pong: true, protocolVersion: PROTOCOL_VERSION, linejsVersion: LINEJS_VERSION } });
+    emit({ id, ok: true, result: { pong: true, protocolVersion: PROTOCOL_VERSION, linejsVersion: LINEJS_VERSION, processId: process.pid } });
     return;
   }
 
@@ -6173,16 +6193,32 @@ restorePromise = process.env.LINEY_DISABLE_AUTO_RESTORE === "1"
   ? Promise.resolve()
   : autoRestore();
 
-const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
-rl.on("line", (line) => {
-  const trimmed = line.trim();
-  if (!trimmed) return;
-  try {
-    void handle(JSON.parse(trimmed));
-  } catch (error) {
-    emit({ ok: false, error: errorInfo(error) });
-  }
-});
+// The Electron main process communicates with the engine worker over JSONL. The native Slint UI runs
+// this same engine in a Worker Thread, sharing its OS process and Node runtime.
+const rl: Interface | null = parentPort
+  ? null
+  : createInterface({ input: process.stdin, crlfDelay: Infinity });
+if (parentPort) {
+  parentPort.on("message", (request: unknown) => {
+    if (request && typeof request === "object" && !Array.isArray(request)) {
+      if ((request as Record<string, unknown>).type === "liney:shutdown") {
+        void shutdown().finally(() => process.exit(0));
+      } else {
+        void handle(request);
+      }
+    }
+  });
+} else {
+  rl?.on("line", (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    try {
+      void handle(JSON.parse(trimmed));
+    } catch (error) {
+      emit({ ok: false, error: errorInfo(error) });
+    }
+  });
+}
 
 let shutdownInFlight: Promise<void> | null = null;
 const shutdown = async (): Promise<void> => {
@@ -6190,7 +6226,7 @@ const shutdown = async (): Promise<void> => {
   shutdownInFlight = (async () => {
     listenerAbort?.abort();
     await callManager.stop("engine-shutdown").catch(() => undefined);
-    rl.close();
+    rl?.close();
   })();
   return shutdownInFlight;
 };

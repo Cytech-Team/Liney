@@ -9,7 +9,7 @@
 
 <p>
   <a href="#development-requirements"><img src="https://img.shields.io/badge/Platform-Linux-1EC87E?style=for-the-badge&logo=linux&logoColor=white" alt="Platform: Linux"></a>
-  <a href="#what-liney-is"><img src="https://img.shields.io/badge/Desktop-React_%2B_Tauri-182B29?style=for-the-badge&logo=tauri&logoColor=5FE6B0" alt="Desktop UI: React and Tauri"></a>
+  <a href="#what-liney-is"><img src="https://img.shields.io/badge/Desktop-React_%2B_Electron-182B29?style=for-the-badge&logo=electron&logoColor=9FEAF9" alt="Desktop UI: React and Electron"></a>
   <a href="#engine-rpc"><img src="https://img.shields.io/badge/Engine-Bun_%2B_TypeScript-182B29?style=for-the-badge&logo=typescript&logoColor=5FE6B0" alt="Engine: Bun and TypeScript"></a>
 </p>
 
@@ -39,7 +39,7 @@
 ---
 
 Liney is an independent Linux desktop client for LINE. The UI is built with
-React + Tauri (WebView), the protocol engine is a standalone TypeScript/Bun
+React + Electron (Chromium), the protocol engine is a standalone TypeScript/Bun
 sidecar, and it uses SQLite + LINEJS. The application connects to LINE
 directly from the user's device; Liney does not operate a relay server or
 collect messages through a central backend.
@@ -85,7 +85,7 @@ automation framework.
 
 ```mermaid
 flowchart LR
-    UI["Liney UI<br/>React + Tauri WebView"]
+    UI["Liney UI<br/>React + Electron Chromium"]
     ENGINE["Liney Engine<br/>Bun + TypeScript"]
     LINE["LINE services"]
 
@@ -164,8 +164,7 @@ archives.
 
 ## Development requirements
 
-Building Liney from source requires Bun 1.4+, Rust 1.85+, WebKitGTK 4.1
-development files for the Tauri/Wry UI, and the development libraries used to
+Building Liney from source requires Bun 1.4+, Node.js 22+, Bun 1.4+, and the Linux libraries used to
 compile the optional native capability sidecars. These are source-build
 requirements, not a requirement that every runtime feature be present.
 
@@ -198,7 +197,7 @@ deliberately does not use an XWayland root window as a fake Wayland desktop
 capture. If one capability cannot run, only that capability is disabled; the
 rest of Liney continues to work.
 
-Start the desktop app (React + Tauri WebView):
+Start the desktop app (React + Electron):
 
 ```sh
 bun install
@@ -270,7 +269,7 @@ and the engine RPC contract.
 
 ## Build and release
 
-The release workflow builds the engine sidecar and React + Tauri desktop app,
+The release workflow builds the engine sidecar and React + Electron desktop app,
 then packages AppImage, DEB, RPM and portable TAR.GZ for x86_64 and aarch64.
 It also builds a Flatpak bundle for x86_64. Artifacts and SHA-256 checksums are
 attached to a published GitHub Release when its version tag passes all jobs.
@@ -280,8 +279,8 @@ PKGBUILD files in this repository are not AUR listings.
 Local helpers:
 
 ```sh
-bun run dev        # static Tauri WebView; ไม่แย่ง port
-bun run dev:web    # optional Vite + Tauri HMR
+npm run electron:dev  # Electron desktop app
+npm run web:dev       # Vite renderer only
 bun run build          # release .deb + AppImage (also builds the sidecar)
 bun run build:deb      # Debian package only
 bun run build:appimage # AppImage only
@@ -384,7 +383,7 @@ Validated Linux release artifacts are generated with:
 bun run release:local
 ```
 
-This runs the source-build/capability doctor, unit tests, lint, and Tauri packaging, then writes
+This runs the source-build/capability doctor, unit tests, lint, and Electron packaging, then writes
 versioned AppImage, Debian, RPM, portable tarball, and SHA-256 checksum files to
 `release/`. The portable tarball includes `install-user.sh` for a per-user install.
 

@@ -1,4 +1,4 @@
-name: release
+name: Electron Linux Release
 
 on:
   workflow_dispatch:
@@ -10,191 +10,117 @@ permissions:
   contents: write
 
 jobs:
-  linux:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64
-            runner: ubuntu-24.04
-          - arch: aarch64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-
+  release-linux:
+    name: Build AppImage, DEB and RPM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: '1.4.2'
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Tauri Linux build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgstreamer1.0-dev \
-            gstreamer1.0-tools \
-            gstreamer1.0-plugins-base \
-            gstreamer1.0-plugins-good \
-            gstreamer1.0-plugins-bad \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libgdk-pixbuf-2.0-dev \
-            libasound2-dev \
-            libpipewire-0.3-dev \
-            libwayland-dev \
-            libx11-dev \
-            libxext-dev \
-            libxfixes-dev \
-            libxdamage-dev \
-            libxcomposite-dev \
-            libxrandr-dev \
-            libxdo-dev \
-            libssl-dev \
-            patchelf \
-            xdg-utils \
-            rpm \
-            file \
-            curl
-
-      - name: Install JavaScript dependencies
+          bun-version: '1.4.4'
+      - name: Install Electron Linux runtime dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-3-0 libnss3 libxss1 libgbm1 libasound2t64 libatk-bridge2.0-0 rpm file patchelf
+      - name: Install locked dependencies
         run: bun install --frozen-lockfile
-
-      - name: Verify tag matches application version
+      - name: Verify tag version
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
-        run: |
-          set -euo pipefail
-          version="$(bun -e 'console.log(require("./package.json").version)')"
-          tag="${GITHUB_REF_NAME#v}"
-          test "$version" = "$tag" || {
-            echo "Tag v${tag} does not match package version ${version}" >&2
-            exit 1
-          }
-
-      - name: Build and verify release artifacts
-        env:
-          NO_STRIP: 'true'
-        run: bun run release:local
-
-      - name: Prove WebKit/Tauri binary linkage
+        run: test "${GITHUB_REF_NAME#v}" = "$(node -p 'require("./package.json").version')"
+      - name: Build engine and desktop packages
+        run: npm run electron:build
+      - name: Verify desktop packages
         shell: bash
         run: |
           set -euo pipefail
-          ldd src-tauri/target/release/liney | tee /tmp/liney-ldd.txt
-          grep -q 'libwebkit2gtk' /tmp/liney-ldd.txt
-          grep -q 'libgtk-3' /tmp/liney-ldd.txt
-          ! grep -q 'not found' /tmp/liney-ldd.txt
-
-      - name: Verify AppImage contains working GStreamer plugins
-        shell: bash
-        run: |
-          set -euo pipefail
-          appimage="release/Liney-$(node -p 'require("./package.json").version')-linux-${{ matrix.arch }}.AppImage"
-          test -s "$appimage"
-          temp="$(mktemp -d)"
-          trap 'rm -rf "$temp"' EXIT
-          (cd "$temp" && "$GITHUB_WORKSPACE/$appimage" --appimage-extract usr/lib/gstreamer-1.0 >/dev/null)
-          (cd "$temp" && "$GITHUB_WORKSPACE/$appimage" --appimage-extract apprun-hooks/liney-gstreamer.sh >/dev/null)
-          plugins="$temp/squashfs-root/usr/lib/gstreamer-1.0"
-          for plugin in app autodetect coreelements playback audiofx opengl subenc; do
-            test -s "$plugins/libgst${plugin}.so" || { echo "::error::Missing libgst${plugin}.so in AppImage"; exit 1; }
-          done
-          test -x "$plugins/gst-plugin-scanner"
-          test -s "$temp/squashfs-root/apprun-hooks/liney-gstreamer.sh"
-
-          # Exercise the exact plugin search path used by AppRun. A system
-          # gst-inspect reading host plugins here would be a false positive.
-          appdir="$GITHUB_WORKSPACE/src-tauri/target/release/bundle/appimage/Liney.AppDir"
-          for element in appsink autoaudiosink scaletempo glupload webvttenc; do
-            env LD_LIBRARY_PATH="$appdir/usr/lib" \
-              GST_PLUGIN_PATH='' GST_PLUGIN_PATH_1_0='' \
-              GST_PLUGIN_SYSTEM_PATH="$appdir/usr/lib/gstreamer-1.0" \
-              GST_PLUGIN_SYSTEM_PATH_1_0="$appdir/usr/lib/gstreamer-1.0" \
-              GST_PLUGIN_SCANNER="$appdir/usr/lib/gstreamer-1.0/gst-plugin-scanner" \
-              GST_REGISTRY="$temp/gst-registry" \
-              gst-inspect-1.0 "$element" >/dev/null
-          done
-
-      - uses: actions/upload-artifact@v4
+          ls -lh release-electron/*.AppImage release-electron/*.deb release-electron/*.rpm
+          test -s release-electron/Liney-Electron-Preview-$(node -p 'require("./package.json").version')-x86_64.AppImage
+          test -s release-electron/Liney-Electron-Preview-$(node -p 'require("./package.json").version')-amd64.deb
+          test -s release-electron/Liney-Electron-Preview-$(node -p 'require("./package.json").version')-x86_64.rpm
+      - name: Upload desktop package artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: liney-linux-${{ matrix.arch }}
-          if-no-files-found: error
+          name: liney-electron-packages-${{ github.sha }}
           path: |
-            release/Liney-*-linux-${{ matrix.arch }}.AppImage
-            release/Liney-*-linux-${{ matrix.arch }}.deb
-            release/Liney-*-linux-${{ matrix.arch }}.rpm
-            release/Liney-*-linux-${{ matrix.arch }}.tar.gz
-            release/Liney-*-linux-${{ matrix.arch }}.sha256
+            release-electron/*.AppImage
+            release-electron/*.deb
+            release-electron/*.rpm
+          if-no-files-found: error
+          retention-days: 14
 
   flatpak:
-    needs: linux
+    name: Build Electron Flatpak
+    needs: release-linux
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/setup-node@v4
         with:
-          name: liney-linux-x86_64
-          path: release-assets
-      - name: Install Flatpak packaging tools
+          node-version: '22'
+      - name: Download desktop packages
+        uses: actions/download-artifact@v4
+        with:
+          name: liney-electron-packages-${{ github.sha }}
+          path: release-electron
+      - name: Install Flatpak build tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends flatpak flatpak-builder file elfutils
+      - name: Set up Flathub runtime
         run: |
-          sudo apt-get update
-          sudo apt-get install -y flatpak flatpak-builder
-          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-          flatpak install --user -y flathub org.gnome.Platform//50 org.gnome.Sdk//50
-      - name: Build verified Flatpak bundle
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user --noninteractive --assumeyes flathub org.gnome.Platform//50 org.gnome.Sdk//50
+      - name: Build Electron Flatpak (without FUSE)
+        run: npm run build:flatpak
+      - name: Verify Flatpak bundle
         shell: bash
         run: |
           set -euo pipefail
-          version=$(node -p 'require("./package.json").version')
-          cp "release-assets/Liney-${version}-linux-x86_64.deb" packaging/flatpak/Liney-release.deb
-          flatpak-builder --user --install-deps-from=flathub --force-clean --repo=flatpak-repo flatpak-build packaging/flatpak/com.cyoriasmp.Liney.yml
-          mkdir -p release
-          flatpak build-bundle flatpak-repo "release/Liney-${version}-linux-x86_64.flatpak" com.cyoriasmp.Liney \
-            --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
-          test -s "release/Liney-${version}-linux-x86_64.flatpak"
-          (cd release && sha256sum "Liney-${version}-linux-x86_64.flatpak" > "Liney-${version}-linux-x86_64.flatpak.sha256")
-      - uses: actions/upload-artifact@v4
+          VERSION=$(node -p 'require("./package.json").version')
+          BUNDLE="release-electron/Liney-Electron-Preview-${VERSION}-x86_64.flatpak"
+          test -s "$BUNDLE"
+          ls -lh "$BUNDLE"
+          flatpak build-bundle --help >/dev/null
+      - name: Upload Flatpak artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: liney-flatpak-x86_64
+          name: liney-electron-flatpak-${{ github.sha }}
+          path: release-electron/*.flatpak
           if-no-files-found: error
-          path: |
-            release/*.flatpak
-            release/*.flatpak.sha256
+          retention-days: 14
 
-  publish:
+  publish-release:
+    name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, flatpak]
+    needs:
+      - release-linux
+      - flatpak
     runs-on: ubuntu-24.04
-
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download desktop packages
+        uses: actions/download-artifact@v4
         with:
-          pattern: liney-*
-          path: release-assets
-          merge-multiple: true
-
-      - name: Verify staged release files
+          name: liney-electron-packages-${{ github.sha }}
+          path: release-electron
+      - name: Download Flatpak bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: liney-electron-flatpak-${{ github.sha }}
+          path: release-electron
+      - name: Verify release assets
         shell: bash
         run: |
           set -euo pipefail
-          find release-assets -maxdepth 1 -type f -printf '%f\n' | sort
-          test -n "$(find release-assets -maxdepth 1 -type f -name '*.flatpak' -print -quit)"
-          test -n "$(find release-assets -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
-          test -n "$(find release-assets -maxdepth 1 -type f -name '*.deb' -print -quit)"
-          test -n "$(find release-assets -maxdepth 1 -type f -name '*.rpm' -print -quit)"
-          test -n "$(find release-assets -maxdepth 1 -type f -name '*.tar.gz' -print -quit)"
-          test -n "$(find release-assets -maxdepth 1 -type f -name '*.sha256' -print -quit)"
-
+          ls -lh release-electron/*.AppImage release-electron/*.deb release-electron/*.rpm release-electron/*.flatpak
       - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          prerelease: false
-          make_latest: true
-          fail_on_unmatched_files: true
-          files: release-assets/*
+          files: |
+            release-electron/*.AppImage
+            release-electron/*.deb
+            release-electron/*.rpm
+            release-electron/*.flatpak

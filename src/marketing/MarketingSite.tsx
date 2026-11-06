@@ -173,7 +173,7 @@ function Landing({ onNavigate }: { onNavigate: (path: string) => void }) {
       </section>
 
       <section className="marketing-proof-row marketing-container" aria-label="จุดเด่นของ Liney">
-        <ProofItem icon={Code2} label="React + Tauri WebView" />
+        <ProofItem icon={Code2} label="React + Electron Chromium" />
         <ProofItem icon={Zap} label="Bun + TypeScript engine" />
         <ProofItem icon={Database} label="SQLite local history" />
         <ProofItem icon={ShieldCheck} label="Independent project" />
@@ -204,7 +204,7 @@ function Landing({ onNavigate }: { onNavigate: (path: string) => void }) {
             <h2>สามชั้นที่แยกหน้าที่กัน</h2>
             <p>เว็บนี้มีไว้ให้เห็นภาพของระบบ ส่วนแอป desktop จริงจะรัน engine ภายในเครื่องของผู้ใช้และเก็บข้อมูลไว้ local</p>
             <div className="marketing-stack-list">
-              <StackRow color="green" title="Liney UI" body="React + Tauri WebView" />
+              <StackRow color="green" title="Liney UI" body="React + Electron Chromium" />
               <StackRow color="blue" title="Liney engine" body="Bun + TypeScript + SQLite" />
               <StackRow color="dark" title="LINE protocol" body="LINEJS adapter" />
             </div>

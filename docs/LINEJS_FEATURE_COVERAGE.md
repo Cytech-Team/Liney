@@ -49,7 +49,7 @@ Historical releases: https://github.com/evex-dev/linejs/releases?page=2
 
 1. Track every stable LINEJS release, not only major releases.
 2. Update pinned dependency in a **reviewable branch/PR**, include upstream release notes and file diff.
-3. Map upstream APIs to typed Liney adapter methods. Never import LINEJS directly in React/Tauri UI.
+3. Map upstream APIs to typed Liney adapter methods. Never import LINEJS directly in React UI.
 4. Advertise only capabilities that Liney actually implements; mark experiments separately from *live validated*.
 5. For each new feature: add RPC, UX states, permissions/consent, mock/contract tests, and a test plan using a separate authorized account.
 6. Run Bun tests, lint, TypeScript + Vite build, standalone sidecar build, and offline startup contract tests.

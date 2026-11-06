@@ -1,8 +1,8 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./desktop-api/core";
 import { lineyEngine } from "./engine";
 
 // Notification daemons consume local icon paths, not LINE's HTTPS avatar URLs.
-// Native Tauri owns the files and never accepts a path supplied by the WebView.
+// Electron main process owns the files and never accepts a path supplied by the WebView.
 const pending = new Map<string, Promise<void>>();
 const retryAfter = new Map<string, number>();
 const THROTTLE_MS = 5 * 60_000;

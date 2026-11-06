@@ -815,6 +815,16 @@ button { border: 0; background: none; cursor: pointer; }
 }
 .remote-image-fallback { display: block; padding: 8px; color: #788493; background: #f0f3f5; font-size: 10px; text-align: center; overflow-wrap: anywhere; }
 .flex-icon-placeholder { min-width: 20px; min-height: 20px; padding: 3px; }
+/* Absolutely-positioned art is out of flow: when its image is missing the
+   opaque placeholder would paint over the card content (ghost text over
+   rows). Keep the geometry so a late load lands correctly, but stay
+   invisible and click-through instead of covering the message. */
+.flex-image-placeholder-absolute {
+  background: transparent;
+  color: transparent;
+  pointer-events: none;
+  user-select: none;
+}
 .flex-button {
   display: block;
   width: 100%;
@@ -1471,3 +1481,13 @@ button { border: 0; background: none; cursor: pointer; }
 }
 .official-history-banner svg { flex: 0 0 auto; color: var(--green-strong); }
 .official-history-banner strong { color: var(--text); }
+
+.settings-action-button { display:inline-flex; align-items:center; gap:7px; border:1px solid var(--border); border-radius:9px; padding:8px 12px; color:var(--text); background:var(--panel-2); font:inherit; font-size:12px; cursor:pointer; }
+.settings-action-button.primary { color:#fff; background:var(--green); border-color:var(--green); }
+.settings-action-button:disabled { opacity:.55; cursor:not-allowed; }
+.update-release-notes { margin:0 16px 14px; padding:12px; border:1px solid var(--border); border-radius:10px; white-space:pre-wrap; }
+.update-release-notes strong { font-size:12px; }
+.update-release-notes p,.update-footnote,.update-error { color:var(--muted); font-size:11px; line-height:1.6; }
+.update-release-notes p { margin:6px 0 0; }
+.update-footnote,.update-error { margin:10px 16px 16px; }
+.update-error { color:var(--danger, #d34b4b); }

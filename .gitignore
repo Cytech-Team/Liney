@@ -25,8 +25,6 @@ dist-ssr
 
 # Native Liney build sidecars
 /build
-# Rust
-/target
 
 # Release artifacts (built by CI / package scripts, never committed)
 release/
@@ -40,11 +38,9 @@ release/
 .liney-data-test/
 /website/node_modules/
 # Build outputs / release sidecars (never commit)
-/src-tauri/target/
 /dist/
 
 # Bundled engine sidecar (built from engine/, not committed)
-/src-tauri/binaries/
 
 # One-off local protocol probes
 .tmp-*.ts
@@ -52,14 +48,18 @@ release/
 # Cloudflare static website build output
 website/dist/
 
-# Flatpak local package/build and staging
-/packaging/flatpak/Liney-release.deb
-/flatpak-build/
-/flatpak-repo/
-/packaging/flatpak/.flatpak-builder/
 
+
+
+# Electron distribution artifacts
+/release-electron/
+
+/electron/dist/
+
+# Verified, packaged Linux Native Helpers (downloaded from pinned release)
+/electron/native/
+/.cache/electron-native/
+
+# Flatpak build output
 /.flatpak-builder/
-
-# org.flatpak.Builder local Flathub wrapper output
-/builddir/
-/repo/
+/packaging/flatpak/Liney-Electron-Preview.deb

@@ -368,10 +368,11 @@ describe("LINEJS compatibility floor", () => {
   });
 
   test("keeps PLANET reply transaction correlation for T103 compatibility", () => {
+    // The 3.4.2 local patch was absorbed upstream: 3.5.0 ships the same
+    // PLANET reply correlation, so no patchedDependencies entry is needed.
+    // This test pins the fix markers in the installed dependency instead.
     const packageJson = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
-    expect(packageJson.patchedDependencies?.["@jsr/evex__linejs@3.4.2"]).toBe(
-      "patches/@jsr%2Fevex__linejs@3.4.2.patch",
-    );
+    expect(packageJson.patchedDependencies?.["@jsr/evex__linejs@3.4.2"]).toBeUndefined();
     const transport = readFileSync(
       new URL("../../node_modules/@evex/linejs/client/features/call/planet/transport.js", import.meta.url),
       "utf8",

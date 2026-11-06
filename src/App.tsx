@@ -1,10 +1,10 @@
 import { AnimatePresence, motion } from "motion/react";
 import { QRCodeSVG } from "qrcode.react";
-import { invoke } from "@tauri-apps/api/core";
-import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
-import { emitTo, listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { invoke } from "./lib/desktop-api/core";
+import { open as openFileDialog } from "./lib/desktop-api/dialog";
+import { emitTo, listen } from "./lib/desktop-api/event";
+import { getCurrentWindow } from "./lib/desktop-api/window";
+import { WebviewWindow } from "./lib/desktop-api/webview-window";
 import { createPortal } from "react-dom";
 import {
   ArrowLeft,
@@ -241,6 +241,7 @@ function optimisticReactions(reactions: Message["reactions"], type: number): Mes
   return next.filter((item) => item.count > 0).sort((left, right) => left.type - right.type);
 }
 type AppSettings = {
+  language: "th" | "en";
   startup: boolean;
   tray: boolean;
   desktopNotifications: boolean;
@@ -266,6 +267,7 @@ type AppSettings = {
 const AUTOSTART_OPT_IN_KEY = "liney.autostart.explicit-opt-in.v1";
 
 const defaultSettings: AppSettings = {
+  language: "th",
   // Disabled by default; startup is always an explicit user opt-in.
   startup: false,
   tray: true,
@@ -296,6 +298,7 @@ const MAX_BACKGROUND_MESSAGES_IN_MEMORY = 24;
 const MAX_IMAGE_PREVIEWS_PER_REFRESH = 4;
 
 function readSettings(): AppSettings {
+  const preferredLanguage: AppSettings["language"] = typeof navigator !== "undefined" && !navigator.language.toLowerCase().startsWith("th") ? "en" : "th";
   try {
     const raw = localStorage.getItem("liney.settings");
     const parsed = raw ? JSON.parse(raw) as Partial<AppSettings> : {};
@@ -311,9 +314,9 @@ function readSettings(): AppSettings {
     // Migrate those installations to OFF, and require a fresh explicit opt-in.
     parsed.startup = localStorage.getItem(AUTOSTART_OPT_IN_KEY) === "1"
       && parsed.startup === true;
-    return { ...defaultSettings, ...parsed };
+    return { ...defaultSettings, ...parsed, language: parsed.language ?? preferredLanguage };
   } catch {
-    return { ...defaultSettings };
+    return { ...defaultSettings, language: preferredLanguage };
   }
 }
 
@@ -885,6 +888,7 @@ function MainApp() {
 
   useEffect(() => {
     settingsRef.current = settings;
+    document.documentElement.lang = settings.language;
     try { localStorage.setItem("liney.settings", JSON.stringify(settings)); } catch { /* best effort */ }
   }, [settings]);
 
@@ -953,6 +957,20 @@ function MainApp() {
     setActiveChatId(chatId);
     setMobileConversationOpen(true);
     setNotificationJump({ chatId, messageId, nonce: Date.now() });
+    if (!chat) {
+      // Room not in the cached list (first message, evicted room): pull the
+      // list now instead of waiting for the 60s poll, then reload messages
+      // once the room is known. Without this the jump lands on a fallback
+      // room and the real content only appears much later.
+      void (async () => {
+        try {
+          await loadLiveChats();
+        } catch {
+          // loadLiveChats surfaces its own error state; still retry messages.
+        }
+        setMessageRefreshNonce((value) => value + 1);
+      })();
+    }
     if (lineyEngine.isNative) {
       void getCurrentWindow().show().then(() => getCurrentWindow().setFocus()).catch(() => undefined);
     }
@@ -961,10 +979,17 @@ function MainApp() {
   useEffect(() => {
     if (!lineyEngine.isNative) return;
     let unlisten: (() => void) | undefined;
+    let unlistenCall: (() => void) | undefined;
     void listen<{ chatId?: unknown; messageId?: unknown }>("liney://notification-open", (event) => {
       jumpToNotification(String(event.payload?.chatId ?? ""), String(event.payload?.messageId ?? ""));
     }).then((listener) => { unlisten = listener; }).catch(() => undefined);
-    return () => unlisten?.();
+    void listen("liney://call-notification-open", () => {
+      setSection("calls");
+      if (lineyEngine.isNative) {
+        void getCurrentWindow().show().then(() => getCurrentWindow().setFocus()).catch(() => undefined);
+      }
+    }).then((listener) => { unlistenCall = listener; }).catch(() => undefined);
+    return () => { unlisten?.(); unlistenCall?.(); };
   }, []);
 
   useEffect(() => {
@@ -3484,8 +3509,8 @@ function MainApp() {
         center: true,
         resizable: true,
       });
-      viewer.once("tauri://created", () => { void viewer.setFocus(); });
-      viewer.once("tauri://error", () => setImageViewerSrc(dataUrl));
+      viewer.once("liney:window-created", () => { void viewer.setFocus(); });
+      viewer.once("liney:window-error", () => setImageViewerSrc(dataUrl));
     } catch {
       setImageViewerSrc(dataUrl);
     }
@@ -3503,6 +3528,7 @@ function MainApp() {
 
   const renderAuthDialog = (required: boolean) => (
     <AuthModal
+      language={settings.language}
       engineState={engineState}
       authenticated={authenticated}
       authMode={authMode}
@@ -3634,8 +3660,8 @@ function MainApp() {
         {imageViewerSrc && <ImageViewerOverlay src={imageViewerSrc} onClose={() => setImageViewerSrc(null)} />}
         {albumsOpen && <LineAlbumsModal onClose={() => setAlbumsOpen(false)} />}
         {notesRoom && <LineNotesModal homeId={notesRoom.id} title={notesRoom.title} onClose={() => setNotesRoom(null)} />}
-        {managedChat && (managedChat.kind === "dm" || managedChat.kind === "group") && <LineChatManageModal room={{ id: managedChat.id, kind: managedChat.kind, name: managedChat.name }} friends={allFriends} onClose={() => setManagedChat(null)} />}
-        {settingsOpen && <SettingsModal initialTab={settingsInitialTab} themeMode={themeMode} dark={dark} settings={settings} callAvailable={callAvailable} onThemeMode={setThemeMode} onSetting={updateAppSettings} onDensity={(value) => updateSetting("density", value)} onRadius={(value) => updateSetting("radius", value)} onClearHistory={() => void clearLocalHistory()} onClearStickerCache={() => void clearStickerCache()} onFullSync={() => void startFullSync()} onProfileChange={setProfile} onClose={() => setSettingsOpen(false)} />}
+        {managedChat && (managedChat.kind === "dm" || managedChat.kind === "group") && <LineChatManageModal room={{ id: managedChat.id, kind: managedChat.kind, name: managedChat.name }} friends={allFriends} onUpdated={() => loadLiveFriends()} onClose={() => setManagedChat(null)} />}
+        {settingsOpen && <SettingsModal initialTab={settingsInitialTab} themeMode={themeMode} dark={dark} settings={settings} callAvailable={callAvailable} onLanguageChange={(value) => updateSetting("language", value)} onThemeMode={setThemeMode} onSetting={updateAppSettings} onDensity={(value) => updateSetting("density", value)} onRadius={(value) => updateSetting("radius", value)} onClearHistory={() => void clearLocalHistory()} onClearStickerCache={() => void clearStickerCache()} onFullSync={() => void startFullSync()} onProfileChange={setProfile} onClose={() => setSettingsOpen(false)} />}
         {callOpen && <CallModal chat={callChat} peer={callPeer} remoteVideoFrame={callRemoteVideoFrame} state={callState} muted={callMuted} microphoneAvailable={callMicrophoneAvailable} speakerAvailable={callSpeakerAvailable} videoCapable={callVideoCapable} videoEnabled={callVideoEnabled} cameraAvailable={callCameraAvailable} screenSharing={callScreenSharing} screenShareAvailable={callScreenShareAvailable} screenTargets={callScreenTargets} screenTarget={callScreenTarget} screenManagedBySystem={callScreenManagedBySystem} error={callError} incomingSupported={callIncomingAvailable} outputDevices={callOutputs} outputTarget={callOutputTarget} onAccept={() => void acceptCall("AUDIO")} onAcceptVideo={() => void acceptCall("VIDEO")} onReject={() => void rejectCall()} onMute={() => void toggleCallMute()} onVideo={() => void toggleCallVideo()} onScreenShare={() => void toggleScreenShare()} onUpgradeVideo={() => void upgradeCallToVideo()} mode={callMode} onScreenTarget={setCallScreenTarget} onOutput={(target) => void changeCallOutput(target)} onClose={() => void endCall()} />}
         {usesEngineRuntime && authenticated && syncProgress.visible && (
           <FullSyncPopup
@@ -4350,6 +4376,7 @@ function Conversation({
   jumpNonce: number;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imeComposingRef = useRef(false);
   const messageStageRef = useRef<HTMLDivElement>(null);
   const unreadDividerRef = useRef<HTMLDivElement>(null);
   const onReadLatestRef = useRef(onReadLatest);
@@ -4499,7 +4526,7 @@ function Conversation({
     anchorTo: "end",
     followOnAppend: true,
     scrollEndThreshold: 80,
-    // WebKitGTK can deliver ResizeObserver callbacks while a Wayland surface is
+    // Chromium can deliver ResizeObserver callbacks while a Wayland surface is
     // being reconfigured during move/resize. Defer measurement work to the next
     // animation frame to avoid synchronous layout/scroll feedback into wlroots.
     useAnimationFrameWithResizeObserver: true,
@@ -5265,11 +5292,25 @@ function Conversation({
         <textarea
           value={composer}
           onChange={(e) => onComposer(e.target.value)}
+          lang="th"
+          onCompositionStart={() => { imeComposingRef.current = true; }}
+          onCompositionEnd={() => {
+            // Keep a synchronous ref for the keydown that may immediately
+            // follow compositionend on some IME/browser event sequences.
+            imeComposingRef.current = false;
+          }}
           onKeyDown={(e) => {
+            const isImeProcessKey = e.nativeEvent.key === "Process";
             if (e.key === "Enter" && !e.shiftKey) {
+              // Do not preventDefault: the IME needs this Enter to commit.
+              if (imeComposingRef.current || e.nativeEvent.isComposing ||
+                  e.nativeEvent.keyCode === 229 || isImeProcessKey) return;
               e.preventDefault();
               void onSend();
+              return;
             }
+            // Leave Ctrl/Meta+A/C/V/X and other modified shortcuts to native editing.
+            if (e.ctrlKey || e.metaKey || e.altKey) return;
           }}
           onPaste={(event) => {
             if (!canSend) return;
@@ -5286,7 +5327,7 @@ function Conversation({
               void onNativeImage();
               return;
             }
-            // Some WebKitGTK clipboard providers expose no image item at all.
+            // Some Linux clipboard providers expose no image item at all.
             // Probe the native clipboard only when there is no text payload so
             // normal text paste remains untouched.
             if (lineyEngine.isNative && !event.clipboardData.getData("text/plain")) {
@@ -5622,6 +5663,7 @@ function describeAuthError(raw: string): { title: string; message: string; code?
 }
 
 function AuthModal({
+  language,
   engineState,
   authenticated,
   authMode,
@@ -5647,6 +5689,7 @@ function AuthModal({
   onLogout,
   onClose,
 }: {
+  language: "th" | "en";
   engineState: EngineState;
   authenticated: boolean;
   authMode: AuthMode;
@@ -5672,19 +5715,20 @@ function AuthModal({
   onLogout: () => void | Promise<void>;
   onClose: () => void;
 }) {
+  const english = language === "en";
   const [riskAcknowledged, setRiskAcknowledged] = useState(false);
   const canLogin = engineState === "ready" && !authBusy && riskAcknowledged;
 
   return (
     <motion.div className="modal-backdrop auth-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
       <motion.section className={`auth-modal ${required ? "auth-modal-required" : ""}`} initial={{ opacity: 0, scale: .96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: .97, y: 8 }} aria-modal="true" role="dialog">
-        {!required ? <button className="auth-close icon-button" onClick={onClose} aria-label="ปิด"><X size={18}/></button> : null}
+        {!required ? <button className="auth-close icon-button" onClick={onClose} aria-label={english ? "Close" : "ปิด"}><X size={18}/> </button> : null}
         <div className="auth-brand"><img src="/liney-logo.png" alt="" /></div>
         <p className="eyebrow">LINEJS · {clientIdentity?.displayName || clientIdentity?.device || "DESKTOPWIN"}</p>
-        <h2>{keyImportMode ? "รับคีย์ E2EE จากมือถือ" : authenticated ? (profileName || "เชื่อม LINE แล้ว") : "เชื่อมบัญชี LINE"}</h2>
+        <h2>{keyImportMode ? (english ? "Import E2EE keys from your phone" : "รับคีย์ E2EE จากมือถือ") : authenticated ? (profileName || (english ? "LINE connected" : "เชื่อม LINE แล้ว")) : (english ? "Connect your LINE account" : "เชื่อมบัญชี LINE")}</h2>
         <p className="auth-copy">{keyImportMode
-          ? "สแกนด้วยมือถือที่มีคีย์เดิม โดยใช้บัญชีเดียวกับ Desktop"
-          : authenticated ? "บัญชีนี้เชื่อมต่อกับ Liney แล้ว" : "ต้องเข้าสู่ระบบก่อนจึงจะใช้แชตและฟีเจอร์ของ Liney ได้"}</p>
+          ? english ? "Scan with the phone that holds your existing keys, using the same account as this desktop." : "สแกนด้วยมือถือที่มีคีย์เดิม โดยใช้บัญชีเดียวกับ Desktop"
+          : authenticated ? (english ? "This account is connected to Liney." : "บัญชีนี้เชื่อมต่อกับ Liney แล้ว") : (english ? "Sign in to use chats and Liney features." : "ต้องเข้าสู่ระบบก่อนจึงจะใช้แชตและฟีเจอร์ของ Liney ได้")}</p>
 
         {authenticated ? (
           keyImportMode ? (
@@ -5707,7 +5751,7 @@ function AuthModal({
                   <div className="auth-idle">
                     <div className="auth-engine-icon">{authBusy ? <LoaderCircle className="spin" size={26}/> : <QrCode size={27}/>}</div>
                     <strong>{authBusy ? "กำลังสร้าง QR Code" : "พร้อมนำเข้าคีย์จากมือถือ"}</strong>
-                    <span>{authBusy ? "รอการยืนยันจาก LINE…" : "คีย์จะถูกเก็บในเครื่องนี้โดยไม่ล้างประวัติแชต"}</span>
+                    <span>{authBusy ? english ? "Waiting for LINE approval…" : "รอการยืนยันจาก LINE…" : "คีย์จะถูกเก็บในเครื่องนี้โดยไม่ล้างประวัติแชต"}</span>
                   </div>
                   <button className="auth-primary" disabled={engineState !== "ready" || authBusy} onClick={onImportKeys}>
                     {authBusy ? <LoaderCircle className="spin" size={17}/> : <QrCode size={17}/>} {authBusy ? "กำลังรอมือถือ…" : "สร้าง QR สำหรับนำเข้าคีย์"}
@@ -5748,8 +5792,8 @@ function AuthModal({
               ) : (
                 <div className="auth-idle">
                   <div className="auth-engine-icon">{engineState === "starting" || authBusy ? <LoaderCircle className="spin" size={26}/> : <QrCode size={27}/>}</div>
-                  <strong>{authBusy ? "กำลังสร้างการเชื่อมต่อ" : engineState === "ready" ? "LINE engine พร้อม" : "กำลังเตรียม LINE engine"}</strong>
-                  <span>{authBusy ? "รอการยืนยันจาก LINE…" : "สร้าง QR Code แล้วสแกนจากมือถือเพียงครั้งแรก"}</span>
+                  <strong>{authBusy ? english ? "Preparing sign-in" : "กำลังสร้างการเชื่อมต่อ" : engineState === "ready" ? english ? "LINE engine is ready" : "LINE engine พร้อม" : engineState === "error" ? english ? "LINE engine failed to start" : "LINE engine เริ่มทำงานไม่สำเร็จ" : english ? "Starting LINE engine" : "กำลังเตรียม LINE engine"}</strong>
+                  <span>{authBusy ? english ? "Waiting for LINE approval…" : "รอการยืนยันจาก LINE…" : engineState === "error" ? "ไม่สามารถเข้าสู่ระบบได้ ตรวจสอบ liney-engine และ sidecar ในแพ็กเกจ แล้วเปิด Diagnostics/Logs" : "สร้าง QR Code แล้วสแกนจากมือถือเพียงครั้งแรก"}</span>
                 </div>
               )
             ) : (
@@ -5760,27 +5804,27 @@ function AuthModal({
                 </label>
                 <label className="auth-field">
                   <span>Password ของบัญชี LINE</span>
-                  <div className="auth-input-wrap"><KeyRound size={16}/><input type="password" autoComplete="current-password" value={password} onChange={(event) => onPasswordChange(event.currentTarget.value)} placeholder="กรอกรหัสผ่าน" required /></div>
+                  <div className="auth-input-wrap"><KeyRound size={16}/><input type="password" autoComplete="current-password" value={password} onChange={(event) => onPasswordChange(event.currentTarget.value)} placeholder={english ? "Enter your password" : "กรอกรหัสผ่าน"} required /></div>
                 </label>
                 {pin ? <div className="pin-card"><span>รหัสยืนยันจาก LINE</span><strong>{pin}</strong></div> : null}
                 <button className="auth-primary" type="submit" disabled={!canLogin || !email.trim() || !password}>
-                  {authBusy ? <LoaderCircle className="spin" size={17}/> : <LogIn size={17}/>} {authBusy ? "กำลังตรวจสอบบัญชี…" : "เข้าสู่ระบบด้วย Email"}
+                  {authBusy ? <LoaderCircle className="spin" size={17}/> : <LogIn size={17}/>} {authBusy ? english ? "Signing in…" : "กำลังตรวจสอบบัญชี…" : english ? "Sign in with email" : "เข้าสู่ระบบด้วย Email"}
                 </button>
                 <p className="auth-password-note">บางบัญชีอาจต้องยืนยันรหัสบนโทรศัพท์ หรืออาจไม่รองรับการล็อกอินแบบนี้</p>
               </form>
             )}
 
-            <details className="auth-disclaimer" role="note"><summary><TriangleAlert size={18}/> ข้อควรระวังการใช้งาน <span>อ่านรายละเอียด</span></summary><div className="auth-disclaimer-body">
+            <details className="auth-disclaimer" role="note"><summary><TriangleAlert size={18}/> Usage warning / ข้อควรระวังการใช้งาน <span>Read details / อ่านรายละเอียด</span></summary><div className="auth-disclaimer-body">
               <div>
                 <strong>การใช้งานแอปที่ไม่เป็นทางการ</strong>
                 <p>Liney ไม่ใช่แอป Official ของ LINE และไม่ได้รับการรับรองจาก LY Corporation การใช้ LINEJS อาจไม่สอดคล้องหรืออาจขัดกับ TOS ของ LINE บัญชีอาจถูกจำกัดหรือระงับ ใช้งานด้วยความระมัดระวังและความเสี่ยงของคุณเอง</p>
               </div></div>
             </details>
-            <label className="auth-consent"><input type="checkbox" checked={riskAcknowledged} onChange={(event) => setRiskAcknowledged(event.currentTarget.checked)} /><span>ฉันอ่านคำเตือนแล้วและยอมรับความเสี่ยง</span></label>
+            <label className="auth-consent"><input type="checkbox" checked={riskAcknowledged} onChange={(event) => setRiskAcknowledged(event.currentTarget.checked)} /><span>I understand that Liney is unofficial, may violate LINE's Terms, and may put my account at risk. / ฉันเข้าใจว่า Liney ไม่ใช่แอปทางการและอาจมีความเสี่ยงต่อบัญชี</span></label>
 
             {authMode === "qr" && !qrUrl ? (
               <button className="auth-primary" disabled={!canLogin} onClick={onStart}>
-                {authBusy ? <LoaderCircle className="spin" size={17}/> : <QrCode size={17}/>} {authBusy ? "กำลังสร้าง QR Code…" : "สร้าง QR Code"}
+                {authBusy ? <LoaderCircle className="spin" size={17}/> : <QrCode size={17}/>} {authBusy ? english ? "Generating QR code…" : "กำลังสร้าง QR Code…" : english ? "Generate QR code" : "สร้าง QR Code"}
               </button>
             ) : null}
           </>
@@ -6005,12 +6049,13 @@ function NewChatModal({
   );
 }
 
-function SettingsModal({ initialTab, themeMode, dark, settings, callAvailable, onThemeMode, onSetting, onDensity, onRadius, onClearHistory, onClearStickerCache, onFullSync, onProfileChange, onClose }: {
+function SettingsModal({ initialTab, themeMode, dark, settings, callAvailable, onLanguageChange, onThemeMode, onSetting, onDensity, onRadius, onClearHistory, onClearStickerCache, onFullSync, onProfileChange, onClose }: {
   initialTab: string;
   themeMode: ThemeMode;
   dark: boolean;
   settings: AppSettings;
   callAvailable: boolean;
+  onLanguageChange: (value: "th" | "en") => void;
   onThemeMode: (value: ThemeMode) => void;
   onSetting: (key: keyof AppSettings, value: boolean) => void;
   onDensity: (value: AppSettings["density"]) => void;
@@ -6022,6 +6067,7 @@ function SettingsModal({ initialTab, themeMode, dark, settings, callAvailable, o
   onClose: () => void;
 }) {
   const [tab, setTab] = useState(initialTab);
+  const english = settings.language === "en";
   const groups = [
     { title: "บัญชีและหน้าตา", pages: [
       { id: "ทั่วไป", name: "ทั่วไป", icon: Settings, description: "ภาษา ฟอนต์ และการเริ่มต้นแอป" },
@@ -6044,6 +6090,18 @@ function SettingsModal({ initialTab, themeMode, dark, settings, callAvailable, o
   ];
   const currentGroup = groups.find((group) => group.pages.some((page) => page.id === tab));
   const currentPage = currentGroup?.pages.find((page) => page.id === tab);
+  const labels: Record<string, string> = english ? {
+    "บัญชีและหน้าตา": "Account & Appearance", "ทั่วไป": "General", "โปรไฟล์": "Profile", "หน้าตาแอป": "Appearance",
+    "การสื่อสาร": "Communication", "แชต": "Chats", "การแจ้งเตือน": "Notifications", "รูปภาพและสื่อ": "Images & Media",
+    "การโทร": "Calls", "เพื่อน": "Friends", "ระบบ": "System", "ขั้นสูง": "Advanced", "นักพัฒนา": "Developer", "เกี่ยวกับ Liney": "About Liney",
+    "ภาษา ฟอนต์ และการเริ่มต้นแอป": "Language, fonts and startup", "ดูและแก้ไขข้อมูลบัญชี LINE": "View and edit your LINE profile",
+    "ธีม ขนาดรายการ และรูปแบบการแสดงผล": "Theme, density and display preferences", "วิธีอ่าน ส่งข้อความ และจัดการประวัติ": "Reading, messaging and history",
+    "เลือกข้อความและสายที่ต้องการแจ้งเตือน": "Choose message and call notifications", "การดูรูป ดาวน์โหลดสื่อ และการจัดเก็บแคช": "Image viewing, media downloads and cache",
+    "สถานะการโทรและความสามารถที่รองรับ": "Call status and supported features", "ตรวจสอบรายชื่อเพื่อนและการซิงก์": "Friend list and synchronization",
+    "จัดการการแสดงผลและข้อมูลห้อง OpenChat": "OpenChat display and room data", "ข้อมูลในเครื่องและเครื่องมือการซิงก์": "Local data and sync tools",
+    "เครื่องมือสำหรับตรวจสอบและแก้ปัญหา": "Diagnostics and troubleshooting", "รายละเอียดแอปและเวอร์ชัน": "App details and version"
+  } : {};
+  const label = (value: string) => labels[value] ?? value;
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -6054,40 +6112,40 @@ function SettingsModal({ initialTab, themeMode, dark, settings, callAvailable, o
   return (
     <motion.div className="modal-backdrop settings-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <motion.section className="settings-modal settings-modal-refresh" role="dialog" aria-modal="true" aria-labelledby="liney-settings-heading" initial={{ opacity: 0, scale: 0.97, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98, y: 8 }} transition={{ duration: 0.18 }}>
-        <aside className="settings-nav" aria-label="หมวดหมู่การตั้งค่า">
+        <aside className="settings-nav" aria-label={english ? "Settings categories" : "หมวดหมู่การตั้งค่า"}>
           <div className="settings-nav-brand">
             <img src="/liney-logo.png" alt="" />
-            <span><strong>Liney</strong><small>ตั้งค่าแอปพลิเคชัน</small></span>
+            <span><strong>Liney</strong><small>{english ? "Application settings" : "ตั้งค่าแอปพลิเคชัน"}</small></span>
           </div>
-          <nav className="settings-nav-list" aria-label="หน้าในการตั้งค่า">
+          <nav className="settings-nav-list" aria-label={english ? "Settings pages" : "หน้าในการตั้งค่า"}>
             {groups.map((group) => (
               <div className="settings-nav-group" key={group.title}>
-                <p className="settings-nav-group-label">{group.title}</p>
+                <p className="settings-nav-group-label">{label(group.title)}</p>
                 {group.pages.map((page) => {
                   const Icon = page.icon;
                   return (
                     <button type="button" key={page.id} className={tab === page.id ? "active" : ""}
                       aria-current={tab === page.id ? "page" : undefined}
                       onClick={() => setTab(page.id)}>
-                      <Icon size={16} strokeWidth={1.9} /><span>{page.name}</span>
+                      <Icon size={16} strokeWidth={1.9} /><span>{label(page.name)}</span>
                     </button>
                   );
                 })}
               </div>
             ))}
           </nav>
-          <div className="settings-nav-footer"><ShieldCheck size={14} />จัดการข้อมูลจากแอป Liney</div>
+          <div className="settings-nav-footer"><ShieldCheck size={14} />{english ? "Managed by Liney" : "จัดการข้อมูลจากแอป Liney"}</div>
         </aside>
         <div className="settings-content">
           <header className="settings-header">
             <div className="settings-header-meta">
-              <span className="settings-header-breadcrumb">ตั้งค่า / {currentGroup?.title ?? "ทั่วไป"}</span>
-              <h2 id="liney-settings-heading">{currentPage?.name ?? tab}</h2>
-              <p className="settings-header-description">{currentPage?.description ?? "การตั้งค่า Liney"}</p>
+              <span className="settings-header-breadcrumb">{english ? "Settings" : "ตั้งค่า"} / {label(currentGroup?.title ?? "ทั่วไป")}</span>
+              <h2 id="liney-settings-heading">{label(currentPage?.name ?? tab)}</h2>
+              <p className="settings-header-description">{label(currentPage?.description ?? "การตั้งค่า Liney")}</p>
             </div>
-            <button type="button" className="icon-button settings-close" onClick={onClose} title="ปิดหน้าตั้งค่า" aria-label="ปิดหน้าตั้งค่า"><X size={19} /></button>
+            <button type="button" className="icon-button settings-close" onClick={onClose} title={english ? "Close settings" : "ปิดหน้าตั้งค่า"} aria-label={english ? "Close settings" : "ปิดหน้าตั้งค่า"}><X size={19} /></button>
           </header>
-          {tab === "ทั่วไป" && <GeneralSettings settings={settings} themeMode={themeMode} dark={dark} onThemeMode={onThemeMode} onSetting={onSetting} />}
+          {tab === "ทั่วไป" && <GeneralSettings settings={settings} themeMode={themeMode} dark={dark} english={english} onLanguageChange={onLanguageChange} onThemeMode={onThemeMode} onSetting={onSetting} />}
           {tab === "โปรไฟล์" && (lineyEngine.isNative ? <LineProfileSettings onUpdated={onProfileChange} /> : <FeatureSettings title="โปรไฟล์" body="เปิด LINE จากแอป Liney บน Linux เพื่อแก้โปรไฟล์" />)}
           {tab === "Appearance" && <AppearanceSettings settings={settings} themeMode={themeMode} dark={dark} onThemeMode={onThemeMode} onDensity={onDensity} onRadius={onRadius} />}
           {tab === "OpenChat" && <OpenChatSettings settings={settings} onSetting={onSetting} />}
@@ -6105,18 +6163,23 @@ function SettingsModal({ initialTab, themeMode, dark, settings, callAvailable, o
   );
 }
 
-function GeneralSettings({ settings, themeMode, dark, onThemeMode, onSetting }: { settings: AppSettings; themeMode: ThemeMode; dark: boolean; onThemeMode: (v: ThemeMode) => void; onSetting: (key: keyof AppSettings, value: boolean) => void }) {
+function GeneralSettings({ settings, themeMode, dark, english, onLanguageChange, onThemeMode, onSetting }: { settings: AppSettings; themeMode: ThemeMode; dark: boolean; english: boolean; onLanguageChange: (value: "th" | "en") => void; onThemeMode: (v: ThemeMode) => void; onSetting: (key: keyof AppSettings, value: boolean) => void }) {
   return <div className="settings-scroll">
-    <SettingsGroup title="ภาษาและฟอนต์">
-      <SettingRow title="ภาษา" subtitle="ภาษาที่ใช้แสดงในแอป"><SelectLike value="ภาษาไทย" /></SettingRow>
-      <SettingRow title="ฟอนต์" subtitle="ใช้ฟอนต์ของระบบเป็นค่าเริ่มต้น"><SelectLike value="System UI" /></SettingRow>
+    <SettingsGroup title={english ? "Language & Fonts" : "ภาษาและฟอนต์"}>
+      <SettingRow title={english ? "Display language" : "ภาษา"} subtitle={english ? "Choose the language used across the interface" : "ภาษาที่ใช้แสดงในแอป"}>
+        <div className="settings-segment" role="group" aria-label="Display language">
+          <button type="button" className={settings.language === "th" ? "active" : ""} aria-pressed={settings.language === "th"} onClick={() => onLanguageChange("th")}>ไทย</button>
+          <button type="button" className={settings.language === "en" ? "active" : ""} aria-pressed={settings.language === "en"} onClick={() => onLanguageChange("en")}>English</button>
+        </div>
+      </SettingRow>
+      <SettingRow title={english ? "Font" : "ฟอนต์"} subtitle={english ? "Use the system font by default" : "ใช้ฟอนต์ของระบบเป็นค่าเริ่มต้น"}><SelectLike value="System UI" /></SettingRow>
     </SettingsGroup>
-    <SettingsGroup title="เริ่มต้นระบบ">
-      <SettingRow title="เปิดแอปพร้อมระบบ" subtitle="เริ่ม Liney เมื่อเข้าสู่เดสก์ท็อป"><Toggle checked={settings.startup} onChange={(checked) => onSetting("startup", checked)} /></SettingRow>
-      <SettingRow title="ย่อไว้ใน System Tray" subtitle="ปิดหน้าต่างโดยไม่ออกจากระบบ"><Toggle checked={settings.tray} onChange={(checked) => onSetting("tray", checked)} /></SettingRow>
+    <SettingsGroup title={english ? "Startup" : "เริ่มต้นระบบ"}>
+      <SettingRow title={english ? "Launch at startup" : "เปิดแอปพร้อมระบบ"} subtitle={english ? "Start Liney when you sign in to your desktop" : "เริ่ม Liney เมื่อเข้าสู่เดสก์ท็อป"}><Toggle checked={settings.startup} onChange={(checked) => onSetting("startup", checked)} /></SettingRow>
+      <SettingRow title={english ? "Minimize to system tray" : "ย่อไว้ใน System Tray"} subtitle={english ? "Close the window without quitting Liney" : english ? "Close the window without quitting Liney" : "ปิดหน้าต่างโดยไม่ออกจากระบบ"}><Toggle checked={settings.tray} onChange={(checked) => onSetting("tray", checked)} /></SettingRow>
     </SettingsGroup>
     <SettingsGroup title="Appearance">
-      <SettingRow title="ปรับตามธีมระบบ" subtitle="ติดตาม Light / Dark ของเดสก์ท็อประบบแบบอัตโนมัติ"><Toggle checked={themeMode === "system"} onChange={(checked) => onThemeMode(checked ? "system" : (dark ? "dark" : "light"))} /></SettingRow>
+      <SettingRow title={english ? "Follow system theme" : "ปรับตามธีมระบบ"} subtitle={english ? "Automatically follow your desktop Light / Dark mode" : "ติดตาม Light / Dark ของเดสก์ท็อประบบแบบอัตโนมัติ"}><Toggle checked={themeMode === "system"} onChange={(checked) => onThemeMode(checked ? "system" : (dark ? "dark" : "light"))} /></SettingRow>
       <ThemeCards themeMode={themeMode} dark={dark} onThemeMode={onThemeMode} />
     </SettingsGroup>
   </div>;
@@ -6223,7 +6286,42 @@ function DeveloperSettings({ settings, onSetting }: { settings: AppSettings; onS
 }
 
 function AboutSettings() {
-  return <div className="settings-scroll"><div className="settings-placeholder"><div className="placeholder-orb"><Info size={25}/></div><h3>Liney 0.1.0</h3><p>Unofficial LINE client สำหรับ Linux · React + Tauri WebView · SQLite history · ไม่มีเซิร์ฟเวอร์กลาง</p><span className="settings-status status-good">production patch</span></div></div>;
+  const [update, setUpdate] = useState<{status:string;channel:string;version:string;availableVersion?:string|null;releaseNotes?:string;percent?:number;error?:string|null}>({status:"idle",channel:"preview",version:"0.1.3"});
+  const [busy, setBusy] = useState(false);
+  const [deferredVersion, setDeferredVersion] = useState<string | null>(null);
+  useEffect(() => {
+    if (!window.lineyDesktop) return;
+    let active = true;
+    const refresh = () => window.lineyDesktop?.invoke<typeof update>("updater_state").then(value => { if (active) setUpdate(value); }).catch(() => {});
+    const off = window.lineyDesktop.onEvent(event => {
+      if (event.name === "liney:updater:event" && event.payload && typeof event.payload === "object") setUpdate(event.payload as typeof update);
+    });
+    void refresh();
+    return () => { active = false; off(); };
+  }, []);
+  const run = async (command:string) => {
+    if (!window.lineyDesktop || busy) return;
+    setBusy(true);
+    try {
+      const value = await window.lineyDesktop.invoke<typeof update | boolean>(command);
+      if (value && typeof value === "object") setUpdate(value);
+    } catch (error) {
+      setUpdate(current => ({...current,status:"error",error:String(error).slice(0,300)}));
+    } finally { setBusy(false); }
+  };
+  const statusText:Record<string,string> = {idle:"ยังไม่ได้ตรวจสอบ",checking:"กำลังตรวจสอบเวอร์ชัน…",available:"มีเวอร์ชันใหม่",downloading:`กำลังดาวน์โหลด ${update.percent ?? 0}%`,downloaded:"ดาวน์โหลดและตรวจสอบไฟล์แล้ว",current:"ใช้เวอร์ชันล่าสุดแล้ว",unconfigured:"ยังไม่ได้ตั้งค่า Update Feed",error:"ตรวจสอบการอัปเดตไม่สำเร็จ"};
+  return <div className="settings-scroll">
+    <div className="settings-placeholder"><div className="placeholder-orb"><Info size={25}/></div><h3>Liney Electron Preview</h3><p>Unofficial LINE client สำหรับ Linux · React + Electron · LINEJS Worker · SQLite history</p><span className="settings-status">Version {update.version} · {update.channel.toUpperCase()} channel</span></div>
+    <SettingsGroup title="Software Updates">
+      <div className="setting-row"><div><strong>{statusText[update.status] || "สถานะการอัปเดต"}</strong><span>{update.availableVersion ? `เวอร์ชันใหม่ ${update.availableVersion}` : "ตรวจสอบเวอร์ชันใหม่จาก Cytech Team"}</span></div><div className="setting-control"><button type="button" className="settings-action-button" disabled={busy || update.status === "checking" || update.status === "downloading"} onClick={() => void run("check_for_updates")}><RefreshCw size={14}/> ตรวจสอบ</button></div></div>
+      {update.status === "available" && update.availableVersion !== deferredVersion && <div className="setting-row"><div><strong>พร้อมอัปเดต</strong><span>ดาวน์โหลดได้โดยไม่ปิดแอป และจะติดตั้งเมื่อยืนยัน</span></div><div className="setting-control"><button type="button" className="settings-action-button" onClick={() => setDeferredVersion(update.availableVersion || null)}>ไว้ภายหลัง</button><button type="button" className="settings-action-button primary" disabled={busy} onClick={() => void run("download_update")}>ดาวน์โหลด</button></div></div>}
+      {update.status === "downloading" && <div className="setting-row"><div><strong>Download progress</strong><span>{update.percent ?? 0}%</span></div><div className="setting-control"><progress max="100" value={update.percent ?? 0}/></div></div>}
+      {update.status === "downloaded" && <div className="setting-row"><div><strong>พร้อมติดตั้ง</strong><span>ไฟล์อัปเดตผ่านการตรวจสอบความถูกต้องแล้ว</span></div><div className="setting-control"><button type="button" className="settings-action-button primary" onClick={() => void run("install_update")}>Restart & Update</button></div></div>}
+      {update.releaseNotes && <div className="update-release-notes"><strong>Release notes</strong><p>{update.releaseNotes}</p></div>}
+      {update.error && <p className="update-error">{update.error}</p>}
+      <p className="update-footnote">ช่องทาง Preview และ Stable แยกจากกัน · ตรวจสอบลายเซ็นและ SHA-512 ตาม metadata ของแพ็กเกจ · ระบบอัปเดตอัตโนมัติรองรับ AppImage เท่านั้น</p>
+    </SettingsGroup>
+  </div>;
 }
 
 function SettingsGroup({ title, children }: { title: string; children: React.ReactNode }) {
