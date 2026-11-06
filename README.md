@@ -387,7 +387,7 @@ This runs the source-build/capability doctor, unit tests, lint, and Electron pac
 versioned AppImage, Debian, RPM, portable tarball, and SHA-256 checksum files to
 `release/`. The portable tarball includes `install-user.sh` for a per-user install.
 
-Tags matching the application version (for example `v0.1.3`) run the same release
+Tags matching the application version (for example `v0.1.4`) run the same release
 gate in GitHub Actions on x86_64 and aarch64 and attach the verified artifacts to
 the GitHub Release automatically.
 
