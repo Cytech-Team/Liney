@@ -449,8 +449,17 @@ async function verifyNativeEditShortcuts(win) {
     try {
       await win.webContents.executeJavaScript(`document.getElementById("${fieldId}")?.remove()`);
     } finally {
-      if (previousClipboard) clipboard.writeText(previousClipboard);
-      else clipboard.clear();
+      if (typeof previousClipboard === "string" && previousClipboard.length > 0) {
+        try {
+          clipboard.writeText(previousClipboard);
+        } catch (error) {
+          // A platform clipboard may expose formats that cannot be written back as plain text.
+          console.warn("Unable to restore prior text clipboard after smoke test:", error?.message || error);
+          clipboard.clear();
+        }
+      } else {
+        clipboard.clear();
+      }
     }
   }
 }
