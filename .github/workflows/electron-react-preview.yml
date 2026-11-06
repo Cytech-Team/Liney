@@ -69,8 +69,12 @@ jobs:
           export LINEY_DATA_DIR="$(mktemp -d)"
           chmod 700 "$LINEY_DATA_DIR"
           export LINEY_DISABLE_AUTO_RESTORE=1 LINEY_ELECTRON_SMOKE=1
+          set +e
           timeout -k 2s 45s xvfb-run -a --server-args="-screen 0 1280x800x24" ./node_modules/.bin/electron . --no-sandbox > /tmp/liney-source-smoke.log 2>&1
+          smoke_status=$?
+          set -e
           cat /tmp/liney-source-smoke.log
+          if [ "$smoke_status" -ne 0 ]; then exit "$smoke_status"; fi
           grep -q '"enginePong":true' /tmp/liney-source-smoke.log
           grep -q '"logoLoaded":true' /tmp/liney-source-smoke.log
           grep -q '"menuHidden":true' /tmp/liney-source-smoke.log
@@ -88,8 +92,12 @@ jobs:
           export LINEY_DATA_DIR="$(mktemp -d)"
           chmod 700 "$LINEY_DATA_DIR"
           export LINEY_DISABLE_AUTO_RESTORE=1 LINEY_ELECTRON_SMOKE=1
+          set +e
           timeout -k 2s 45s xvfb-run -a --server-args="-screen 0 1280x800x24" release-electron/linux-unpacked/liney --no-sandbox > /tmp/liney-packaged-smoke.log 2>&1
+          smoke_status=$?
+          set -e
           cat /tmp/liney-packaged-smoke.log
+          if [ "$smoke_status" -ne 0 ]; then exit "$smoke_status"; fi
           grep -q '"enginePong":true' /tmp/liney-packaged-smoke.log
           grep -q '"authDialog":true' /tmp/liney-packaged-smoke.log
           grep -q '"menuHidden":true' /tmp/liney-packaged-smoke.log
