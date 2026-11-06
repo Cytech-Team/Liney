@@ -403,8 +403,11 @@ async function verifyNativeEditShortcuts(win) {
   let stage = "show-window";
   win.show();
   win.focus();
-  stage = "read-clipboard";
-  const previousClipboard = clipboard.readText();
+  stage = "snapshot-clipboard";
+  const previousClipboard = clipboard.availableFormats("clipboard").map((format) => ({
+    format,
+    data: clipboard.readBuffer(format, "clipboard").toString("base64"),
+  }));
   resetEditActionCalls();
   const fieldId = "liney-native-edit-shortcut-smoke";
   stage = "find-electron-x11-window";
@@ -433,67 +436,105 @@ async function verifyNativeEditShortcuts(win) {
       timeout: 3000,
     });
   };
+  const fieldSelector = "document.getElementById(" + JSON.stringify(fieldId) + ")";
+  const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+  const waitFor = async (read, predicate, attempts = 40) => {
+    let latest;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      latest = await read();
+      if (predicate(latest)) return latest;
+      await delay(25);
+    }
+    return latest;
+  };
   try {
     stage = "create-test-textarea";
-    await win.webContents.executeJavaScript(`(() => {
-      const field = document.createElement("textarea");
-      field.id = "${fieldId}";
-      field.value = "liney-native-edit-test";
-      field.setAttribute("aria-hidden", "true");
-      field.style.cssText = "position:fixed;left:0;top:0;width:160px;height:40px;opacity:0.01;z-index:2147483647";
-      document.body.appendChild(field);
-      field.focus();
-      return { activeElementId: document.activeElement?.id, hasFocus: document.hasFocus() };
-    })()`);
-    const selectAll = async () => {
-      stage = "focus-and-select-all";
-      await win.webContents.executeJavaScript(`(() => { const field = document.getElementById("${fieldId}"); field.focus(); field.setSelectionRange(0, 0); })()`);
-      stage = "send-ctrl-a";
-      sendChord("A");
-      stage = "verify-ctrl-a";
-      return win.webContents.executeJavaScript(`(() => { const field = document.getElementById("${fieldId}"); return field.selectionStart === 0 && field.selectionEnd === field.value.length; })()`);
-    };
+    const createFieldScript = [
+      "(() => {",
+      "  const field = document.createElement('textarea');",
+      "  field.id = " + JSON.stringify(fieldId) + ";",
+      "  field.value = 'liney-native-edit-test';",
+      "  field.setAttribute('aria-hidden', 'true');",
+      "  field.style.cssText = 'position:fixed;left:0;top:0;width:160px;height:40px;opacity:0.01;z-index:2147483647';",
+      "  document.body.appendChild(field);",
+      "  field.focus();",
+      "  return { activeElementId: document.activeElement?.id, hasFocus: document.hasFocus() };",
+      "})()",
+    ].join("\n");
+    await win.webContents.executeJavaScript(createFieldScript);
 
-    const allSelected = await selectAll();
+    stage = "focus-test-textarea";
+    await win.webContents.executeJavaScript(fieldSelector + ".focus()");
+    stage = "send-ctrl-a";
+    sendChord("A");
+    stage = "verify-ctrl-a";
+    const selectionScript = "(() => { const field = " + fieldSelector + "; return field.selectionStart === 0 && field.selectionEnd === field.value.length; })()";
+    const allSelected = await waitFor(
+      () => win.webContents.executeJavaScript(selectionScript),
+      Boolean,
+    );
+
     stage = "send-ctrl-c";
     sendChord("C");
-    stage = "wait-for-copy-clipboard";
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    stage = "read-copy-clipboard";
-    const copiedText = clipboard.readText("clipboard");
-    const selectionAfterCopy = await win.webContents.executeJavaScript(`(() => { const field = document.getElementById("${fieldId}"); return { start: field.selectionStart, end: field.selectionEnd, value: field.value }; })()`);
+    stage = "wait-for-copy";
+    const copiedText = await waitFor(() => clipboard.readText(), (value) => value === "liney-native-edit-test");
     const copied = copiedText === "liney-native-edit-test";
-    const copyMenuAction = getEditActionCalls().includes("copy");
+    const selectionAfterCopy = await win.webContents.executeJavaScript(
+      "(() => { const field = " + fieldSelector + "; return { start: field.selectionStart, end: field.selectionEnd, value: field.value }; })()",
+    );
+
     stage = "send-ctrl-x";
     sendChord("X");
     stage = "verify-ctrl-x";
-    const cut = await win.webContents.executeJavaScript(`document.getElementById("${fieldId}").value === ""`);
+    const cut = await waitFor(
+      () => win.webContents.executeJavaScript(fieldSelector + ".value === ''"),
+      Boolean,
+    );
+
     stage = "write-paste-clipboard";
     clipboard.writeText("liney-native-paste-test");
     stage = "send-ctrl-v";
     sendChord("V");
     stage = "verify-ctrl-v";
-    const pasted = await win.webContents.executeJavaScript(`document.getElementById("${fieldId}").value === "liney-native-paste-test"`);
+    const pasted = await waitFor(
+      () => win.webContents.executeJavaScript(fieldSelector + ".value === 'liney-native-paste-test'"),
+      Boolean,
+    );
+
     const menuActionCalls = getEditActionCalls();
-    const focusState = await win.webContents.executeJavaScript(`({ activeElementId: document.activeElement?.id, hasFocus: document.hasFocus() })`);
-    return { selectAll: allSelected, copy: copied, copiedText, selectionAfterCopy, copyMenuAction, cut, paste: pasted, menuActionCalls, x11WindowIds: windowIds, x11WindowNames, x11WindowId, focusedX11Window, beforeInputEvents, focusState };
+    const focusState = await win.webContents.executeJavaScript(
+      "({ activeElementId: document.activeElement?.id, hasFocus: document.hasFocus() })",
+    );
+    return {
+      selectAll: allSelected,
+      copy: copied,
+      copiedText: String(copiedText ?? ""),
+      selectionAfterCopy,
+      copyMenuAction: menuActionCalls.includes("copy"),
+      cut,
+      paste: pasted,
+      menuActionCalls,
+      x11WindowIds: windowIds,
+      x11WindowNames,
+      x11WindowId,
+      focusedX11Window,
+      beforeInputEvents,
+      focusState,
+    };
   } catch (error) {
-    throw new Error(`Native edit shortcut smoke failed at ${stage}: ${error?.stack || error}`);
+    throw new Error("Native edit shortcut smoke failed at " + stage + ": " + (error?.stack || error));
   } finally {
     win.webContents.removeListener("before-input-event", beforeInputListener);
     try {
-      await win.webContents.executeJavaScript(`document.getElementById("${fieldId}")?.remove()`);
+      await win.webContents.executeJavaScript(fieldSelector + "?.remove()");
     } finally {
-      if (typeof previousClipboard === "string" && previousClipboard.length > 0) {
+      clipboard.clear("clipboard");
+      for (const entry of previousClipboard) {
         try {
-          clipboard.writeText(previousClipboard);
+          clipboard.writeBuffer(entry.format, Buffer.from(entry.data, "base64"), "clipboard");
         } catch (error) {
-          // A platform clipboard may expose formats that cannot be written back as plain text.
-          console.warn("Unable to restore prior text clipboard after smoke test:", error?.message || error);
-          clipboard.clear();
+          console.warn("Unable to restore clipboard format " + entry.format + ":", error?.message || error);
         }
-      } else {
-        clipboard.clear();
       }
     }
   }
