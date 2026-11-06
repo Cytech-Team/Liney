@@ -1,7 +1,7 @@
 /**
  * Keep Chromium's native text-edit actions registered even though Liney hides
- * the menu bar. On Linux, suppressing the application menu also removes the
- * default Edit menu and its platform keyboard bindings.
+ * the menu bar. Explicit accelerators avoid Electron's platform-specific
+ * default registration behavior for the built-in cut/copy/paste roles.
  */
 export const EDIT_MENU_TEMPLATE = [
   {
@@ -10,17 +10,42 @@ export const EDIT_MENU_TEMPLATE = [
       { role: "undo" },
       { role: "redo" },
       { type: "separator" },
-      { role: "cut", registerAccelerator: true },
-      { role: "copy", registerAccelerator: true },
-      { role: "paste", registerAccelerator: true },
+      {
+        label: "Cut",
+        accelerator: "CommandOrControl+X",
+        registerAccelerator: true,
+        click: (_item, focusedWindow) => focusedWindow?.webContents.cut(),
+      },
+      {
+        label: "Copy",
+        accelerator: "CommandOrControl+C",
+        registerAccelerator: true,
+        click: (_item, focusedWindow) => focusedWindow?.webContents.copy(),
+      },
+      {
+        label: "Paste",
+        accelerator: "CommandOrControl+V",
+        registerAccelerator: true,
+        click: (_item, focusedWindow) => focusedWindow?.webContents.paste(),
+      },
       { role: "delete" },
       { type: "separator" },
-      { role: "selectAll", registerAccelerator: true },
+      {
+        label: "Select All",
+        accelerator: "CommandOrControl+A",
+        registerAccelerator: true,
+        click: (_item, focusedWindow) => focusedWindow?.webContents.selectAll(),
+      },
     ],
   },
 ];
 
-const REQUIRED_EDIT_ROLES = ["cut", "copy", "paste", "selectall"];
+const REQUIRED_EDIT_ACCELERATORS = [
+  ["Cut", "CommandOrControl+X"],
+  ["Copy", "CommandOrControl+C"],
+  ["Paste", "CommandOrControl+V"],
+  ["Select All", "CommandOrControl+A"],
+];
 
 export function installNativeEditMenu(Menu) {
   const menu = Menu.buildFromTemplate(EDIT_MENU_TEMPLATE);
@@ -31,12 +56,12 @@ export function installNativeEditMenu(Menu) {
 export function hasNativeEditShortcuts(menu) {
   const editMenu = menu?.items?.find((item) => item.label === "Edit");
   const items = editMenu?.submenu?.items ?? [];
-  return REQUIRED_EDIT_ROLES.every((role) => (
+  return REQUIRED_EDIT_ACCELERATORS.every(([label, accelerator]) => (
     items.some((item) => (
-      String(item.role ?? "").toLowerCase() === role.toLowerCase()
+      item.label === label
+      && item.accelerator === accelerator
       && item.registerAccelerator === true
-      && typeof item.accelerator === "string"
-      && item.accelerator.length > 0
+      && typeof item.click === "function"
     ))
   ));
 }

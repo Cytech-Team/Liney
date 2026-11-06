@@ -2,30 +2,42 @@ import { describe, expect, test } from "bun:test";
 import { EDIT_MENU_TEMPLATE, hasNativeEditShortcuts, installNativeEditMenu } from "./edit-menu.mjs";
 
 describe("Electron native Edit menu", () => {
-  test("registers cut, copy, paste and select-all roles", () => {
-    const roles = EDIT_MENU_TEMPLATE[0].submenu
-      .filter((item) => item.role)
-      .map((item) => item.role);
-
-    expect(roles).toEqual(["undo", "redo", "cut", "copy", "paste", "delete", "selectAll"]);
-    for (const role of ["cut", "copy", "paste", "selectAll"]) {
-      const item = EDIT_MENU_TEMPLATE[0].submenu.find((entry) => entry.role === role);
+  test("registers explicit Control/Command accelerators for all four edit actions", () => {
+    const items = EDIT_MENU_TEMPLATE[0].submenu;
+    const expected = [
+      ["Cut", "CommandOrControl+X"],
+      ["Copy", "CommandOrControl+C"],
+      ["Paste", "CommandOrControl+V"],
+      ["Select All", "CommandOrControl+A"],
+    ];
+    for (const [label, accelerator] of expected) {
+      const item = items.find((entry) => entry.label === label);
+      expect(item?.accelerator).toBe(accelerator);
       expect(item?.registerAccelerator).toBe(true);
+      expect(typeof item?.click).toBe("function");
     }
   });
 
-  test("installs the native Edit menu as the application menu", () => {
-    let installed;
-    const fakeMenu = {
-      items: [{
-        label: "Edit",
-        submenu: { items: EDIT_MENU_TEMPLATE[0].submenu.map((item) => ({
-          ...item,
-          role: item.role === "selectAll" ? "selectall" : item.role,
-          accelerator: item.role ? "CommandOrControl+A" : undefined,
-        })) },
-      }],
+  test("routes each accelerator to the focused webContents edit method", () => {
+    const calls = [];
+    const focusedWindow = {
+      webContents: {
+        cut: () => calls.push("cut"),
+        copy: () => calls.push("copy"),
+        paste: () => calls.push("paste"),
+        selectAll: () => calls.push("selectAll"),
+      },
     };
+    const items = EDIT_MENU_TEMPLATE[0].submenu;
+    for (const label of ["Cut", "Copy", "Paste", "Select All"]) {
+      items.find((item) => item.label === label).click({}, focusedWindow);
+    }
+    expect(calls).toEqual(["cut", "copy", "paste", "selectAll"]);
+  });
+
+  test("installs and validates the application Edit menu", () => {
+    let installed;
+    const fakeMenu = { items: [{ label: "Edit", submenu: { items: EDIT_MENU_TEMPLATE[0].submenu } }] };
     const fakeElectronMenu = {
       buildFromTemplate(template) {
         expect(template).toBe(EDIT_MENU_TEMPLATE);
@@ -41,9 +53,12 @@ describe("Electron native Edit menu", () => {
     expect(hasNativeEditShortcuts(installed)).toBe(true);
   });
 
-  test("fails closed when an editing accelerator role is missing", () => {
+  test("fails closed when any accelerator is absent or unregistered", () => {
     const incompleteMenu = {
-      items: [{ label: "Edit", submenu: { items: [{ role: "copy", registerAccelerator: false, accelerator: "CommandOrControl+C" }, { role: "paste", registerAccelerator: true, accelerator: "CommandOrControl+V" }] } }],
+      items: [{ label: "Edit", submenu: { items: [
+        { label: "Copy", accelerator: "CommandOrControl+C", registerAccelerator: false, click() {} },
+        { label: "Paste", accelerator: "CommandOrControl+V", registerAccelerator: true, click() {} },
+      ] } }],
     };
 
     expect(hasNativeEditShortcuts(incompleteMenu)).toBe(false);
