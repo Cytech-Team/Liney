@@ -14,19 +14,19 @@ export const EDIT_MENU_TEMPLATE = [
         label: "Cut",
         accelerator: "CommandOrControl+X",
         registerAccelerator: true,
-        click: (_item, focusedWindow) => runEditAction("cut", focusedWindow),
+        click: (_item, focusedWindow) => runEditAction("cut", focusedWindow?.webContents),
       },
       {
         label: "Copy",
         accelerator: "CommandOrControl+C",
         registerAccelerator: true,
-        click: (_item, focusedWindow) => runEditAction("copy", focusedWindow),
+        click: (_item, focusedWindow) => runEditAction("copy", focusedWindow?.webContents),
       },
       {
         label: "Paste",
         accelerator: "CommandOrControl+V",
         registerAccelerator: true,
-        click: (_item, focusedWindow) => runEditAction("paste", focusedWindow),
+        click: (_item, focusedWindow) => runEditAction("paste", focusedWindow?.webContents),
       },
       { role: "delete" },
       { type: "separator" },
@@ -34,7 +34,7 @@ export const EDIT_MENU_TEMPLATE = [
         label: "Select All",
         accelerator: "CommandOrControl+A",
         registerAccelerator: true,
-        click: (_item, focusedWindow) => runEditAction("selectAll", focusedWindow),
+        click: (_item, focusedWindow) => runEditAction("selectAll", focusedWindow?.webContents),
       },
     ],
   },
@@ -49,9 +49,8 @@ const REQUIRED_EDIT_ACCELERATORS = [
 
 const editActionCalls = [];
 
-function runEditAction(action, focusedWindow) {
+function runEditAction(action, webContents) {
   editActionCalls.push(action);
-  const webContents = focusedWindow?.webContents;
   if (!webContents || (typeof webContents.isDestroyed === "function" && webContents.isDestroyed())) return;
   switch (action) {
     case "cut": webContents.cut(); break;
@@ -59,6 +58,31 @@ function runEditAction(action, focusedWindow) {
     case "paste": webContents.paste(); break;
     case "selectAll": webContents.selectAll(); break;
   }
+}
+
+const EDIT_KEY_ACTIONS = new Map([
+  ["KeyA", "selectAll"],
+  ["KeyC", "copy"],
+  ["KeyX", "cut"],
+  ["KeyV", "paste"],
+]);
+
+/**
+ * Handle the four standard editing chords at Electron's per-window input
+ * boundary. Using KeyboardEvent.code keeps the shortcuts independent of the
+ * active keyboard layout or IME-produced character while leaving composition
+ * and ordinary text input untouched.
+ */
+export function installNativeEditShortcuts(webContents) {
+  const onBeforeInput = (event, input) => {
+    if (input.type !== "keyDown" || input.alt || input.shift || (!input.control && !input.meta)) return;
+    const action = EDIT_KEY_ACTIONS.get(input.code);
+    if (!action) return;
+    event.preventDefault();
+    runEditAction(action, webContents);
+  };
+  webContents.on("before-input-event", onBeforeInput);
+  return () => webContents.removeListener("before-input-event", onBeforeInput);
 }
 
 export function resetEditActionCalls() {

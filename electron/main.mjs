@@ -12,7 +12,7 @@ import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { getEditActionCalls, hasNativeEditShortcuts, installNativeEditMenu, resetEditActionCalls } from "./edit-menu.mjs";
+import { getEditActionCalls, hasNativeEditShortcuts, installNativeEditMenu, installNativeEditShortcuts, resetEditActionCalls } from "./edit-menu.mjs";
 
 protocol.registerSchemesAsPrivileged([
   {scheme:"lineyapp",privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}
@@ -257,8 +257,10 @@ function createWindow(label="main", opts={}) {
       devTools:!bundled
     }
   });
-  // Keep native Edit roles/accelerators installed while hiding the visible menu bar.
+  // Keep the Edit menu available for native editing and handle keyboard chords
+  // at the Electron input boundary, even though the visible menu bar is hidden.
   win.setMenuBarVisibility(false);
+  installNativeEditShortcuts(win.webContents);
   windows.set(label,win);
   win.on("closed",()=>windows.delete(label));
   win.on("close",event=>{

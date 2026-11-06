@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { EDIT_MENU_TEMPLATE, getEditActionCalls, hasNativeEditShortcuts, installNativeEditMenu, resetEditActionCalls } from "./edit-menu.mjs";
+import { EventEmitter } from "node:events";
+import { EDIT_MENU_TEMPLATE, getEditActionCalls, hasNativeEditShortcuts, installNativeEditMenu, installNativeEditShortcuts, resetEditActionCalls } from "./edit-menu.mjs";
 
 describe("Electron native Edit menu", () => {
   test("registers explicit Control/Command accelerators for all four edit actions", () => {
@@ -36,6 +37,38 @@ describe("Electron native Edit menu", () => {
     }
     expect(calls).toEqual(["cut", "copy", "paste", "selectAll"]);
     expect(getEditActionCalls()).toEqual(["cut", "copy", "paste", "selectAll"]);
+  });
+
+
+  test("dispatches Ctrl/Meta+A/C/X/V before layout-dependent character handling", () => {
+    resetEditActionCalls();
+    const webContents = new EventEmitter();
+    const calls = [];
+    webContents.isDestroyed = () => false;
+    webContents.cut = () => calls.push("cut");
+    webContents.copy = () => calls.push("copy");
+    webContents.paste = () => calls.push("paste");
+    webContents.selectAll = () => calls.push("selectAll");
+    const uninstall = installNativeEditShortcuts(webContents);
+    const send = (input) => {
+      let prevented = false;
+      webContents.emit("before-input-event", { preventDefault: () => { prevented = true; } }, input);
+      return prevented;
+    };
+
+    for (const [code, action] of [["KeyA", "selectAll"], ["KeyC", "copy"], ["KeyX", "cut"], ["KeyV", "paste"]]) {
+      expect(send({ type: "keyDown", code, key: "ค", control: true })).toBe(true);
+    }
+    expect(calls).toEqual(["selectAll", "copy", "cut", "paste"]);
+    expect(getEditActionCalls()).toEqual(["selectAll", "copy", "cut", "paste"]);
+    expect(send({ type: "keyDown", code: "KeyA", key: "a", control: false, meta: false })).toBe(false);
+    expect(send({ type: "keyDown", code: "KeyA", key: "a", control: true, shift: true })).toBe(false);
+    expect(send({ type: "keyDown", code: "Unidentified", key: "Process", control: true })).toBe(false);
+    expect(send({ type: "keyUp", code: "KeyA", key: "a", control: true })).toBe(false);
+    expect(calls).toHaveLength(4);
+
+    uninstall();
+    expect(webContents.listenerCount("before-input-event")).toBe(0);
   });
 
   test("installs and validates the application Edit menu", () => {
