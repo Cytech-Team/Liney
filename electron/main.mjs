@@ -2,7 +2,7 @@
  * Liney Electron shell. React UI and LINEJS are reused verbatim.
  * This is an isolated preview until live session, packaging and security QA pass.
  */
-import { app, BrowserWindow, ipcMain, dialog, Notification, shell, clipboard, Menu, Tray, protocol, net } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, Notification, shell, clipboard, ClipboardItem, Menu, Tray, protocol, net } from "electron";
 import updater from "electron-updater";
 const { autoUpdater } = updater;
 import { Worker } from "node:worker_threads";
@@ -11,6 +11,8 @@ import { writeFile, mkdir, stat } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
+import { getEditActionCalls, hasNativeEditShortcuts, installNativeEditMenu, installNativeEditShortcuts, resetEditActionCalls } from "./edit-menu.mjs";
 
 protocol.registerSchemesAsPrivileged([
   {scheme:"lineyapp",privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}
@@ -255,8 +257,10 @@ function createWindow(label="main", opts={}) {
       devTools:!bundled
     }
   });
+  // Keep the Edit menu available for native editing and handle keyboard chords
+  // at the Electron input boundary, even though the visible menu bar is hidden.
   win.setMenuBarVisibility(false);
-  win.removeMenu();
+  installNativeEditShortcuts(win.webContents);
   windows.set(label,win);
   win.on("closed",()=>windows.delete(label));
   win.on("close",event=>{
@@ -272,13 +276,18 @@ function createWindow(label="main", opts={}) {
             logoLoaded: Boolean(document.querySelector(".auth-brand img")?.naturalWidth),
             bridge: Boolean(window.lineyDesktop),
           })`);
+          const nativeEditShortcuts = await verifyNativeEditShortcuts(win);
           await ensureEngine();
           const pong=await requestEngine("ping");
           const helpers=bundledHelperEnvironment();
-          const outcome={...checks,nativeHelpers:Object.keys(helpers).length,menuHidden:!win.isMenuBarVisible() && Menu.getApplicationMenu()===null,enginePong:Boolean(pong),renderer:"React original",system:"Electron"};
+          const appMenu=Menu.getApplicationMenu();
+          const editMenu=appMenu?.items?.find(item=>item.label==="Edit");
+          const editItems=(editMenu?.submenu?.items ?? []).map(item=>({label:item.label,role:item.role,accelerator:item.accelerator,registerAccelerator:item.registerAccelerator}));
+          const outcome={...checks,nativeHelpers:Object.keys(helpers).length,menuHidden:!win.isMenuBarVisible(),nativeEditMenu:hasNativeEditShortcuts(appMenu),editItems,nativeEditShortcuts,enginePong:Boolean(pong),renderer:"React original",system:"Electron"};
           console.log("LINEY_ELECTRON_SMOKE_RESULT="+JSON.stringify(outcome));
-          app.exit(checks.authDialog && checks.logoLoaded && checks.bridge && outcome.nativeHelpers===5 && outcome.menuHidden && Boolean(pong) ? 0 : 3);
-        }catch(e){console.error("LINEY_ELECTRON_SMOKE_ERROR="+String(e));app.exit(4);}
+          const shortcutsPassed=Object.values(nativeEditShortcuts).every(Boolean);
+          app.exit(checks.authDialog && checks.logoLoaded && checks.bridge && outcome.nativeHelpers===5 && outcome.menuHidden && outcome.nativeEditMenu && shortcutsPassed && Boolean(pong) ? 0 : 3);
+        }catch(e){console.error("LINEY_ELECTRON_SMOKE_ERROR="+(e?.stack || String(e)));app.exit(4);}
       },1000);
     });
   }
@@ -390,9 +399,147 @@ async function runDesktopCommand(command,args={}) {
     default:throw new Error("Unsupported desktop command: "+command);
   }
 }
+async function verifyNativeEditShortcuts(win) {
+  let stage = "show-window";
+  win.show();
+  win.focus();
+  stage = "snapshot-clipboard";
+  const previousClipboard = await clipboard.read();
+  const restorableClipboardItems = await Promise.all(previousClipboard
+    .filter((item) => item.types.length > 0)
+    .map(async (item) => {
+      const entries = await Promise.all(item.types.map(async (type) => [type, await item.getType(type)]));
+      return new ClipboardItem(Object.fromEntries(entries));
+    }));
+  resetEditActionCalls();
+  const fieldId = "liney-native-edit-shortcut-smoke";
+  stage = "find-electron-x11-window";
+  const windowIds = execFileSync("xdotool", ["search", "--onlyvisible", "--pid", String(process.pid)], {
+    encoding: "utf8",
+    timeout: 3000,
+  }).trim().split(/\s+/).filter(Boolean);
+  if (windowIds.length === 0) throw new Error(`No visible X11 window found for Electron PID ${process.pid}`);
+  const x11WindowId = windowIds[windowIds.length - 1];
+  const x11WindowNames = windowIds.map((id) => ({
+    id,
+    name: execFileSync("xdotool", ["getwindowname", id], { encoding: "utf8", timeout: 3000 }).trim(),
+  }));
+  execFileSync("xdotool", ["windowraise", x11WindowId], { stdio: "ignore", timeout: 3000 });
+  execFileSync("xdotool", ["windowfocus", "--sync", x11WindowId], { stdio: "ignore", timeout: 3000 });
+  const focusedX11Window = execFileSync("xdotool", ["getwindowfocus"], { encoding: "utf8", timeout: 3000 }).trim();
+  const beforeInputEvents = [];
+  const beforeInputListener = (_event, input) => {
+    if (input.type === "keyDown") beforeInputEvents.push({ key: input.key, code: input.code, control: input.control, meta: input.meta, shift: input.shift });
+  };
+  win.webContents.on("before-input-event", beforeInputListener);
+  const sendChord = (key) => {
+    // Send through X11 to the focused Electron window, like a physical keyboard.
+    execFileSync("xdotool", ["key", "--clearmodifiers", `ctrl+${key.toLowerCase()}`], {
+      stdio: "ignore",
+      timeout: 3000,
+    });
+  };
+  const fieldSelector = "document.getElementById(" + JSON.stringify(fieldId) + ")";
+  const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+  const waitFor = async (read, predicate, attempts = 40) => {
+    let latest;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      latest = await read();
+      if (predicate(latest)) return latest;
+      await delay(25);
+    }
+    return latest;
+  };
+  try {
+    stage = "create-test-textarea";
+    const createFieldScript = [
+      "(() => {",
+      "  const field = document.createElement('textarea');",
+      "  field.id = " + JSON.stringify(fieldId) + ";",
+      "  field.value = 'liney-native-edit-test';",
+      "  field.setAttribute('aria-hidden', 'true');",
+      "  field.style.cssText = 'position:fixed;left:0;top:0;width:160px;height:40px;opacity:0.01;z-index:2147483647';",
+      "  document.body.appendChild(field);",
+      "  field.focus();",
+      "  return { activeElementId: document.activeElement?.id, hasFocus: document.hasFocus() };",
+      "})()",
+    ].join("\n");
+    await win.webContents.executeJavaScript(createFieldScript);
+
+    stage = "focus-test-textarea";
+    await win.webContents.executeJavaScript(fieldSelector + ".focus()");
+    stage = "send-ctrl-a";
+    sendChord("A");
+    stage = "verify-ctrl-a";
+    const selectionScript = "(() => { const field = " + fieldSelector + "; return field.selectionStart === 0 && field.selectionEnd === field.value.length; })()";
+    const allSelected = await waitFor(
+      () => win.webContents.executeJavaScript(selectionScript),
+      Boolean,
+    );
+
+    stage = "send-ctrl-c";
+    sendChord("C");
+    stage = "wait-for-copy";
+    const copiedText = await waitFor(() => clipboard.readText(), (value) => value === "liney-native-edit-test");
+    const copied = copiedText === "liney-native-edit-test";
+    const selectionAfterCopy = await win.webContents.executeJavaScript(
+      "(() => { const field = " + fieldSelector + "; return { start: field.selectionStart, end: field.selectionEnd, value: field.value }; })()",
+    );
+
+    stage = "send-ctrl-x";
+    sendChord("X");
+    stage = "verify-ctrl-x";
+    const cut = await waitFor(
+      () => win.webContents.executeJavaScript(fieldSelector + ".value === ''"),
+      Boolean,
+    );
+
+    stage = "write-paste-clipboard";
+    await clipboard.writeText("liney-native-paste-test");
+    stage = "send-ctrl-v";
+    sendChord("V");
+    stage = "verify-ctrl-v";
+    const pasted = await waitFor(
+      () => win.webContents.executeJavaScript(fieldSelector + ".value === 'liney-native-paste-test'"),
+      Boolean,
+    );
+
+    const menuActionCalls = getEditActionCalls();
+    const focusState = await win.webContents.executeJavaScript(
+      "({ activeElementId: document.activeElement?.id, hasFocus: document.hasFocus() })",
+    );
+    return {
+      selectAll: allSelected,
+      copy: copied,
+      copiedText: String(copiedText ?? ""),
+      selectionAfterCopy,
+      copyMenuAction: menuActionCalls.includes("copy"),
+      cut,
+      paste: pasted,
+      menuActionCalls,
+      x11WindowIds: windowIds,
+      x11WindowNames,
+      x11WindowId,
+      focusedX11Window,
+      beforeInputEvents,
+      focusState,
+    };
+  } catch (error) {
+    throw new Error("Native edit shortcut smoke failed at " + stage + ": " + (error?.stack || error));
+  } finally {
+    win.webContents.removeListener("before-input-event", beforeInputListener);
+    try {
+      await win.webContents.executeJavaScript(fieldSelector + "?.remove()");
+    } finally {
+      await clipboard.clear();
+      if (restorableClipboardItems.length > 0) await clipboard.write(restorableClipboardItems);
+    }
+  }
+}
+
 app.whenReady().then(async()=>{
-  // No browser-style File/Edit/View/Window menu in a standalone messenger.
-  Menu.setApplicationMenu(null);
+  // Keep standard Edit roles for native text controls; the menu bar remains hidden per window.
+  installNativeEditMenu(Menu);
   protocol.handle("lineyapp",request=>{
     const url=new URL(request.url);
     if(url.hostname!=="app")return new Response("Unknown app host",{status:403});
