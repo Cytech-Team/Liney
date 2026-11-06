@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { EDIT_MENU_TEMPLATE, hasNativeEditShortcuts, installNativeEditMenu } from "./edit-menu.mjs";
+import { EDIT_MENU_TEMPLATE, getEditActionCalls, hasNativeEditShortcuts, installNativeEditMenu, resetEditActionCalls } from "./edit-menu.mjs";
 
 describe("Electron native Edit menu", () => {
   test("registers explicit Control/Command accelerators for all four edit actions", () => {
@@ -19,9 +19,11 @@ describe("Electron native Edit menu", () => {
   });
 
   test("routes each accelerator to the focused webContents edit method", () => {
+    resetEditActionCalls();
     const calls = [];
     const focusedWindow = {
       webContents: {
+        isDestroyed: () => false,
         cut: () => calls.push("cut"),
         copy: () => calls.push("copy"),
         paste: () => calls.push("paste"),
@@ -33,6 +35,7 @@ describe("Electron native Edit menu", () => {
       items.find((item) => item.label === label).click({}, focusedWindow);
     }
     expect(calls).toEqual(["cut", "copy", "paste", "selectAll"]);
+    expect(getEditActionCalls()).toEqual(["cut", "copy", "paste", "selectAll"]);
   });
 
   test("installs and validates the application Edit menu", () => {
@@ -54,6 +57,7 @@ describe("Electron native Edit menu", () => {
   });
 
   test("fails closed when any accelerator is absent or unregistered", () => {
+    expect(EDIT_MENU_TEMPLATE[0].submenu.find((item) => item.label === "Copy").click({}, {})).toBeUndefined();
     const incompleteMenu = {
       items: [{ label: "Edit", submenu: { items: [
         { label: "Copy", accelerator: "CommandOrControl+C", registerAccelerator: false, click() {} },

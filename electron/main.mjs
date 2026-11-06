@@ -11,7 +11,8 @@ import { writeFile, mkdir, stat } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { hasNativeEditShortcuts, installNativeEditMenu } from "./edit-menu.mjs";
+import { execFileSync } from "node:child_process";
+import { getEditActionCalls, hasNativeEditShortcuts, installNativeEditMenu, resetEditActionCalls } from "./edit-menu.mjs";
 
 protocol.registerSchemesAsPrivileged([
   {scheme:"lineyapp",privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}
@@ -402,10 +403,15 @@ async function verifyNativeEditShortcuts(win) {
   win.focus();
   stage = "read-clipboard";
   const previousClipboard = clipboard.readText();
+  resetEditActionCalls();
   const fieldId = "liney-native-edit-shortcut-smoke";
   const sendChord = (key) => {
-    win.webContents.sendInputEvent({ type: "keyDown", keyCode: key, modifiers: ["control"] });
-    win.webContents.sendInputEvent({ type: "keyUp", keyCode: key, modifiers: ["control"] });
+    // Use X11 input injection in Xvfb so the accelerator traverses the same
+    // platform menu registration path as a physical Linux keyboard.
+    execFileSync("xdotool", ["key", "--clearmodifiers", `ctrl+${key.toLowerCase()}`], {
+      stdio: "ignore",
+      timeout: 3000,
+    });
   };
   try {
     stage = "create-test-textarea";
@@ -438,6 +444,7 @@ async function verifyNativeEditShortcuts(win) {
     const copiedText = clipboard.readText("clipboard");
     const selectionAfterCopy = await win.webContents.executeJavaScript(`(() => { const field = document.getElementById("${fieldId}"); return { start: field.selectionStart, end: field.selectionEnd, value: field.value }; })()`);
     const copied = copiedText === "liney-native-edit-test";
+    const copyMenuAction = getEditActionCalls().includes("copy");
     stage = "send-ctrl-x";
     sendChord("X");
     stage = "verify-ctrl-x";

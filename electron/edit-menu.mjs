@@ -14,19 +14,19 @@ export const EDIT_MENU_TEMPLATE = [
         label: "Cut",
         accelerator: "CommandOrControl+X",
         registerAccelerator: true,
-        click: (_item, focusedWindow) => focusedWindow?.webContents.cut(),
+        click: (_item, focusedWindow) => runEditAction("cut", focusedWindow),
       },
       {
         label: "Copy",
         accelerator: "CommandOrControl+C",
         registerAccelerator: true,
-        click: (_item, focusedWindow) => focusedWindow?.webContents.copy(),
+        click: (_item, focusedWindow) => runEditAction("copy", focusedWindow),
       },
       {
         label: "Paste",
         accelerator: "CommandOrControl+V",
         registerAccelerator: true,
-        click: (_item, focusedWindow) => focusedWindow?.webContents.paste(),
+        click: (_item, focusedWindow) => runEditAction("paste", focusedWindow),
       },
       { role: "delete" },
       { type: "separator" },
@@ -34,7 +34,7 @@ export const EDIT_MENU_TEMPLATE = [
         label: "Select All",
         accelerator: "CommandOrControl+A",
         registerAccelerator: true,
-        click: (_item, focusedWindow) => focusedWindow?.webContents.selectAll(),
+        click: (_item, focusedWindow) => runEditAction("selectAll", focusedWindow),
       },
     ],
   },
@@ -46,6 +46,28 @@ const REQUIRED_EDIT_ACCELERATORS = [
   ["Paste", "CommandOrControl+V"],
   ["Select All", "CommandOrControl+A"],
 ];
+
+const editActionCalls = [];
+
+function runEditAction(action, focusedWindow) {
+  editActionCalls.push(action);
+  const webContents = focusedWindow?.webContents;
+  if (!webContents || (typeof webContents.isDestroyed === "function" && webContents.isDestroyed())) return;
+  switch (action) {
+    case "cut": webContents.cut(); break;
+    case "copy": webContents.copy(); break;
+    case "paste": webContents.paste(); break;
+    case "selectAll": webContents.selectAll(); break;
+  }
+}
+
+export function resetEditActionCalls() {
+  editActionCalls.length = 0;
+}
+
+export function getEditActionCalls() {
+  return [...editActionCalls];
+}
 
 export function installNativeEditMenu(Menu) {
   const menu = Menu.buildFromTemplate(EDIT_MENU_TEMPLATE);
