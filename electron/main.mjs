@@ -412,8 +412,18 @@ async function verifyNativeEditShortcuts(win) {
   }).trim().split(/\s+/).filter(Boolean);
   if (windowIds.length === 0) throw new Error(`No visible X11 window found for Electron PID ${process.pid}`);
   const x11WindowId = windowIds[windowIds.length - 1];
+  const x11WindowNames = windowIds.map((id) => ({
+    id,
+    name: execFileSync("xdotool", ["getwindowname", id], { encoding: "utf8", timeout: 3000 }).trim(),
+  }));
   execFileSync("xdotool", ["windowraise", x11WindowId], { stdio: "ignore", timeout: 3000 });
   execFileSync("xdotool", ["windowfocus", "--sync", x11WindowId], { stdio: "ignore", timeout: 3000 });
+  const focusedX11Window = execFileSync("xdotool", ["getwindowfocus"], { encoding: "utf8", timeout: 3000 }).trim();
+  const beforeInputEvents = [];
+  const beforeInputListener = (_event, input) => {
+    if (input.type === "keyDown" && input.control) beforeInputEvents.push({ key: input.key, code: input.code, type: input.type });
+  };
+  win.webContents.on("before-input-event", beforeInputListener);
   const sendChord = (key) => {
     // Send through X11 to the focused Electron window, like a physical keyboard.
     execFileSync("xdotool", ["key", "--clearmodifiers", `ctrl+${key.toLowerCase()}`], {
@@ -431,7 +441,7 @@ async function verifyNativeEditShortcuts(win) {
       field.style.cssText = "position:fixed;left:0;top:0;width:160px;height:40px;opacity:0.01;z-index:2147483647";
       document.body.appendChild(field);
       field.focus();
-      return true;
+      return { activeElementId: document.activeElement?.id, hasFocus: document.hasFocus() };
     })()`);
     const selectAll = async () => {
       stage = "focus-and-select-all";
@@ -466,6 +476,7 @@ async function verifyNativeEditShortcuts(win) {
   } catch (error) {
     throw new Error(`Native edit shortcut smoke failed at ${stage}: ${error?.stack || error}`);
   } finally {
+    win.webContents.removeListener("before-input-event", beforeInputListener);
     try {
       await win.webContents.executeJavaScript(`document.getElementById("${fieldId}")?.remove()`);
     } finally {
