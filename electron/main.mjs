@@ -404,13 +404,7 @@ async function verifyNativeEditShortcuts(win) {
   win.show();
   win.focus();
   stage = "snapshot-clipboard";
-  const previousClipboard = {
-    text: clipboard.readText(),
-    html: typeof clipboard.readHTML === "function" ? clipboard.readHTML() : "",
-    rtf: typeof clipboard.readRTF === "function" ? clipboard.readRTF() : "",
-    bookmark: typeof clipboard.readBookmark === "function" ? clipboard.readBookmark() : null,
-    image: typeof clipboard.readImage === "function" ? clipboard.readImage() : null,
-  };
+  const previousClipboard = await clipboard.read();
   resetEditActionCalls();
   const fieldId = "liney-native-edit-shortcut-smoke";
   stage = "find-electron-x11-window";
@@ -495,7 +489,7 @@ async function verifyNativeEditShortcuts(win) {
     );
 
     stage = "write-paste-clipboard";
-    clipboard.writeText("liney-native-paste-test");
+    await clipboard.writeText("liney-native-paste-test");
     stage = "send-ctrl-v";
     sendChord("V");
     stage = "verify-ctrl-v";
@@ -531,18 +525,8 @@ async function verifyNativeEditShortcuts(win) {
     try {
       await win.webContents.executeJavaScript(fieldSelector + "?.remove()");
     } finally {
-      const restoreClipboard = {};
-      if (previousClipboard.text) restoreClipboard.text = previousClipboard.text;
-      if (previousClipboard.html) restoreClipboard.html = previousClipboard.html;
-      if (previousClipboard.rtf) restoreClipboard.rtf = previousClipboard.rtf;
-      if (previousClipboard.bookmark?.url || previousClipboard.bookmark?.title) {
-        restoreClipboard.bookmark = previousClipboard.bookmark;
-      }
-      if (previousClipboard.image && !previousClipboard.image.isEmpty()) {
-        restoreClipboard.image = previousClipboard.image;
-      }
-      clipboard.clear();
-      if (Object.keys(restoreClipboard).length > 0) clipboard.write(restoreClipboard);
+      await clipboard.clear();
+      if (previousClipboard.length > 0) await clipboard.write(previousClipboard);
     }
   }
 }
