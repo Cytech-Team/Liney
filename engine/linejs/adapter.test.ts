@@ -129,9 +129,14 @@ describe("LineJsAdapter E2EE Talk media", () => {
   test("keeps media replies encrypted and attaches the relation to the final Talk message", async () => {
     const uploads: Array<Record<string, unknown>> = [];
     let sent: Record<string, unknown> | undefined;
+    const privateKey = Buffer.alloc(32, 1);
+    const publicKey = Buffer.alloc(32, 2);
     const client = {
       base: {
+        profile: { mid: "u-self" },
         e2ee: {
+          getE2EESelfKeyData: async () => ({ keyId: 7, privKey: privateKey.toString("base64"), pubKey: publicKey.toString("base64") }),
+          verifyE2EEKeyPair: (_privateKey: Buffer, candidate: Buffer) => candidate.equals(publicKey),
           encryptByKeyMaterial: async () => ({ keyMaterial: Buffer.alloc(32, 1).toString("base64"), encryptedData: Buffer.from("encrypted") }),
           encryptE2EEMessage: async () => ["chunk-a", "chunk-b"],
         },
@@ -142,6 +147,7 @@ describe("LineJsAdapter E2EE Talk media", () => {
           },
         },
         talk: {
+          getE2EEPublicKeys: async () => [{ keyId: 7, keyData: publicKey.toString("base64") }],
           sendMessage: async (value: Record<string, unknown>) => { sent = value; return { id: "631457091218833700" }; },
         },
       },
@@ -172,6 +178,74 @@ describe("LineJsAdapter E2EE Talk media", () => {
         DURATION: "1235",
       },
     });
+  });
+
+  test("accepts LINE's registered sender key returned as a raw binary string", async () => {
+    const privateKey = Buffer.alloc(32, 4);
+    const publicKey = Buffer.alloc(32, 5);
+    let uploadCalls = 0;
+    const client = {
+      base: {
+        profile: { mid: "u-self" },
+        e2ee: {
+          getE2EESelfKeyData: async () => ({ keyId: 8, privKey: privateKey.toString("base64"), pubKey: publicKey.toString("base64") }),
+          verifyE2EEKeyPair: (_privateKey: Buffer, candidate: Buffer) => candidate.equals(publicKey),
+          encryptByKeyMaterial: async () => ({ keyMaterial: Buffer.alloc(32, 1).toString("base64"), encryptedData: Buffer.from("encrypted") }),
+          encryptE2EEMessage: async () => ["chunk-a"],
+        },
+        obs: {
+          uploadObjectForService: async () => { uploadCalls += 1; return { objId: "obj-e2ee" }; },
+        },
+        talk: {
+          getE2EEPublicKeys: async () => [{ keyId: 8, keyData: publicKey.toString("latin1") }],
+          sendMessage: async () => ({ id: "server-message-2" }),
+        },
+      },
+    } as any;
+
+    await expect(sendTalkMediaE2EE(client, {
+      to: "u-peer",
+      oType: "file",
+      data: new Blob(["safe file"]),
+      filename: "safe.txt",
+    })).resolves.toEqual({ id: "server-message-2" });
+    expect(uploadCalls).toBe(1);
+  });
+
+  test("stops before upload when the active sender key differs from LINE's registered key", async () => {
+    const uploads: Array<Record<string, unknown>> = [];
+    let encryptionCalls = 0;
+    const privateKey = Buffer.alloc(32, 1);
+    const localPublicKey = Buffer.alloc(32, 2);
+    const registeredPublicKey = Buffer.alloc(32, 3);
+    const client = {
+      base: {
+        profile: { mid: "u-self" },
+        e2ee: {
+          getE2EESelfKeyData: async () => ({ keyId: 7, privKey: privateKey.toString("base64"), pubKey: localPublicKey.toString("base64") }),
+          verifyE2EEKeyPair: (_privateKey: Buffer, candidate: Buffer) => candidate.equals(localPublicKey),
+          encryptByKeyMaterial: async () => { encryptionCalls += 1; return { keyMaterial: "", encryptedData: Buffer.from("encrypted") }; },
+          encryptE2EEMessage: async () => ["chunk-a"],
+        },
+        obs: {
+          uploadObjectForService: async (value: Record<string, unknown>) => { uploads.push(value); return { objId: "obj-e2ee" }; },
+        },
+        talk: {
+          getE2EEPublicKeys: async () => [{ keyId: 7, keyData: registeredPublicKey }],
+          sendMessage: async () => ({ id: "should-not-send" }),
+        },
+      },
+    } as any;
+
+    await expect(sendTalkMediaE2EE(client, {
+      to: "u-peer",
+      oType: "file",
+      data: new Blob(["secret file"]),
+      filename: "secret.txt",
+    })).rejects.toThrow("does not match LINE's registered public key");
+
+    expect(encryptionCalls).toBe(0);
+    expect(uploads).toHaveLength(0);
   });
 });
 
