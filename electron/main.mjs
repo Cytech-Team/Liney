@@ -11,6 +11,7 @@ import { writeFile, mkdir, stat } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { hasNativeEditShortcuts, installNativeEditMenu } from "./edit-menu.mjs";
 
 protocol.registerSchemesAsPrivileged([
   {scheme:"lineyapp",privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}
@@ -255,8 +256,8 @@ function createWindow(label="main", opts={}) {
       devTools:!bundled
     }
   });
+  // Keep native Edit roles/accelerators installed while hiding the visible menu bar.
   win.setMenuBarVisibility(false);
-  win.removeMenu();
   windows.set(label,win);
   win.on("closed",()=>windows.delete(label));
   win.on("close",event=>{
@@ -272,12 +273,15 @@ function createWindow(label="main", opts={}) {
             logoLoaded: Boolean(document.querySelector(".auth-brand img")?.naturalWidth),
             bridge: Boolean(window.lineyDesktop),
           })`);
+          const nativeEditShortcuts = await verifyNativeEditShortcuts(win);
           await ensureEngine();
           const pong=await requestEngine("ping");
           const helpers=bundledHelperEnvironment();
-          const outcome={...checks,nativeHelpers:Object.keys(helpers).length,menuHidden:!win.isMenuBarVisible() && Menu.getApplicationMenu()===null,enginePong:Boolean(pong),renderer:"React original",system:"Electron"};
+          const appMenu=Menu.getApplicationMenu();
+          const outcome={...checks,nativeHelpers:Object.keys(helpers).length,menuHidden:!win.isMenuBarVisible(),nativeEditMenu:hasNativeEditShortcuts(appMenu),nativeEditShortcuts,enginePong:Boolean(pong),renderer:"React original",system:"Electron"};
           console.log("LINEY_ELECTRON_SMOKE_RESULT="+JSON.stringify(outcome));
-          app.exit(checks.authDialog && checks.logoLoaded && checks.bridge && outcome.nativeHelpers===5 && outcome.menuHidden && Boolean(pong) ? 0 : 3);
+          const shortcutsPassed=Object.values(nativeEditShortcuts).every(Boolean);
+          app.exit(checks.authDialog && checks.logoLoaded && checks.bridge && outcome.nativeHelpers===5 && outcome.menuHidden && outcome.nativeEditMenu && shortcutsPassed && Boolean(pong) ? 0 : 3);
         }catch(e){console.error("LINEY_ELECTRON_SMOKE_ERROR="+String(e));app.exit(4);}
       },1000);
     });
@@ -390,9 +394,54 @@ async function runDesktopCommand(command,args={}) {
     default:throw new Error("Unsupported desktop command: "+command);
   }
 }
+async function verifyNativeEditShortcuts(win) {
+  win.show();
+  win.focus();
+  const previousClipboard = clipboard.readText();
+  const fieldId = "liney-native-edit-shortcut-smoke";
+  const sendChord = (key) => {
+    win.webContents.sendInputEvent({ type: "keyDown", keyCode: key, modifiers: ["control"] });
+    win.webContents.sendInputEvent({ type: "keyUp", keyCode: key, modifiers: ["control"] });
+  };
+  try {
+    await win.webContents.executeJavaScript(`(() => {
+      const field = document.createElement("textarea");
+      field.id = "${fieldId}";
+      field.value = "liney-native-edit-test";
+      field.setAttribute("aria-hidden", "true");
+      field.style.cssText = "position:fixed;left:0;top:0;width:160px;height:40px;opacity:0.01;z-index:2147483647";
+      document.body.appendChild(field);
+      field.focus();
+      return true;
+    })()`);
+
+    const selectAll = async () => {
+      await win.webContents.executeJavaScript(`(() => { const field = document.getElementById("${fieldId}"); field.focus(); field.setSelectionRange(0, 0); })()`);
+      sendChord("A");
+      return win.webContents.executeJavaScript(`(() => { const field = document.getElementById("${fieldId}"); return field.selectionStart === 0 && field.selectionEnd === field.value.length; })()`);
+    };
+
+    const allSelected = await selectAll();
+    sendChord("C");
+    const copied = clipboard.readText() === "liney-native-edit-test";
+    sendChord("X");
+    const cut = await win.webContents.executeJavaScript(`document.getElementById("${fieldId}").value === ""`);
+    clipboard.writeText("liney-native-paste-test");
+    sendChord("V");
+    const pasted = await win.webContents.executeJavaScript(`document.getElementById("${fieldId}").value === "liney-native-paste-test"`);
+    return { selectAll: allSelected, copy: copied, cut, paste: pasted };
+  } finally {
+    try {
+      await win.webContents.executeJavaScript(`document.getElementById("${fieldId}")?.remove()`);
+    } finally {
+      clipboard.writeText(previousClipboard);
+    }
+  }
+}
+
 app.whenReady().then(async()=>{
-  // No browser-style File/Edit/View/Window menu in a standalone messenger.
-  Menu.setApplicationMenu(null);
+  // Keep standard Edit roles for native text controls; the menu bar remains hidden per window.
+  installNativeEditMenu(Menu);
   protocol.handle("lineyapp",request=>{
     const url=new URL(request.url);
     if(url.hostname!=="app")return new Response("Unknown app host",{status:403});

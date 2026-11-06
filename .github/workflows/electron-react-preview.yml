@@ -74,6 +74,11 @@ jobs:
           grep -q '"enginePong":true' /tmp/liney-source-smoke.log
           grep -q '"logoLoaded":true' /tmp/liney-source-smoke.log
           grep -q '"menuHidden":true' /tmp/liney-source-smoke.log
+          grep -q '"nativeEditMenu":true' /tmp/liney-source-smoke.log
+          grep -q '"selectAll":true' /tmp/liney-source-smoke.log
+          grep -q '"copy":true' /tmp/liney-source-smoke.log
+          grep -q '"cut":true' /tmp/liney-source-smoke.log
+          grep -q '"paste":true' /tmp/liney-source-smoke.log
           grep -q '"nativeHelpers":5' /tmp/liney-source-smoke.log
           rm -rf "$LINEY_DATA_DIR"
       - name: Package standalone AppImage
@@ -88,6 +93,11 @@ jobs:
           grep -q '"enginePong":true' /tmp/liney-packaged-smoke.log
           grep -q '"authDialog":true' /tmp/liney-packaged-smoke.log
           grep -q '"menuHidden":true' /tmp/liney-packaged-smoke.log
+          grep -q '"nativeEditMenu":true' /tmp/liney-packaged-smoke.log
+          grep -q '"selectAll":true' /tmp/liney-packaged-smoke.log
+          grep -q '"copy":true' /tmp/liney-packaged-smoke.log
+          grep -q '"cut":true' /tmp/liney-packaged-smoke.log
+          grep -q '"paste":true' /tmp/liney-packaged-smoke.log
           grep -q '"nativeHelpers":5' /tmp/liney-packaged-smoke.log
           grep -q '"logoLoaded":true' /tmp/liney-packaged-smoke.log
           rm -rf "$LINEY_DATA_DIR"
