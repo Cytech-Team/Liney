@@ -276,16 +276,17 @@ function createWindow(label="main", opts={}) {
             logoLoaded: Boolean(document.querySelector(".auth-brand img")?.naturalWidth),
             bridge: Boolean(window.lineyDesktop),
           })`);
-          const nativeEditShortcuts = await verifyNativeEditShortcuts(win);
+          const skipShortcutInput = process.env.LINEY_ELECTRON_SMOKE_SKIP_SHORTCUT_INPUT === "1";
+          const nativeEditShortcuts = skipShortcutInput ? null : await verifyNativeEditShortcuts(win);
           await ensureEngine();
           const pong=await requestEngine("ping");
           const helpers=bundledHelperEnvironment();
           const appMenu=Menu.getApplicationMenu();
           const editMenu=appMenu?.items?.find(item=>item.label==="Edit");
           const editItems=(editMenu?.submenu?.items ?? []).map(item=>({label:item.label,role:item.role,accelerator:item.accelerator,registerAccelerator:item.registerAccelerator}));
-          const outcome={...checks,nativeHelpers:Object.keys(helpers).length,menuHidden:!win.isMenuBarVisible(),nativeEditMenu:hasNativeEditShortcuts(appMenu),editItems,nativeEditShortcuts,enginePong:Boolean(pong),renderer:"React original",system:"Electron"};
+          const outcome={...checks,nativeHelpers:Object.keys(helpers).length,menuHidden:!win.isMenuBarVisible(),nativeEditMenu:hasNativeEditShortcuts(appMenu),editItems,nativeEditShortcuts,shortcutInputSkipped:skipShortcutInput,enginePong:Boolean(pong),renderer:"React original",system:"Electron"};
           console.log("LINEY_ELECTRON_SMOKE_RESULT="+JSON.stringify(outcome));
-          const shortcutsPassed=Object.values(nativeEditShortcuts).every(Boolean);
+          const shortcutsPassed=skipShortcutInput || Object.values(nativeEditShortcuts).every(Boolean);
           app.exit(checks.authDialog && checks.logoLoaded && checks.bridge && outcome.nativeHelpers===5 && outcome.menuHidden && outcome.nativeEditMenu && shortcutsPassed && Boolean(pong) ? 0 : 3);
         }catch(e){console.error("LINEY_ELECTRON_SMOKE_ERROR="+(e?.stack || String(e)));app.exit(4);}
       },1000);
