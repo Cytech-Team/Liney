@@ -433,8 +433,6 @@ async function verifyNativeEditShortcuts(win) {
       field.focus();
       return true;
     })()`);
-    execFileSync("xdotool", ["windowfocus", "--sync", x11WindowId], { stdio: "ignore", timeout: 3000 });
-
     const selectAll = async () => {
       stage = "focus-and-select-all";
       await win.webContents.executeJavaScript(`(() => { const field = document.getElementById("${fieldId}"); field.focus(); field.setSelectionRange(0, 0); })()`);
