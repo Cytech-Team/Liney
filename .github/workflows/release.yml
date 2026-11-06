@@ -74,8 +74,6 @@ jobs:
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           flatpak install --user --noninteractive --assumeyes flathub org.gnome.Platform//50 org.gnome.Sdk//50
       - name: Build Electron Flatpak (without FUSE)
-        env:
-          G_MESSAGES_DEBUG: all
         run: npm run build:flatpak
       - name: Verify Flatpak bundle
         shell: bash
