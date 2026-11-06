@@ -6286,7 +6286,7 @@ function DeveloperSettings({ settings, onSetting }: { settings: AppSettings; onS
 }
 
 function AboutSettings() {
-  const [update, setUpdate] = useState<{status:string;channel:string;version:string;availableVersion?:string|null;releaseNotes?:string;percent?:number;error?:string|null}>({status:"idle",channel:"preview",version:"0.1.3"});
+  const [update, setUpdate] = useState<{status:string;channel:string;version:string;availableVersion?:string|null;releaseNotes?:string;percent?:number;error?:string|null}>({status:"idle",channel:"preview",version:"0.1.4"});
   const [busy, setBusy] = useState(false);
   const [deferredVersion, setDeferredVersion] = useState<string | null>(null);
   useEffect(() => {
