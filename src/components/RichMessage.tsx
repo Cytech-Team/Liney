@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { RichMessageData } from "../data/mock";
 import type { FlexAction } from "./FlexMessage";
+import { useAppTranslation } from "../lib/i18n";
 import { RemoteImage, type RemoteImageStatus } from "./RemoteImage";
 
 function safeHttpsUrl(value: string): string | undefined {
@@ -20,6 +21,7 @@ export function RichMessage({ data, onAction, messageId, chatId, kind, onOpenOri
   kind?: string;
   onOpenOriginal?: () => void;
 }) {
+  const { t } = useAppTranslation();
   const [imageStatus, setImageStatus] = useState<RemoteImageStatus>("loading");
   const [retry, setRetry] = useState(0);
   const width = data.width && data.width > 0 ? data.width : undefined;
@@ -32,13 +34,13 @@ export function RichMessage({ data, onAction, messageId, chatId, kind, onOpenOri
   const style = width && height && !artworkUnavailable ? { aspectRatio: `${width} / ${height}` } : undefined;
   const fallback = (
     <div className={`rich-message-fallback ${artworkUnavailable ? "rich-message-fallback-error" : ""}`}>
-      <span>{artworkUnavailable ? "ไม่สามารถโหลดภาพจาก LINE ได้" : "กำลังโหลดรูปจาก LINE…"}</span>
+      <span>{artworkUnavailable ? t("ไม่สามารถโหลดภาพจาก LINE ได้") : t("กำลังโหลดรูปจาก LINE…")}</span>
       {artworkUnavailable ? (
         <>
           {data.altText && <p>{data.altText}</p>}
           <div className="rich-message-fallback-actions">
-            <button type="button" onClick={() => { setImageStatus("loading"); setRetry((n) => n + 1); }}>ลองใหม่</button>
-            {onOpenOriginal && <button type="button" onClick={onOpenOriginal}>เปิดใน LINE ทางการ</button>}
+            <button type="button" onClick={() => { setImageStatus("loading"); setRetry((n) => n + 1); }}>{t("ลองใหม่")}</button>
+            {onOpenOriginal && <button type="button" onClick={onOpenOriginal}>{t("เปิดใน LINE ทางการ")}</button>}
           </div>
         </>
       ) : null}
@@ -73,8 +75,8 @@ export function RichMessage({ data, onAction, messageId, chatId, kind, onOpenOri
             key={`${action.x}-${action.y}-${index}`}
             type="button"
             className="rich-message-action"
-            aria-label={`เปิด ${data.altText || "เนื้อหา"}`}
-            title="เปิดเนื้อหา"
+            aria-label={t("Open {{content}}", { content: data.altText || t("เนื้อหา") })}
+            title={t("เปิดเนื้อหา")}
             style={regionStyle}
             onClick={(event) => {
               event.stopPropagation();

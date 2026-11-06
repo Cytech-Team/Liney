@@ -1,5 +1,6 @@
 import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
 import { useState } from "react";
+import { useAppTranslation } from "../lib/i18n";
 import type { FlexMessageData } from "../data/mock";
 import { RemoteImage } from "./RemoteImage";
 
@@ -11,6 +12,7 @@ export type FlexActionHandler = (action: FlexAction) => void | Promise<void>;
 type FlexLayout = "horizontal" | "vertical" | "baseline";
 type FlexContext = {
   onAction?: FlexActionHandler;
+  t?: (source: string) => string;
   parentLayout?: FlexLayout;
   inheritedTextDecoration?: CSSProperties["textDecoration"];
   inheritedScaling?: boolean;
@@ -158,30 +160,30 @@ function actionUri(action: unknown): string | undefined {
   return primary ?? desktop;
 }
 
-function actionLabel(action: unknown): string {
+function actionLabel(action: unknown, t: (source: string) => string = (source) => source): string {
   const value = asRecord(action);
   const explicit = asString(value?.label).trim();
   if (explicit) return explicit;
   switch (actionType(action)) {
-    case "message": return asString(value?.text) || "ส่งข้อความ";
-    case "clipboard": return "คัดลอก";
-    case "datetimepicker": return "เลือกวันเวลา";
-    case "postback": return "ดำเนินการ";
-    default: return "เปิด";
+    case "message": return asString(value?.text) || t("ส่งข้อความ");
+    case "clipboard": return t("คัดลอก");
+    case "datetimepicker": return t("เลือกวันเวลา");
+    case "postback": return t("ดำเนินการ");
+    default: return t("เปิด");
   }
 }
 
-function actionTitle(action: unknown): string {
+function actionTitle(action: unknown, t: (source: string) => string = (source) => source): string {
   switch (actionType(action)) {
-    case "message": return "ส่งข้อความนี้ในห้องแชต";
-    case "clipboard": return "คัดลอกข้อความไปยัง clipboard";
-    case "datetimepicker": return "เลือกวันเวลาสำหรับการดำเนินการนี้";
-    case "postback": return "ดำเนินการกับ LINE Official Account";
-    case "camera": return "เปิดกล้อง";
-    case "cameraroll": return "เลือกรูปภาพจากเครื่อง";
-    case "location": return "เปิดตำแหน่งที่ตั้ง";
-    case "richmenuswitch": return "สลับ Rich Menu";
-    default: return "ดำเนินการกับ Flex Message";
+    case "message": return t("ส่งข้อความนี้ในห้องแชต");
+    case "clipboard": return t("คัดลอกข้อความไปยัง clipboard");
+    case "datetimepicker": return t("เลือกวันเวลาสำหรับการดำเนินการนี้");
+    case "postback": return t("ดำเนินการกับ LINE Official Account");
+    case "camera": return t("เปิดกล้อง");
+    case "cameraroll": return t("เลือกรูปภาพจากเครื่อง");
+    case "location": return t("เปิดตำแหน่งที่ตั้ง");
+    case "richmenuswitch": return t("สลับ Rich Menu");
+    default: return t("ดำเนินการกับ Flex Message");
   }
 }
 
@@ -436,7 +438,7 @@ function FlexAction({
   const value = asRecord(action);
   if (!value) return <>{children}</>;
   const uri = actionUri(value);
-  const label = actionLabel(value);
+  const label = actionLabel(value, context.t);
   if (uri) {
     return (
       <a
@@ -472,7 +474,7 @@ function FlexAction({
       tabIndex={interactive ? 0 : -1}
       aria-label={label}
       aria-disabled={interactive ? undefined : true}
-      title={actionTitle(value)}
+      title={actionTitle(value, context.t)}
       onClick={(event) => {
         event.stopPropagation();
         activate();
@@ -560,7 +562,7 @@ function FlexVideo({ node, context }: { node: FlexNode; context: FlexContext }) 
   if (!url || failed) {
     return altContent
       ? <FlexNodeView node={altContent} context={context} />
-      : <div className="flex-unsupported" style={frameStyle}>วิดีโอ Flex โหลดไม่ได้</div>;
+      : <div className="flex-unsupported" style={frameStyle}>{context.t?.("วิดีโอ Flex โหลดไม่ได้") ?? "วิดีโอ Flex โหลดไม่ได้"}</div>;
   }
   const video = (
     <div className="flex-video-frame" style={frameStyle}>
@@ -664,7 +666,7 @@ function FlexDatetimeButton({ action, context, outerStyle, labelStyle, label }: 
   const [value, setValue] = useState(() => pickerValue(action.initial, mode));
   if (!inputType) return <FlexAction action={action} className="flex-button" style={outerStyle} context={context}><span style={labelStyle}>{label}</span></FlexAction>;
   return (
-    <label className="flex-button flex-button-picker" style={outerStyle} title={actionTitle(action)}>
+    <label className="flex-button flex-button-picker" style={outerStyle} title={actionTitle(action, context.t)}>
       <span style={labelStyle}>{label}</span>
       <input
         type={inputType}
@@ -684,7 +686,7 @@ function FlexDatetimeButton({ action, context, outerStyle, labelStyle, label }: 
 
 function FlexButton({ node, context }: { node: FlexNode; context: FlexContext }) {
   const action = asRecord(node.action);
-  const label = actionLabel(action);
+  const label = actionLabel(action, context.t);
   const variant = ["primary", "secondary", "link"].includes(asString(node.style).toLowerCase())
     ? asString(node.style).toLowerCase()
     : "link";
@@ -753,7 +755,7 @@ function FlexNodeView({ node, context, inline = false }: { node: FlexNode; conte
     return <div className={`flex-spacer ${horizontal ? "flex-spacer-horizontal" : ""}`} style={horizontal ? { width: dimension, height: "1px" } : { height: dimension, width: "1px" }} />;
   }
   if (type === "filler") return <span className="flex-filler" style={{ flex: safeFlex(node.flex) === 0 ? "0 0 auto" : `${safeFlex(node.flex) ?? 1} 1 auto` }} />;
-  if (type) return <div className="flex-unsupported">ไม่รองรับ Flex component: {type}</div>;
+  if (type) return <div className="flex-unsupported">{context.t?.("ไม่รองรับ Flex component") ?? "ไม่รองรับ Flex component"}: {type}</div>;
   return null;
 }
 
@@ -800,9 +802,10 @@ function FlexRoot({ contents, context }: { contents: FlexNode; context: FlexCont
 }
 
 export function FlexMessage({ data, onAction }: { data: FlexMessageData; onAction?: FlexActionHandler }) {
+  const { t } = useAppTranslation();
   return (
     <div className="flex-message" aria-label={data.altText || "Flex message"} data-flex-version={data.version} data-flex-effect-tag={data.effectTag}>
-      <FlexRoot contents={data.contents} context={{ onAction }} />
+      <FlexRoot contents={data.contents} context={{ onAction, t }} />
     </div>
   );
 }

@@ -67,6 +67,7 @@ import { FriendSyncDiagnostics } from "./components/FriendSyncDiagnostics";
 import { LineChatManageModal } from "./components/LineChatManageModal";
 import { ImageViewerOverlay } from "./components/ImageViewerOverlay";
 import { EngineRequestError, lineyEngine } from "./lib/engine";
+import { LanguageProvider, useAppTranslation } from "./lib/i18n";
 import { callMessagePreview, liveMessagePreview, notificationSenderName, officialLineMessageUrl } from "./lib/message-presentation";
 import { notificationAvatarUrl, prepareNotificationArtwork } from "./lib/notification-avatar";
 import { MarketingSite, type MarketingView } from "./marketing/MarketingSite";
@@ -3569,11 +3570,16 @@ function MainApp() {
   );
 
   if (usesEngineRuntime && !authenticated) {
-    return <div className="auth-gate-shell">{renderAuthDialog(true)}</div>;
+    return (
+      <LanguageProvider language={settings.language}>
+        <div className="auth-gate-shell">{renderAuthDialog(true)}</div>
+      </LanguageProvider>
+    );
   }
 
   return (
-    <div className={`app-shell ${mobileConversationOpen ? "mobile-conversation-open" : ""}`}>
+    <LanguageProvider language={settings.language}>
+      <div className={`app-shell ${mobileConversationOpen ? "mobile-conversation-open" : ""}`}>
       <NavRail section={section} onSection={(next) => { setSection(next); setListFilter("all"); setMobileConversationOpen(false); setReplyTarget(null); }} onNotifications={() => { setSection("messages"); setListFilter("unread"); setMobileConversationOpen(false); setReplyTarget(null); }} onSettings={() => { setSettingsInitialTab("ทั่วไป"); setSettingsOpen(true); }} onProfile={() => setAuthOpen(true)} authenticated={authenticated} openchatEnabled={settings.openchat} unreadCount={totalUnread} />
       <ChatList
         section={section}
@@ -3676,7 +3682,8 @@ function MainApp() {
         )}
         {authOpen && renderAuthDialog(false)}
       </AnimatePresence>
-    </div>
+      </div>
+    </LanguageProvider>
   );
 }
 
@@ -3758,8 +3765,9 @@ function DetachedImageViewer() {
 
 
 function NavRail({ section, onSection, onNotifications, onSettings, onProfile, authenticated, openchatEnabled, unreadCount }: { section: Section; onSection: (s: Section) => void; onNotifications: () => void; onSettings: () => void; onProfile: () => void; authenticated: boolean; openchatEnabled: boolean; unreadCount: number }) {
+  const { t } = useAppTranslation();
   return (
-    <aside className="nav-rail" aria-label="เมนูหลัก Liney">
+    <aside className="nav-rail" aria-label={t("เมนูหลัก Liney")}>
       <button className={`brand-orb ${authenticated ? "connected" : ""}`} aria-label="Liney account" onClick={onProfile}>
         <img className="brand-logo-mark" src="/liney-logo.png" alt="" />
         {authenticated ? <span className="brand-connected-dot" /> : null}
@@ -3772,25 +3780,25 @@ function NavRail({ section, onSection, onNotifications, onSettings, onProfile, a
               key={item.id}
               className={`rail-button ${section === item.id ? "active" : ""}`}
               onClick={() => onSection(item.id)}
-              title={item.label}
-              aria-label={item.label}
+              title={t(item.label)}
+              aria-label={t(item.label)}
               aria-current={section === item.id ? "page" : undefined}
             >
               <Icon size={20} strokeWidth={1.9} />
-              <span className="rail-tooltip">{item.label}</span>
+              <span className="rail-tooltip">{t(item.label)}</span>
             </button>
           );
         })}
       </div>
       <div className="nav-bottom">
-        <button className="rail-button" onClick={onNotifications} title={unreadCount ? `ยังไม่อ่าน ${unreadCount} ข้อความ` : "ไม่มีข้อความที่ยังไม่อ่าน"}>
+        <button className="rail-button" onClick={onNotifications} title={unreadCount ? t("ยังไม่อ่าน {{count}} ข้อความ", { count: unreadCount }) : t("ไม่มีข้อความที่ยังไม่อ่าน")}>
           <Bell size={19} />
           {unreadCount > 0 ? <span className="nav-unread-badge">{unreadCount > 99 ? "99+" : unreadCount}</span> : null}
-          <span className="rail-tooltip">ยังไม่อ่าน</span>
+          <span className="rail-tooltip">{t("ยังไม่อ่าน")}</span>
         </button>
-        <button className="rail-button" onClick={onSettings} title="ตั้งค่า">
+        <button className="rail-button" onClick={onSettings} title={t("ตั้งค่า")}>
           <Settings size={19} />
-          <span className="rail-tooltip">ตั้งค่า</span>
+          <span className="rail-tooltip">{t("ตั้งค่า")}</span>
         </button>
       </div>
     </aside>
@@ -3834,6 +3842,7 @@ function ChatList({
   markAllReadProgress: { done: number; total: number } | null;
   onMarkAllRead: () => Promise<{ total: number; marked: number; failed: number }>;
 }) {
+  const { t } = useAppTranslation();
   const [contextMenu, setContextMenu] = useState<{ chat: Chat; x: number; y: number } | null>(null);
   const [mergeDialogChat, setMergeDialogChat] = useState<Chat | null>(null);
   const [mergeTargetId, setMergeTargetId] = useState("");
@@ -3875,8 +3884,8 @@ function ChatList({
     const result = await onMarkAllRead();
     if (!result.total) return;
     setReadAllFeedback(result.failed
-      ? "อ่านแล้ว " + result.marked + " ห้อง · ค้าง " + result.failed + " ห้อง"
-      : "อ่านแล้ว " + result.marked + " ห้อง");
+      ? t("อ่านแล้ว {{marked}} ห้อง · ค้าง {{failed}} ห้อง", { marked: result.marked, failed: result.failed })
+      : t("อ่านแล้ว {{marked}} ห้อง", { marked: result.marked }));
   }
   useEffect(() => {
     if (!contextMenu) return;
@@ -3888,7 +3897,7 @@ function ChatList({
       window.removeEventListener("blur", close);
     };
   }, [contextMenu]);
-  const title = section === "openchat" ? "OpenChat" : section === "friends" ? "เพื่อน" : section === "calls" ? "ประวัติการโทร" : "แชต";
+  const title = section === "openchat" ? "OpenChat" : section === "friends" ? t("เพื่อน") : section === "calls" ? t("ประวัติการโทร") : t("แชต");
   // Virtualize the full list instead of silently dropping contacts past 120.
   // Rows are measured in the same scroll container that owns the sidebar.
   const chatItemsRef = useRef<HTMLDivElement>(null);
@@ -3921,7 +3930,7 @@ function ChatList({
           <p className="eyebrow">LINEY</p>
           <div className="list-heading-title">
             <h1>{title}</h1>
-            {unreadChatCount > 0 && section === "messages" ? <span className="list-unread-count" title={unreadChatCount + " ห้องยังไม่อ่าน"}>{unreadChatCount > 99 ? "99+" : unreadChatCount}</span> : null}
+            {unreadChatCount > 0 && section === "messages" ? <span className="list-unread-count" title={t("{{count}} ห้องยังไม่อ่าน", { count: unreadChatCount })}>{unreadChatCount > 99 ? "99+" : unreadChatCount}</span> : null}
           </div>
           {readAllFeedback && !markAllReadBusy ? <span className="mark-all-read-status" role="status" aria-live="polite">{readAllFeedback}</span> : null}
         </div>
@@ -3929,25 +3938,25 @@ function ChatList({
           {(section === "messages" || section === "openchat") && unreadChatCount > 0 ? (
             <button className="icon-button list-mark-read" type="button" disabled={!canMarkAllRead || markAllReadBusy}
               onClick={() => void handleMarkAllRead()}
-              title={markAllReadBusy && markAllReadProgress ? "กำลังอ่าน " + markAllReadProgress.done + "/" + markAllReadProgress.total : "ทำเครื่องหมายอ่านแล้วทุกห้อง"}
-              aria-label="ทำเครื่องหมายอ่านแล้วทุกห้อง"
+              title={markAllReadBusy && markAllReadProgress ? t("กำลังอ่าน {{done}}/{{total}}", { done: markAllReadProgress.done, total: markAllReadProgress.total }) : t("ทำเครื่องหมายอ่านแล้วทุกห้อง")}
+              aria-label={t("ทำเครื่องหมายอ่านแล้วทุกห้อง")}
             >{markAllReadBusy ? <LoaderCircle size={19} className="spin" /> : <CheckCheck size={19} />}</button>
           ) : null}
-          <button className="icon-button list-new-chat" type="button" onClick={onCreate} title="เริ่มแชตใหม่" aria-label="เริ่มแชตใหม่"><Plus size={20} /></button>
+          <button className="icon-button list-new-chat" type="button" onClick={onCreate} title={t("เริ่มแชตใหม่")} aria-label={t("เริ่มแชตใหม่")}><Plus size={20} /></button>
         </div>
       </header>
       <div className="search-box">
         <Search size={16} />
-        <input ref={searchInputRef} value={query} onChange={(e) => onQuery(e.target.value)} placeholder="ค้นหาแชตหรือเพื่อน" aria-label="ค้นหาแชตหรือเพื่อน" />
-        {query ? <button className="search-clear" type="button" title="ล้างคำค้นหา" aria-label="ล้างคำค้นหา" onClick={() => { onQuery(""); searchInputRef.current?.focus(); }}><X size={15} /></button> : <kbd>Ctrl K</kbd>}
+        <input ref={searchInputRef} value={query} onChange={(e) => onQuery(e.target.value)} placeholder={t("ค้นหาแชตหรือเพื่อน")} aria-label={t("ค้นหาแชตหรือเพื่อน")} />
+        {query ? <button className="search-clear" type="button" title={t("ล้างคำค้นหา")} aria-label={t("ล้างคำค้นหา")} onClick={() => { onQuery(""); searchInputRef.current?.focus(); }}><X size={15} /></button> : <kbd>Ctrl K</kbd>}
       </div>
-      <div className="list-filter-row" aria-label="กรองรายการ">
-        <button type="button" className={`filter-chip ${filter === "all" ? "active" : ""}`} aria-pressed={filter === "all"} onClick={() => { onFilter("all"); setFilterMoreOpen(false); }}>ทั้งหมด</button>
+      <div className="list-filter-row" aria-label={t("กรองรายการ")}>
+        <button type="button" className={`filter-chip ${filter === "all" ? "active" : ""}`} aria-pressed={filter === "all"} onClick={() => { onFilter("all"); setFilterMoreOpen(false); }}>{t("ทั้งหมด")}</button>
         {section === "friends" ? (
-          <button type="button" className={`filter-chip ${filter === "favorites" ? "active" : ""}`} aria-pressed={filter === "favorites"} onClick={() => { onFilter("favorites"); setFilterMoreOpen(false); }}><Star size={14} /> รายการโปรด</button>
+          <button type="button" className={`filter-chip ${filter === "favorites" ? "active" : ""}`} aria-pressed={filter === "favorites"} onClick={() => { onFilter("favorites"); setFilterMoreOpen(false); }}><Star size={14} /> {t("รายการโปรด")}</button>
         ) : (
           <>
-            <button type="button" className={`filter-chip ${filter === "unread" ? "active" : ""}`} aria-pressed={filter === "unread"} onClick={() => { onFilter("unread"); setFilterMoreOpen(false); }}>ยังไม่อ่าน</button>
+            <button type="button" className={`filter-chip ${filter === "unread" ? "active" : ""}`} aria-pressed={filter === "unread"} onClick={() => { onFilter("unread"); setFilterMoreOpen(false); }}>{t("ยังไม่อ่าน")}</button>
             <div className="filter-more" ref={filterMoreRef}>
               <button
                 type="button"
@@ -3955,19 +3964,19 @@ function ChatList({
                 onClick={() => setFilterMoreOpen((open) => !open)}
                 aria-expanded={filterMoreOpen}
                 aria-haspopup="menu"
-                aria-label="ตัวกรองเพิ่มเติม"
+                aria-label={t("ตัวกรองเพิ่มเติม")}
               >
                 {filter === "favorites" ? <Star size={14} /> : filter === "pinned" ? <PinIcon size={14} /> : <Ellipsis size={16} />}
-                <span>{filter === "favorites" ? "รายการโปรด" : filter === "pinned" ? "ปักหมุด" : "เพิ่มเติม"}</span>
+                <span>{filter === "favorites" ? t("รายการโปรด") : filter === "pinned" ? t("ปักหมุด") : t("เพิ่มเติม")}</span>
                 <ChevronDown className="filter-more-chevron" size={13} />
               </button>
               {filterMoreOpen ? (
-                <div className="filter-more-menu" role="menu" aria-label="เลือกตัวกรอง">
-                  {section === "messages" ? <button role="menuitemradio" aria-checked={filter === "favorites"} type="button" onClick={() => { onFilter("favorites"); setFilterMoreOpen(false); }}><Star size={15} />รายการโปรด{filter === "favorites" ? <CheckCheck size={15} className="filter-checked" /> : null}</button> : null}
-                  <button role="menuitemradio" aria-checked={filter === "pinned"} type="button" onClick={() => { onFilter("pinned"); setFilterMoreOpen(false); }}><PinIcon size={15} />ปักหมุด{filter === "pinned" ? <CheckCheck size={15} className="filter-checked" /> : null}</button>
+                <div className="filter-more-menu" role="menu" aria-label={t("เลือกตัวกรอง")}>
+                  {section === "messages" ? <button role="menuitemradio" aria-checked={filter === "favorites"} type="button" onClick={() => { onFilter("favorites"); setFilterMoreOpen(false); }}><Star size={15} />{t("รายการโปรด")}{filter === "favorites" ? <CheckCheck size={15} className="filter-checked" /> : null}</button> : null}
+                  <button role="menuitemradio" aria-checked={filter === "pinned"} type="button" onClick={() => { onFilter("pinned"); setFilterMoreOpen(false); }}><PinIcon size={15} />{t("ปักหมุด")}{filter === "pinned" ? <CheckCheck size={15} className="filter-checked" /> : null}</button>
                   {section === "messages" && !query.trim() && unresolvedArchives.length > 0 ? (
                     <button role="menuitemcheckbox" aria-checked={showUnresolvedArchives} type="button" onClick={() => { onFilter("all"); setShowUnresolvedArchives((shown) => !shown); setFilterMoreOpen(false); }}>
-                      <Archive size={15} />{showUnresolvedArchives ? "ซ่อนกลุ่มเก่า" : `แสดงกลุ่มเก่า (${unresolvedArchives.length})`}
+                      <Archive size={15} />{showUnresolvedArchives ? t("ซ่อนกลุ่มเก่า") : t("แสดงกลุ่มเก่า ({{count}})", { count: unresolvedArchives.length })}
                       {showUnresolvedArchives ? <CheckCheck size={15} className="filter-checked" /> : null}
                     </button>
                   ) : null}
@@ -3997,22 +4006,22 @@ function ChatList({
             <Avatar chat={chat} />
             <span className="chat-copy">
               <span className="chat-title-line">
-                <strong>{chat.name}</strong>
+                <strong>{chat.id === "__liney__" ? t(chat.name) : chat.name}</strong>
                 <span className="chat-title-flags">
-                  {chat.isFavorite ? <Star size={12} className="favorite-icon" fill="currentColor" aria-label="รายการโปรด" /> : null}
-                  {chat.pinned ? <PinIcon size={12} className="pin-icon" fill="currentColor" aria-label="ปักหมุด" /> : null}
+                  {chat.isFavorite ? <Star size={12} className="favorite-icon" fill="currentColor" aria-label={t("รายการโปรด")} /> : null}
+                  {chat.pinned ? <PinIcon size={12} className="pin-icon" fill="currentColor" aria-label={t("ปักหมุด")} /> : null}
                   <time>{chat.time}</time>
                 </span>
               </span>
               <span className="chat-preview-line">
-                <span className="chat-preview">{chat.subtitle}</span>
+                <span className="chat-preview">{chat.id === "__liney__" ? t(chat.subtitle) : chat.subtitle}</span>
                 {chat.unread ? <span className="unread-badge">{chat.unread > 99 ? "99+" : chat.unread}</span> : null}
               </span>
             </span>
           </button>;
         })}
         </div>
-        {visibleChats.length === 0 && <div className="empty-list">ไม่พบรายการ</div>}
+        {visibleChats.length === 0 && <div className="empty-list">{t("ไม่พบรายการ")}</div>}
       </div>
       {contextMenu ? (
         <div
@@ -4027,7 +4036,7 @@ function ChatList({
             }}
           >
             <PinIcon size={15} fill={contextMenu.chat.pinned ? "currentColor" : "none"} />
-            {contextMenu.chat.pinned ? "เลิกปักหมุด" : "ปักหมุด"}
+            {contextMenu.chat.pinned ? t("เลิกปักหมุด") : t("ปักหมุด")}
           </button>
           {section === "messages" && contextMenu.chat.kind === "dm" ? (
             <button
@@ -4040,7 +4049,7 @@ function ChatList({
               }}
             >
               <Link2 size={15} />
-              รวมแชตที่ซ้ำ…
+              {t("รวมแชตที่ซ้ำ…")}
             </button>
           ) : null}
         </div>
@@ -4055,11 +4064,11 @@ function ChatList({
             onMouseDown={(event) => event.stopPropagation()}
           >
             <div className="identity-merge-icon"><Link2 size={19} /></div>
-            <h2 id="identity-merge-title">รวมแชตของบัญชีเดียวกัน</h2>
+            <h2 id="identity-merge-title">{t("รวมแชตของบัญชีเดียวกัน")}</h2>
             <p className="identity-merge-description">
-              เลือกแชตปลายทางที่จะเก็บชื่อและรูปโปรไฟล์ไว้ ประวัติข้อความจาก “{mergeDialogChat.name}” จะถูกรวมเข้าไปด้วย
+              {t("เลือกแชตปลายทางที่จะเก็บชื่อและรูปโปรไฟล์ไว้ ประวัติข้อความจาก “{{name}}” จะถูกรวมเข้าไปด้วย", { name: mergeDialogChat.name })}
             </p>
-            <label className="identity-merge-label" htmlFor="identity-merge-target">เก็บข้อมูลไว้ที่</label>
+            <label className="identity-merge-label" htmlFor="identity-merge-target">{t("เก็บข้อมูลไว้ที่")}</label>
             <select
               id="identity-merge-target"
               className="identity-merge-select"
@@ -4067,17 +4076,17 @@ function ChatList({
               onChange={(event) => setMergeTargetId(event.target.value)}
               disabled={mergeBusy}
             >
-              <option value="">เลือกแชตปลายทาง</option>
+              <option value="">{t("เลือกแชตปลายทาง")}</option>
               {mergeCandidates.filter((chat) => chat.id !== mergeDialogChat.id).map((chat) => (
                 <option key={chat.id} value={chat.id}>{chat.name}</option>
               ))}
             </select>
             <p className="identity-merge-note">
-              Liney จะจำการเชื่อมนี้ในเครื่องนี้ เก็บชื่อและรูปของแชตปลายทาง รวมประวัติที่มีในเครื่อง และส่งข้อความครั้งต่อไปไปยังแชตปลายทางที่คุณเลือก
+              {t("Liney จะจำการเชื่อมนี้ในเครื่องนี้ เก็บชื่อและรูปของแชตปลายทาง รวมประวัติที่มีในเครื่อง และส่งข้อความครั้งต่อไปไปยังแชตปลายทางที่คุณเลือก")}
             </p>
             {mergeError ? <p className="identity-merge-error" role="alert">{mergeError}</p> : null}
             <div className="identity-merge-actions">
-              <button type="button" className="secondary-button" disabled={mergeBusy} onClick={() => setMergeDialogChat(null)}>ยกเลิก</button>
+              <button type="button" className="secondary-button" disabled={mergeBusy} onClick={() => setMergeDialogChat(null)}>{t("ยกเลิก")}</button>
               <button
                 type="button"
                 className="identity-merge-confirm"
@@ -4092,7 +4101,7 @@ function ChatList({
                     .finally(() => setMergeBusy(false));
                 }}
               >
-                {mergeBusy ? "กำลังรวม…" : "รวมแชต"}
+                {mergeBusy ? t("กำลังรวม…") : t("รวมแชต")}
               </button>
             </div>
           </section>
@@ -4375,6 +4384,7 @@ function Conversation({
   jumpToMessageId?: string;
   jumpNonce: number;
 }) {
+  const { t } = useAppTranslation();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imeComposingRef = useRef(false);
   const messageStageRef = useRef<HTMLDivElement>(null);
@@ -4838,28 +4848,28 @@ function Conversation({
   return (
     <main className="conversation-panel">
       <header className="conversation-header">
-        <button className="conversation-back-button" type="button" aria-label="กลับไปยังรายการแชต" title="กลับไปยังรายการแชต" onClick={onBack}><ArrowLeft size={18} /></button>
+        <button className="conversation-back-button" type="button" aria-label={t("กลับไปยังรายการแชต")} title={t("กลับไปยังรายการแชต")} onClick={onBack}><ArrowLeft size={18} /></button>
         <div className="conversation-person">
           <Avatar chat={chat} />
           <div>
             <div className="conversation-title-row">
-              <h2>{chat.name}</h2>
+              <h2>{chat.id === "__liney__" ? t(chat.name) : chat.name}</h2>
               {chat.kind === "openchat" && <span className="openchat-chip">OpenChat</span>}
             </div>
             <span>{chat.detail ?? chat.subtitle}</span>
           </div>
         </div>
         <div className="header-actions" ref={headerActionsRef}>
-          <button className="icon-button call-action" onClick={onCall} title={callAvailable ? "โทรเสียง" : "สายเสียงยังไม่พร้อม"} aria-label="โทรเสียง" disabled={!canSend || !callAvailable}><Phone size={18} /></button>
-          <button className="icon-button video-action" onClick={onVideoCall} title={callAvailable ? "วิดีโอคอล (ทดลอง)" : "ระบบโทรยังไม่พร้อม"} aria-label="วิดีโอคอล" disabled={!canSend || !callAvailable}><Video size={19} /></button>
+          <button className="icon-button call-action" onClick={onCall} title={callAvailable ? t("โทรเสียง") : t("สายเสียงยังไม่พร้อม")} aria-label={t("โทรเสียง")} disabled={!canSend || !callAvailable}><Phone size={18} /></button>
+          <button className="icon-button video-action" onClick={onVideoCall} title={callAvailable ? t("วิดีโอคอล (ทดลอง)") : t("ระบบโทรยังไม่พร้อม")} aria-label={t("วิดีโอคอล")} disabled={!canSend || !callAvailable}><Video size={19} /></button>
           {(albumsAvailable || notesAvailable || manageAvailable) ? (
             <div className="conversation-more">
-              <button className="icon-button more-action" type="button" onClick={() => setHeaderMenuOpen((open) => !open)} aria-label="ตัวเลือกเพิ่มเติมของแชต" aria-haspopup="menu" aria-expanded={headerMenuOpen} title="ตัวเลือกเพิ่มเติม"><Ellipsis size={20} /></button>
+              <button className="icon-button more-action" type="button" onClick={() => setHeaderMenuOpen((open) => !open)} aria-label={t("ตัวเลือกเพิ่มเติมของแชต")} aria-haspopup="menu" aria-expanded={headerMenuOpen} title={t("ตัวเลือกเพิ่มเติม")}><Ellipsis size={20} /></button>
               {headerMenuOpen ? (
-                <div className="conversation-more-menu" role="menu" aria-label="ตัวเลือกของแชต">
-                  {manageAvailable ? <button type="button" role="menuitem" onClick={() => { setHeaderMenuOpen(false); onManage(); }}><Info size={17} />ข้อมูลและจัดการแชต</button> : null}
-                  {albumsAvailable ? <button type="button" role="menuitem" onClick={() => { setHeaderMenuOpen(false); onAlbums(); }}><Image size={17} />อัลบั้มรูปภาพ</button> : null}
-                  {notesAvailable ? <button type="button" role="menuitem" onClick={() => { setHeaderMenuOpen(false); onNotes(); }}><Pencil size={17} />โน้ต</button> : null}
+                <div className="conversation-more-menu" role="menu" aria-label={t("ตัวเลือกของแชต")}>
+                  {manageAvailable ? <button type="button" role="menuitem" onClick={() => { setHeaderMenuOpen(false); onManage(); }}><Info size={17} />{t("ข้อมูลและจัดการแชต")}</button> : null}
+                  {albumsAvailable ? <button type="button" role="menuitem" onClick={() => { setHeaderMenuOpen(false); onAlbums(); }}><Image size={17} />{t("อัลบั้มรูปภาพ")}</button> : null}
+                  {notesAvailable ? <button type="button" role="menuitem" onClick={() => { setHeaderMenuOpen(false); onNotes(); }}><Pencil size={17} />{t("โน้ต")}</button> : null}
                 </div>
               ) : null}
             </div>
@@ -4891,54 +4901,54 @@ function Conversation({
         {historyLoadState !== "idle" ? (
           <div className={`history-page-status ${historyLoadState}`} role={historyLoadState === "error" ? "alert" : "status"} aria-live="polite">
             {historyLoadState === "loading" ? (
-              <><LoaderCircle size={14} className="spin" /><span>กำลังโหลดข้อความเก่า…</span></>
+              <><LoaderCircle size={14} className="spin" /><span>{t("กำลังโหลดข้อความเก่า…")}</span></>
             ) : (
-              <><span>โหลดข้อความเก่าไม่สำเร็จ</span><button type="button" onClick={() => void requestOlderMessages()}>ลองอีกครั้ง</button></>
+              <><span>{t("โหลดข้อความเก่าไม่สำเร็จ")}</span><button type="button" onClick={() => void requestOlderMessages()}>{t("ลองอีกครั้ง")}</button></>
             )}
           </div>
         ) : null}
         {empty ? (
           <div className="conversation-empty-state">
             <div className="empty-logo"><img src="/liney-logo.png" alt="" /></div>
-            <h3>{chat.name}</h3>
+            <h3>{chat.id === "__liney__" ? t(chat.name) : chat.name}</h3>
             <p>{chat.subtitle}</p>
           </div>
         ) : messages === undefined ? (
-          <div className="message-loading-state"><LoaderCircle size={22} className="spin" /><span>กำลังโหลดข้อความ…</span></div>
+          <div className="message-loading-state"><LoaderCircle size={22} className="spin" /><span>{t("กำลังโหลดข้อความ…")}</span></div>
         ) : messages.length === 0 ? (
           lineSystemAccount ? (
             <div className="history-empty-layout">
             <section className="official-client-only-state" role="status">
               <div className="official-client-icon"><ShieldCheck size={25} /></div>
-              <h3>ยังโหลดประวัติจาก LINE ไม่ได้</h3>
-              <p>LINE ส่งข้อมูลห้องและเวลาให้ แต่รอบนี้ไม่ส่งข้อความเก่าผ่าน history API ที่ Liney ใช้อยู่</p>
-              <span>ข้อความใหม่ที่ LINE ส่งให้ Liney ขณะออนไลน์จะแสดงและบันทึกได้</span>
+              <h3>{t("ยังโหลดประวัติจาก LINE ไม่ได้")}</h3>
+              <p>{t("LINE ส่งข้อมูลห้องและเวลาให้ แต่รอบนี้ไม่ส่งข้อความเก่าผ่าน history API ที่ Liney ใช้อยู่")}</p>
+              <span>{t("ข้อความใหม่ที่ LINE ส่งให้ Liney ขณะออนไลน์จะแสดงและบันทึกได้")}</span>
             </section>
             </div>
           ) : historyUnavailable ? (
             <div className="history-empty-layout">
             <section className="official-client-only-state" role="status">
               <div className="official-client-icon"><Archive size={25} /></div>
-              <h3>{unresolvedGroupArchive ? "ข้อมูลกลุ่มเก่ายังไม่พร้อม" : missingRecentHistory ? "ยังโหลดข้อความล่าสุดไม่ได้" : "ไม่พบประวัติที่เปิดอ่านได้"}</h3>
+              <h3>{unresolvedGroupArchive ? t("ข้อมูลกลุ่มเก่ายังไม่พร้อม") : missingRecentHistory ? t("ยังโหลดข้อความล่าสุดไม่ได้") : t("ไม่พบประวัติที่เปิดอ่านได้")}</h3>
               <p>{unresolvedGroupArchive
-                ? "Liney พบเพียงรหัสกลุ่มเก่าในแคช แต่ LINE ไม่ส่งชื่อ รูป หรือประวัติกลุ่มกลับมา ห้องนี้ยังถูกเก็บไว้ในเครื่องและแสดงในหมวดกลุ่มเก่าที่ข้อมูลไม่ครบ"
+                ? t("Liney พบเพียงรหัสกลุ่มเก่าในแคช แต่ LINE ไม่ส่งชื่อ รูป หรือประวัติกลุ่มกลับมา ห้องนี้ยังถูกเก็บไว้ในเครื่องและแสดงในหมวดกลุ่มเก่าที่ข้อมูลไม่ครบ")
                 : missingRecentHistory
-                ? "Liney ลองอ่านจาก cursor, recent window และ MessageBox แล้ว แต่ LINE ไม่ส่งข้อความกลับมา ถ้าเคยคุยผ่าน MID เก่า ให้ค้นหาประวัติในเครื่องด้านล่าง"
-                : "LINEJS ยังไม่ส่งข้อความเก่าของห้องนี้กลับมา และไม่มีข้อความที่กู้ได้จากแคชในเครื่อง"}</p>
+                ? t("Liney ลองอ่านจาก cursor, recent window และ MessageBox แล้ว แต่ LINE ไม่ส่งข้อความกลับมา ถ้าเคยคุยผ่าน MID เก่า ให้ค้นหาประวัติในเครื่องด้านล่าง")
+                : t("LINEJS ยังไม่ส่งข้อความเก่าของห้องนี้กลับมา และไม่มีข้อความที่กู้ได้จากแคชในเครื่อง")}</p>
               <span>{unresolvedGroupArchive
-                ? "Liney เก็บข้อมูลห้องนี้ไว้ แต่ยังไม่ยืนยันว่ากลุ่มยังเข้าถึงได้"
-                : "หาก LINE ส่งข้อความใหม่เข้ามาขณะ Liney ออนไลน์ ข้อความนั้นจะปรากฏและถูกบันทึกในเครื่อง"}</span>
-              <button className="history-retry-button" type="button" onClick={onRetryHistory}><RefreshCw size={15} /> ตรวจสอบประวัติอีกครั้ง</button>
+                ? t("Liney เก็บข้อมูลห้องนี้ไว้ แต่ยังไม่ยืนยันว่ากลุ่มยังเข้าถึงได้")
+                : t("หาก LINE ส่งข้อความใหม่เข้ามาขณะ Liney ออนไลน์ ข้อความนั้นจะปรากฏและถูกบันทึกในเครื่อง")}</span>
+              <button className="history-retry-button" type="button" onClick={onRetryHistory}><RefreshCw size={15} /> {t("ตรวจสอบประวัติอีกครั้ง")}</button>
               {missingRecentHistory ? (
                 <>
                   {chat.kind === "dm" ? (
                     <button className="history-retry-button" type="button" onClick={() => void searchSavedHistoryCandidates()} disabled={historyRecoveryBusy}>
-                      {historyRecoveryBusy && historyCandidates === null ? "กำลังค้นหาประวัติในเครื่อง…" : "ค้นหาประวัติจาก MID เก่า"}
+                      {historyRecoveryBusy && historyCandidates === null ? t("กำลังค้นหาประวัติในเครื่อง…") : t("ค้นหาประวัติจาก MID เก่า")}
                     </button>
                   ) : null}
                   {historyCandidates?.length ? (
                     <>
-                      <span>ผลค้นหาเป็นแชตที่มีสำเนาในเครื่อง ยังไม่ได้ยืนยันว่าเป็นคนเดียวกัน พิมพ์ชื่อเดิมหรือ MID แล้วเลือกแชตที่จำได้</span>
+                      <span>{t("ผลค้นหาเป็นแชตที่มีสำเนาในเครื่อง ยังไม่ได้ยืนยันว่าเป็นคนเดียวกัน พิมพ์ชื่อเดิมหรือ MID แล้วเลือกแชตที่จำได้")}</span>
                       <input
                         className="identity-merge-search"
                         type="search"
@@ -4947,8 +4957,8 @@ function Conversation({
                           setHistoryCandidateQuery(event.target.value);
                           setHistoryCandidateId("");
                         }}
-                        placeholder="ค้นหาชื่อแชตเดิมหรือ MID"
-                        aria-label="ค้นหาชื่อแชตเดิมหรือ MID"
+                        placeholder={t("ค้นหาชื่อแชตเดิมหรือ MID")}
+                        aria-label={t("ค้นหาชื่อแชตเดิมหรือ MID")}
                         disabled={historyRecoveryBusy}
                       />
                       {normalizedHistoryCandidateQuery ? filteredHistoryCandidates.length ? (
@@ -4958,27 +4968,27 @@ function Conversation({
                             value={historyCandidateId}
                             onChange={(event) => setHistoryCandidateId(event.target.value)}
                             disabled={historyRecoveryBusy}
-                            aria-label="เลือกแชตเก่าที่มีประวัติ"
+                            aria-label={t("เลือกแชตเก่าที่มีประวัติ")}
                           >
-                            <option value="">เลือกแชตเก่าที่ตรงกับคำค้น</option>
+                            <option value="">{t("เลือกแชตเก่าที่ตรงกับคำค้น")}</option>
                             {filteredHistoryCandidates.map((candidate) => (
                               <option key={candidate.id} value={candidate.id}>
-                                {candidate.name} · {candidate.messageCount} ข้อความ
+                                {candidate.name} · {t("{{count}} ข้อความ", { count: candidate.messageCount })}
                               </option>
                             ))}
                           </select>
                           <button className="history-retry-button" type="button" onClick={() => void mergeSavedHistoryCandidate()} disabled={!historyCandidateId || historyRecoveryBusy}>
-                            {historyRecoveryBusy ? "กำลังรวมประวัติ…" : "รวมประวัติจากแชตนี้"}
+                            {historyRecoveryBusy ? t("กำลังรวมประวัติ…") : t("รวมประวัติจากแชตนี้")}
                           </button>
                         </>
                       ) : (
-                        <span>ไม่พบแชตที่ตรงกับคำค้นในสำเนาที่เก็บไว้</span>
+                        <span>{t("ไม่พบแชตที่ตรงกับคำค้นในสำเนาที่เก็บไว้")}</span>
                       ) : (
-                        <span>พิมพ์ชื่อแชตเดิมเพื่อกรองรายการก่อนเลือก</span>
+                        <span>{t("พิมพ์ชื่อแชตเดิมเพื่อกรองรายการก่อนเลือก")}</span>
                       )}
                     </>
                   ) : historyCandidates ? (
-                    <span>ไม่พบประวัติข้อความจาก MID อื่นในเครื่อง</span>
+                    <span>{t("ไม่พบประวัติข้อความจาก MID อื่นในเครื่อง")}</span>
                   ) : null}
                   {historyRecoveryError ? <span role="alert">{historyRecoveryError}</span> : null}
                 </>
@@ -4988,8 +4998,8 @@ function Conversation({
           ) : (
             <div className="message-list-empty-state">
               <MessageCircle size={24} />
-              <strong>{neverChatted ? "ยังไม่เคยคุยกัน" : "ยังไม่มีข้อความ"}</strong>
-              <span>{neverChatted ? `ส่งข้อความแรกถึง ${chat.name} เพื่อเริ่มการสนทนา` : "ส่งข้อความแรกเพื่อเริ่มการสนทนา"}</span>
+              <strong>{neverChatted ? t("ยังไม่เคยคุยกัน") : t("ยังไม่มีข้อความ")}</strong>
+              <span>{neverChatted ? t("ส่งข้อความแรกถึง {{name}} เพื่อเริ่มการสนทนา", { name: chat.name }) : t("ส่งข้อความแรกเพื่อเริ่มการสนทนา")}</span>
             </div>
           )
         ) : (
@@ -4997,10 +5007,10 @@ function Conversation({
             {historyUnavailable && !lineSystemAccount ? (
               <div className="official-history-banner" role="status">
                 <ShieldCheck size={15} />
-                <span><strong>Live mode</strong> · อ่านประวัติเก่าบางส่วนไม่ได้ แต่ข้อความใหม่ใน Liney ใช้งานได้ตามปกติ</span>
+                <span><strong>Live mode</strong> · {t("อ่านประวัติเก่าบางส่วนไม่ได้ แต่ข้อความใหม่ใน Liney ใช้งานได้ตามปกติ")}</span>
               </div>
             ) : null}
-            <div className="date-divider"><span>ล่าสุด</span></div>
+            <div className="date-divider"><span>{t("ล่าสุด")}</span></div>
             <div
               className="virtual-message-list"
               style={{ height: `${messageVirtualizer.getTotalSize()}px`, position: "relative", width: "100%" }}
@@ -5024,7 +5034,7 @@ function Conversation({
                 }}
               >
                 {showUnreadDivider && index === unreadStartIndex ? (
-                  <div ref={unreadDividerRef} className="unread-divider"><span>ข้อความใหม่</span></div>
+                  <div ref={unreadDividerRef} className="unread-divider"><span>{t("ข้อความใหม่")}</span></div>
                 ) : null}
               <div
                 key={message.id}
@@ -5048,19 +5058,19 @@ function Conversation({
                       <div className="reply-reference">
                         <Reply size={14} />
                         <div>
-                          <strong>{message.replyTo.author === "me" ? "คุณ" : message.replyTo.senderName || "ข้อความที่ตอบกลับ"}</strong>
-                          <span>{message.replyTo.text || "ข้อความ"}</span>
+                          <strong>{message.replyTo.author === "me" ? t("คุณ") : message.replyTo.senderName || t("ข้อความที่ตอบกลับ")}</strong>
+                          <span>{message.replyTo.text || t("ข้อความ")}</span>
                         </div>
                       </div>
                     ) : null}
                     {message.unsent ? (
-                      <div className="bubble bubble-unsent"><Undo2 size={14} /><span>ยกเลิกข้อความแล้ว</span></div>
+                      <div className="bubble bubble-unsent"><Undo2 size={14} /><span>{t("ยกเลิกข้อความแล้ว")}</span></div>
                     ) : (
                       <>
                         {message.rich || message.flex ? (
                           <div className="liney-raw-message">
                             {developerFlexRaw && <button type="button" className="liney-raw-toggle" onClick={() => toggleRawMessage(message.id)} aria-pressed={!rawMessageIds.has(message.id)}>
-                              {rawMessageIds.has(message.id) ? "แสดง Raw JSON" : "แสดง Flex / Rich"}
+                              {rawMessageIds.has(message.id) ? t("แสดง Raw JSON") : t("แสดง Flex / Rich")}
                             </button>}
                             {developerFlexRaw && !rawMessageIds.has(message.id) ? (
                               <div className="liney-raw-inspector">
@@ -5081,7 +5091,7 @@ function Conversation({
                         {!message.rich && message.stickerUrl ? <StickerImage key={message.stickerUrl} src={message.stickerUrl} /> : null}
                         {!message.rich && message.emojiUrl ? <img className="message-line-emoji" src={message.emojiUrl} alt="LINE Emoji" loading="lazy" referrerPolicy="no-referrer" /> : null}
                         {!message.rich && message.image ? (
-                          message.image === "food" ? <FoodCard /> : <button className="message-image-button" type="button" title="เปิดดูรูปภาพ" onClick={() => onViewImage(message.image!)}><img className="message-image" src={message.image} alt="รูปภาพ" /></button>
+                          message.image === "food" ? <FoodCard /> : <button className="message-image-button" type="button" title={t("เปิดดูรูปภาพ")} onClick={() => onViewImage(message.image!)}><img className="message-image" src={message.image} alt={t("รูปภาพ")} /></button>
                         ) : null}
                           {message.contentType === 6 ? (
                             <CallHistoryCard data={message.call ?? { durationMs: 0, result: "", cause: "", status: "unknown" }} />
@@ -5102,8 +5112,8 @@ function Conversation({
                                   : [1, 2, 3, 14].includes(Number(message.contentType ?? 0))
                                     ? mediaLabel(Number(message.contentType), "")
                                     : Number(message.contentType) === 7
-                                      ? "สติกเกอร์"
-                                      : "ไม่มีรายละเอียดข้อความที่บันทึกไว้"}
+                                      ? t("สติกเกอร์")
+                                      : t("ไม่มีรายละเอียดข้อความที่บันทึกไว้")}
                               </div>
                             ) : null}
                           <OfficialMessageFallback message={message} chat={chat} onOpenOfficialMessage={onOpenOfficialMessage} />
@@ -5114,8 +5124,8 @@ function Conversation({
                         <button
                           className="message-action-trigger"
                           type="button"
-                          title="การกระทำกับข้อความ"
-                          aria-label="การกระทำกับข้อความ"
+                          title={t("การกระทำกับข้อความ")}
+                          aria-label={t("การกระทำกับข้อความ")}
                           ref={(element) => {
                             if (element) messageActionTriggerRefs.current.set(message.id, element);
                             else messageActionTriggerRefs.current.delete(message.id);
@@ -5136,13 +5146,13 @@ function Conversation({
                   <div className="message-meta">
                     {message.reaction && <button className="reaction-pill">{message.reaction}</button>}
                     {message.reactions?.map((reaction) => {
-                      const label = reactionOptions.find((option) => option.type === reaction.type)?.label || "รีแอคชั่น";
+                      const label = reactionOptions.find((option) => option.type === reaction.type)?.label ? t(reactionOptions.find((option) => option.type === reaction.type)!.label) : t("รีแอคชั่น");
                       return (
                         <button
                           key={reaction.type}
                           className={`reaction-pill ${reaction.mine ? "active" : ""}`}
                           type="button"
-                          title="เปลี่ยนรีแอคชั่น"
+                          title={t("เปลี่ยนรีแอคชั่น")}
                           onClick={() => {
                             setMessageMenuId(message.id);
                             setReactionMenuId(message.id);
@@ -5156,25 +5166,25 @@ function Conversation({
                       <>
                         <span className="send-state">
                           {mediaProgress[message.id]?.total
-                            ? `${mediaProgress[message.id].phase === "reading" ? "กำลังเตรียม" : "กำลังส่ง"} ${Math.min(100, Math.round((mediaProgress[message.id].done / mediaProgress[message.id].total) * 100))}%`
-                            : "กำลังส่ง…"}
+                            ? `${mediaProgress[message.id].phase === "reading" ? t("กำลังเตรียม") : t("กำลังส่ง")} ${Math.min(100, Math.round((mediaProgress[message.id].done / mediaProgress[message.id].total) * 100))}%`
+                            : t("กำลังส่ง…")}
                         </span>
-                        {message.contentType && message.contentType > 0 ? <button className="message-retry" type="button" onClick={() => onCancelMedia(message.id)}>ยกเลิก</button> : null}
+                        {message.contentType && message.contentType > 0 ? <button className="message-retry" type="button" onClick={() => onCancelMedia(message.id)}>{t("ยกเลิก")}</button> : null}
                       </>
                     ) : null}
                     {message.status === "error" || message.status === "unknown" ? (
                       <>
-                        <span className="send-state send-error">{message.status === "unknown" ? "ตรวจสอบสถานะการส่ง" : "ส่งไม่สำเร็จ"}</span>
+                        <span className="send-state send-error">{message.status === "unknown" ? t("ตรวจสอบสถานะการส่ง") : t("ส่งไม่สำเร็จ")}</span>
                         {message.sendError ? <span className="send-error-detail" title={message.sendError}>{message.sendError}</span> : null}
                         {message.sendError?.includes("ต้องเชื่อมบัญชี LINE ใหม่")
-                          ? <span className="send-error-detail">เชื่อมบัญชีใหม่ก่อน แล้วค่อยลองส่งอีกครั้ง</span>
-                          : <button className="message-retry" type="button" onClick={() => onRetry(message.id)}>ลองใหม่</button>}
+                          ? <span className="send-error-detail">{t("เชื่อมบัญชีใหม่ก่อน แล้วค่อยลองส่งอีกครั้ง")}</span>
+                          : <button className="message-retry" type="button" onClick={() => onRetry(message.id)}>{t("ลองใหม่")}</button>}
                       </>
                     ) : null}
-                    {message.edited && !message.unsent ? <span className="message-edited">แก้ไขแล้ว</span> : null}
+                    {message.edited && !message.unsent ? <span className="message-edited">{t("แก้ไขแล้ว")}</span> : null}
                     {message.author === "me" && (message.readByPeer || (message.readCount ?? 0) > 0) ? (
                       <span className="message-read-receipt">
-                        {showReadCount && (message.readCount ?? 0) > 1 ? `อ่านแล้ว ${message.readCount} คน` : "อ่านแล้ว"}
+                        {showReadCount && (message.readCount ?? 0) > 1 ? t("อ่านแล้ว {{count}} คน", { count: message.readCount ?? 0 }) : t("อ่านแล้ว")}
                       </span>
                     ) : null}
                     <time>{message.time}</time>
@@ -5193,8 +5203,8 @@ function Conversation({
           <motion.button
             className="scroll-bottom-button"
             type="button"
-            title="ไปข้อความล่าสุด"
-            aria-label="ไปข้อความล่าสุด"
+            title={t("ไปข้อความล่าสุด")}
+            aria-label={t("ไปข้อความล่าสุด")}
             initial={{ opacity: 0, y: 8, scale: 0.92 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 8, scale: 0.92 }}
@@ -5217,7 +5227,7 @@ function Conversation({
         >
           {reactionMenuId === activeMenuMessage.id ? (
             <>
-              <div className="message-action-menu-title">รีแอคชั่น</div>
+              <div className="message-action-menu-title">{t("รีแอคชั่น")}</div>
               <div className="reaction-picker">
                 {reactionOptions.map((option) => (
                   <button
@@ -5234,15 +5244,15 @@ function Conversation({
                   </button>
                 ))}
               </div>
-              <button className="message-action-back" type="button" onClick={() => setReactionMenuId(null)}>กลับ</button>
+              <button className="message-action-back" type="button" onClick={() => setReactionMenuId(null)}>{t("กลับ")}</button>
             </>
           ) : (
             <>
-              <button type="button" onClick={() => setReactionMenuId(activeMenuMessage.id)}><Smile size={15} />รีแอคชั่น</button>
-              <button type="button" onClick={() => { setMessageMenuId(null); onReply(activeMenuMessage); }}><Reply size={15} />ตอบกลับ</button>
-              <button type="button" onClick={() => { setMessageMenuId(null); void onDeleteForMe(activeMenuMessage); }}><Trash size={15} />ลบเฉพาะคุณ</button>
+              <button type="button" onClick={() => setReactionMenuId(activeMenuMessage.id)}><Smile size={15} />{t("รีแอคชั่น")}</button>
+              <button type="button" onClick={() => { setMessageMenuId(null); onReply(activeMenuMessage); }}><Reply size={15} />{t("ตอบกลับ")}</button>
+              <button type="button" onClick={() => { setMessageMenuId(null); void onDeleteForMe(activeMenuMessage); }}><Trash size={15} />{t("ลบเฉพาะคุณ")}</button>
               {activeMenuMessage.author === "me" && activeMenuMessage.status === "sent" ? (
-                <button className="danger-action" type="button" onClick={() => { setMessageMenuId(null); void onUnsend(activeMenuMessage); }}><Undo2 size={15} />ยกเลิกข้อความ</button>
+                <button className="danger-action" type="button" onClick={() => { setMessageMenuId(null); void onUnsend(activeMenuMessage); }}><Undo2 size={15} />{t("ยกเลิกข้อความ")}</button>
               ) : null}
             </>
           )}
@@ -5256,16 +5266,16 @@ function Conversation({
           <div className="reply-composer-bar">
             <Reply size={15} />
             <div>
-              <strong>ตอบกลับ {replyTarget.author === "me" ? "คุณ" : replyTarget.senderName || "ข้อความ"}</strong>
-              <span>{replyTarget.text || "ข้อความ"}</span>
+              <strong>{t("ตอบกลับ {{name}}", { name: replyTarget.author === "me" ? t("คุณ") : replyTarget.senderName || t("ข้อความ") })}</strong>
+              <span>{replyTarget.text || t("ข้อความ")}</span>
             </div>
-            <button type="button" title="ยกเลิกการตอบกลับ" aria-label="ยกเลิกการตอบกลับ" onClick={onCancelReply}><X size={15} /></button>
+            <button type="button" title={t("ยกเลิกการตอบกลับ")} aria-label={t("ยกเลิกการตอบกลับ")} onClick={onCancelReply}><X size={15} /></button>
           </div>
         ) : null}
       <div className={`composer-area ${!canSend ? "composer-disabled" : ""}`}>
         <div className="composer-tools">
-          <button className="plain-icon" disabled={!canSend} onClick={() => lineyEngine.isNative ? void onPickImage() : fileInputRef.current?.click()} title="ส่งไฟล์"><Paperclip size={19} /></button>
-          <button className="plain-icon" disabled={!canSend} onClick={() => lineyEngine.isNative ? void onPickImage() : fileInputRef.current?.click()} title="ส่งรูปภาพ"><Image size={19} /></button>
+          <button className="plain-icon" disabled={!canSend} onClick={() => lineyEngine.isNative ? void onPickImage() : fileInputRef.current?.click()} title={t("ส่งไฟล์")}><Paperclip size={19} /></button>
+          <button className="plain-icon" disabled={!canSend} onClick={() => lineyEngine.isNative ? void onPickImage() : fileInputRef.current?.click()} title={t("ส่งรูปภาพ")}><Image size={19} /></button>
           <input
             ref={fileInputRef}
             className="hidden-file-input"
@@ -5281,8 +5291,8 @@ function Conversation({
             className={`plain-icon ${stickerPickerOpen ? "active" : ""}`}
             disabled={!canSend}
             type="button"
-            title="สติกเกอร์และ LINE Emoji"
-            aria-label="สติกเกอร์และ LINE Emoji"
+            title={t("สติกเกอร์และ LINE Emoji")}
+            aria-label={t("สติกเกอร์และ LINE Emoji")}
             onClick={() => {
               if (!stickerPickerOpen) setStickerPickerLoading(true);
               setStickerPickerOpen((open) => !open);
@@ -5334,7 +5344,7 @@ function Conversation({
               void onNativeImage(false);
             }
           }}
-          placeholder={canSend ? `ส่งข้อความถึง ${chat.name}` : "เข้าสู่ระบบ LINE เพื่อเริ่มแชต"}
+          placeholder={canSend ? t("ส่งข้อความถึง {{name}}", { name: chat.name }) : t("เข้าสู่ระบบ LINE เพื่อเริ่มแชต")}
           rows={1}
           disabled={!canSend}
         />
@@ -5342,14 +5352,14 @@ function Conversation({
           <Send size={18} />
         </button>
         {stickerPickerOpen ? (
-          <div className="sticker-picker" role="dialog" aria-label="เลือกสติกเกอร์หรือ LINE Emoji">
-            <div className="sticker-picker-title"><strong>สติกเกอร์ของคุณ</strong><button type="button" title="ปิด" onClick={() => setStickerPickerOpen(false)}><X size={15} /></button></div>
-            <div className="sticker-picker-tabs"><button className={pickerTab === "sticker" ? "active" : ""} type="button" onClick={() => setPickerTab("sticker")}>สติกเกอร์</button><button className={pickerTab === "emoji" ? "active" : ""} type="button" onClick={() => setPickerTab("emoji")}>LINE Emoji</button></div>
-            {stickerPickerLoading ? <div className="sticker-picker-empty">กำลังโหลดคลัง…</div> : null}
-            {!stickerPickerLoading && pickerTab === "sticker" && stickerPacks.length === 0 ? <div className="sticker-picker-empty">ไม่พบสติกเกอร์ที่บัญชีนี้เป็นเจ้าของ</div> : null}
-            {!stickerPickerLoading && pickerTab === "emoji" && emojiPacks.length === 0 ? <div className="sticker-picker-empty">ยังไม่มี LINE Emoji ในประวัติแชต</div> : null}
-            {!stickerPickerLoading && pickerTab === "sticker" && selectedStickerPack ? <div className="sticker-chooser"><section className="sticker-pack-page"><div className="sticker-pack-label"><span>แพ็ก #{selectedStickerPack[0]}</span><small>{selectedStickerPack[1].length} ตัว · ของคุณ</small></div><div className="sticker-picker-grid">{selectedStickerPack[1].map((sticker) => { const src = `https://stickershop.line-scdn.net/stickershop/v1/sticker/${encodeURIComponent(sticker.stickerId)}/android/${sticker.option === "A" ? "sticker_animation.png" : "sticker.png"}`; return <button key={`${sticker.packageId}:${sticker.stickerId}`} type="button" title="ส่งสติกเกอร์ของคุณ" onClick={() => { setStickerPickerOpen(false); void onSendSticker(sticker); }}><StickerImage src={src} className="sticker-picker-image" fallback={<span className="sticker-picker-unavailable">ไม่พร้อม</span>} /></button>; })}</div></section><div className="sticker-pack-tabs" role="tablist" aria-label="แพ็กสติกเกอร์">{stickerPacks.map(([packageId, stickers]) => { const first = stickers[0]; const fallback = first ? <StickerImage src={`https://stickershop.line-scdn.net/stickershop/v1/sticker/${encodeURIComponent(first.stickerId)}/android/${first.option === "A" ? "sticker_animation.png" : "sticker.png"}`} className="sticker-pack-tab-image" fallback={<span className="sticker-picker-unavailable">ไม่พร้อม</span>} /> : <span className="sticker-picker-unavailable">ไม่พร้อม</span>; return <button key={packageId} className={packageId === selectedStickerPack[0] ? "active" : ""} role="tab" aria-selected={packageId === selectedStickerPack[0]} type="button" title={`แพ็ก #${packageId}`} onClick={() => setSelectedStickerPackId(packageId)}><StickerPackCover packageId={packageId} fallback={fallback} /></button>; })}</div></div> : null}
-            {!stickerPickerLoading && pickerTab === "emoji" && selectedEmojiPack ? <div className="sticker-chooser"><section className="sticker-pack-page"><div className="sticker-pack-label"><span>LINE Emoji #{selectedEmojiPack[0]}</span><small>{selectedEmojiPack[1].some((item) => item.owned) ? "ของคุณ" : "พบในแชต"}</small></div><div className="sticker-picker-grid emoji-picker-grid">{selectedEmojiPack[1].map((item) => { const src = `https://stickershop.line-scdn.net/sticonshop/v1/sticon/${encodeURIComponent(item.productId)}/android/${encodeURIComponent(item.sticonId)}.png`; return <button key={`${item.productId}:${item.sticonId}`} type="button" title={`ส่ง LINE Emoji · ${item.owned ? "ของคุณ" : "พบในแชต"}`} onClick={() => { setStickerPickerOpen(false); void onSendEmoji(item); }}><img src={src} alt="LINE Emoji" loading="lazy" referrerPolicy="no-referrer" /></button>; })}</div></section><div className="sticker-pack-tabs" role="tablist" aria-label="แพ็ก LINE Emoji">{emojiPacks.map(([productId, items]) => { const first = items[0]; const src = first ? `https://stickershop.line-scdn.net/sticonshop/v1/sticon/${encodeURIComponent(first.productId)}/android/${encodeURIComponent(first.sticonId)}.png` : ""; return <button key={productId} className={productId === selectedEmojiPack[0] ? "active" : ""} role="tab" aria-selected={productId === selectedEmojiPack[0]} type="button" title={`LINE Emoji #${productId}`} onClick={() => setSelectedEmojiPackId(productId)}>{src ? <img src={src} alt="LINE Emoji" loading="lazy" referrerPolicy="no-referrer" /> : null}</button>; })}</div></div> : null}
+          <div className="sticker-picker" role="dialog" aria-label={t("เลือกสติกเกอร์หรือ LINE Emoji")}>
+            <div className="sticker-picker-title"><strong>{t("สติกเกอร์ของคุณ")}</strong><button type="button" title={t("ปิด")} onClick={() => setStickerPickerOpen(false)}><X size={15} /></button></div>
+            <div className="sticker-picker-tabs"><button className={pickerTab === "sticker" ? "active" : ""} type="button" onClick={() => setPickerTab("sticker")}>{t("สติกเกอร์")}</button><button className={pickerTab === "emoji" ? "active" : ""} type="button" onClick={() => setPickerTab("emoji")}>LINE Emoji</button></div>
+            {stickerPickerLoading ? <div className="sticker-picker-empty">{t("กำลังโหลดคลัง…")}</div> : null}
+            {!stickerPickerLoading && pickerTab === "sticker" && stickerPacks.length === 0 ? <div className="sticker-picker-empty">{t("ไม่พบสติกเกอร์ที่บัญชีนี้เป็นเจ้าของ")}</div> : null}
+            {!stickerPickerLoading && pickerTab === "emoji" && emojiPacks.length === 0 ? <div className="sticker-picker-empty">{t("ยังไม่มี LINE Emoji ในประวัติแชต")}</div> : null}
+            {!stickerPickerLoading && pickerTab === "sticker" && selectedStickerPack ? <div className="sticker-chooser"><section className="sticker-pack-page"><div className="sticker-pack-label"><span>{t("แพ็ก #{{id}}", { id: selectedStickerPack[0] })}</span><small>{t("{{count}} ตัว · ของคุณ", { count: selectedStickerPack[1].length })}</small></div><div className="sticker-picker-grid">{selectedStickerPack[1].map((sticker) => { const src = `https://stickershop.line-scdn.net/stickershop/v1/sticker/${encodeURIComponent(sticker.stickerId)}/android/${sticker.option === "A" ? "sticker_animation.png" : "sticker.png"}`; return <button key={`${sticker.packageId}:${sticker.stickerId}`} type="button" title={t("ส่งสติกเกอร์ของคุณ")} onClick={() => { setStickerPickerOpen(false); void onSendSticker(sticker); }}><StickerImage src={src} className="sticker-picker-image" fallback={<span className="sticker-picker-unavailable">{t("ไม่พร้อม")}</span>} /></button>; })}</div></section><div className="sticker-pack-tabs" role="tablist" aria-label={t("แพ็กสติกเกอร์")}>{stickerPacks.map(([packageId, stickers]) => { const first = stickers[0]; const fallback = first ? <StickerImage src={`https://stickershop.line-scdn.net/stickershop/v1/sticker/${encodeURIComponent(first.stickerId)}/android/${first.option === "A" ? "sticker_animation.png" : "sticker.png"}`} className="sticker-pack-tab-image" fallback={<span className="sticker-picker-unavailable">{t("ไม่พร้อม")}</span>} /> : <span className="sticker-picker-unavailable">{t("ไม่พร้อม")}</span>; return <button key={packageId} className={packageId === selectedStickerPack[0] ? "active" : ""} role="tab" aria-selected={packageId === selectedStickerPack[0]} type="button" title={`แพ็ก #${packageId}`} onClick={() => setSelectedStickerPackId(packageId)}><StickerPackCover packageId={packageId} fallback={fallback} /></button>; })}</div></div> : null}
+            {!stickerPickerLoading && pickerTab === "emoji" && selectedEmojiPack ? <div className="sticker-chooser"><section className="sticker-pack-page"><div className="sticker-pack-label"><span>LINE Emoji #{selectedEmojiPack[0]}</span><small>{selectedEmojiPack[1].some((item) => item.owned) ? t("ของคุณ") : t("พบในแชต")}</small></div><div className="sticker-picker-grid emoji-picker-grid">{selectedEmojiPack[1].map((item) => { const src = `https://stickershop.line-scdn.net/sticonshop/v1/sticon/${encodeURIComponent(item.productId)}/android/${encodeURIComponent(item.sticonId)}.png`; return <button key={`${item.productId}:${item.sticonId}`} type="button" title={`ส่ง LINE Emoji · ${item.owned ? t("ของคุณ") : t("พบในแชต")}`} onClick={() => { setStickerPickerOpen(false); void onSendEmoji(item); }}><img src={src} alt="LINE Emoji" loading="lazy" referrerPolicy="no-referrer" /></button>; })}</div></section><div className="sticker-pack-tabs" role="tablist" aria-label={t("แพ็ก LINE Emoji")}>{emojiPacks.map(([productId, items]) => { const first = items[0]; const src = first ? `https://stickershop.line-scdn.net/sticonshop/v1/sticon/${encodeURIComponent(first.productId)}/android/${encodeURIComponent(first.sticonId)}.png` : ""; return <button key={productId} className={productId === selectedEmojiPack[0] ? "active" : ""} role="tab" aria-selected={productId === selectedEmojiPack[0]} type="button" title={`LINE Emoji #${productId}`} onClick={() => setSelectedEmojiPackId(productId)}>{src ? <img src={src} alt="LINE Emoji" loading="lazy" referrerPolicy="no-referrer" /> : null}</button>; })}</div></div> : null}
           </div>
         ) : null}
       </div>
@@ -5566,18 +5576,19 @@ function FullSyncPopup({
   onRetry: () => void;
   onClose: () => void;
 }) {
-  const formatCount = (value: number) => value.toLocaleString("th-TH");
+  const { t, english } = useAppTranslation();
+  const formatCount = (value: number) => value.toLocaleString(english ? "en-US" : "th-TH");
   const copy = progress.phase === "metadata"
-    ? { title: "กำลังเตรียม Full Sync", detail: "กำลังเชื่อมข้อมูลบัญชี LINE" }
+    ? { title: t("กำลังเตรียม Full Sync"), detail: t("กำลังเชื่อมข้อมูลบัญชี LINE") }
     : progress.phase === "friends"
-      ? { title: "กำลังซิงก์เพื่อน", detail: formatCount(progress.done) + " / " + formatCount(progress.total) + " คน" }
+      ? { title: t("กำลังซิงก์เพื่อน"), detail: t("{{done}} / {{total}} คน", { done: formatCount(progress.done), total: formatCount(progress.total) }) }
       : progress.phase === "chats"
-        ? { title: "กำลังซิงก์รายการแชต", detail: formatCount(progress.done) + " / " + formatCount(progress.total) + " ห้อง" }
+        ? { title: t("กำลังซิงก์รายการแชต"), detail: t("{{done}} / {{total}} ห้อง", { done: formatCount(progress.done), total: formatCount(progress.total) }) }
         : progress.phase === "history"
-          ? { title: "กำลังซิงก์ประวัติข้อความ", detail: "ห้อง " + formatCount(progress.done) + " จาก " + formatCount(progress.total) + (progress.failed ? " · ข้ามแล้ว " + formatCount(progress.failed) : "") }
+          ? { title: t("กำลังซิงก์ประวัติข้อความ"), detail: t("ห้อง {{done}} จาก {{total}}{{skipped}}", { done: formatCount(progress.done), total: formatCount(progress.total), skipped: progress.failed ? " · " + t("ข้ามแล้ว {{count}}", { count: formatCount(progress.failed) }) : "" }) }
           : progress.phase === "complete"
-            ? { title: "Full Sync เสร็จแล้ว", detail: formatCount(Number(progress.summary?.friends ?? 0)) + " เพื่อน · " + formatCount(Number(progress.summary?.talkChats ?? 0) + Number(progress.summary?.openChats ?? 0)) + " ห้อง" + (progress.failed ? " · " + formatCount(progress.failed) + " ห้องมีปัญหา" : "") }
-            : { title: "Full Sync มีบางส่วนไม่สำเร็จ", detail: "เกิดปัญหาระหว่างซิงก์ ลองใหม่ได้อีกครั้ง" };
+            ? { title: t("Full Sync เสร็จแล้ว"), detail: t("{{friends}} เพื่อน · {{chats}} ห้อง{{issues}}", { friends: formatCount(Number(progress.summary?.friends ?? 0)), chats: formatCount(Number(progress.summary?.talkChats ?? 0) + Number(progress.summary?.openChats ?? 0)), issues: progress.failed ? " · " + t("{{count}} ห้องมีปัญหา", { count: formatCount(progress.failed) }) : "" }) }
+            : { title: t("Full Sync มีบางส่วนไม่สำเร็จ"), detail: t("เกิดปัญหาระหว่างซิงก์ ลองใหม่ได้อีกครั้ง") };
   const hasMeasuredProgress = progress.total > 0 && progress.phase !== "metadata";
   const isIndeterminate = progress.phase !== "complete" && progress.phase !== "error" && !hasMeasuredProgress;
   const percent = hasMeasuredProgress ? Math.min(100, Math.round((progress.done / progress.total) * 100)) : null;
@@ -5619,11 +5630,11 @@ function FullSyncPopup({
         <div
           className={"full-sync-track" + (isIndeterminate ? " sync-progress-indeterminate" : "")}
           role="progressbar"
-          aria-label="ความคืบหน้าในขั้นตอนปัจจุบัน"
+          aria-label={t("ความคืบหน้าในขั้นตอนปัจจุบัน")}
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={percent ?? (progress.phase === "complete" ? 100 : undefined)}
-          aria-valuetext={percent === null ? "กำลังเตรียมข้อมูล" : formatCount(progress.done) + " จาก " + formatCount(progress.total)}
+          aria-valuetext={percent === null ? t("กำลังเตรียมข้อมูล") : t("{{done}} จาก {{total}}", { done: formatCount(progress.done), total: formatCount(progress.total) })}
         >
           <i style={{ width: fill + "%" }} />
         </div>
@@ -5632,18 +5643,18 @@ function FullSyncPopup({
           : null}
         <small>
           {progress.phase === "complete"
-            ? "ซิงก์ข้อมูลที่มีให้เสร็จแล้ว"
+            ? t("ซิงก์ข้อมูลที่มีให้เสร็จแล้ว")
             : progress.phase === "error"
-              ? "แชตที่บันทึกไว้ในเครื่องยังคงอยู่"
-              : "กำลังซิงก์ข้อมูลจริงจากบัญชี LINE"}
+              ? t("แชตที่บันทึกไว้ในเครื่องยังคงอยู่")
+              : t("กำลังซิงก์ข้อมูลจริงจากบัญชี LINE")}
         </small>
         {progress.phase === "error" ? (
           <div className="full-sync-actions">
-            <button className="secondary-button" type="button" onClick={onClose}>ปิด</button>
-            <button className="primary-button" type="button" onClick={onRetry}>ลองใหม่</button>
+            <button className="secondary-button" type="button" onClick={onClose}>{t("ปิด")}</button>
+            <button className="primary-button" type="button" onClick={onRetry}>{t("ลองใหม่")}</button>
           </div>
         ) : progress.phase !== "complete" ? (
-          <button className="secondary-button full-sync-cancel" type="button" onClick={onCancel}>ยกเลิก Full Sync</button>
+          <button className="secondary-button full-sync-cancel" type="button" onClick={onCancel}>{t("ยกเลิก Full Sync")}</button>
         ) : null}
       </motion.section>
     </motion.div>
@@ -5859,6 +5870,7 @@ function NewChatModal({
   onCreateOpenChat: (name: string, description: string, searchable: boolean) => Promise<Chat>;
   onClose: () => void;
 }) {
+  const { t } = useAppTranslation();
   const [tab, setTab] = useState<NewChatTab>("chat");
   const [search, setSearch] = useState("");
   const [lineId, setLineId] = useState("");
@@ -5944,17 +5956,17 @@ function NewChatModal({
         transition={{ duration: 0.16 }}
         role="dialog"
         aria-modal="true"
-        aria-label="เริ่มแชตใหม่"
+        aria-label={t("เริ่มแชตใหม่")}
       >
         <header className="new-chat-header">
-          <div><p className="eyebrow">LINEY NEW</p><h2>เริ่มแชตใหม่</h2></div>
-          <button className="icon-button" type="button" onClick={onClose} disabled={busy} title="ปิด"><X size={19} /></button>
+          <div><p className="eyebrow">LINEY NEW</p><h2>{t("เริ่มแชตใหม่")}</h2></div>
+          <button className="icon-button" type="button" onClick={onClose} disabled={busy} title={t("ปิด")}><X size={19} /></button>
         </header>
 
         <div className="new-chat-tabs" role="tablist">
-          <button type="button" className={tab === "chat" ? "active" : ""} onClick={() => switchTab("chat")}><MessageCircle size={15}/> แชตใหม่</button>
-          <button type="button" className={tab === "friend" ? "active" : ""} onClick={() => switchTab("friend")}><UserPlus size={15}/> เพิ่มเพื่อน</button>
-          <button type="button" className={tab === "group" ? "active" : ""} onClick={() => switchTab("group")}><Users size={15}/> สร้างกลุ่ม</button>
+          <button type="button" className={tab === "chat" ? "active" : ""} onClick={() => switchTab("chat")}><MessageCircle size={15}/> {t("แชตใหม่")}</button>
+          <button type="button" className={tab === "friend" ? "active" : ""} onClick={() => switchTab("friend")}><UserPlus size={15}/> {t("เพิ่มเพื่อน")}</button>
+          <button type="button" className={tab === "group" ? "active" : ""} onClick={() => switchTab("group")}><Users size={15}/> {t("สร้างกลุ่ม")}</button>
           <button type="button" className={tab === "openchat" ? "active" : ""} onClick={() => switchTab("openchat")}><Sparkles size={15}/> OpenChat</button>
         </div>
 
@@ -5962,7 +5974,7 @@ function NewChatModal({
 
         {tab === "friend" ? (
           <div className="new-chat-pane add-friend-pane">
-            <div className="new-chat-hero"><UserPlus size={24}/><div><strong>เพิ่มเพื่อนด้วย LINE ID</strong><span>ค้นหา LINE ID แล้วเพิ่มเข้ารายชื่อเพื่อนโดยตรง</span></div></div>
+            <div className="new-chat-hero"><UserPlus size={24}/><div><strong>{t("เพิ่มเพื่อนด้วย LINE ID")}</strong><span>{t("ค้นหา LINE ID แล้วเพิ่มเข้ารายชื่อเพื่อนโดยตรง")}</span></div></div>
             <label className="new-chat-field">
               <span>LINE ID</span>
               <div className="new-chat-input-row">
@@ -5970,35 +5982,35 @@ function NewChatModal({
                   value={lineId}
                   onChange={(event) => setLineId(event.target.value)}
                   onKeyDown={(event) => { if (event.key === "Enter") void addFriend(); }}
-                  placeholder="เช่น namnarak หรือ @official"
+                  placeholder={t("เช่น namnarak หรือ @official")}
                   autoFocus
                   disabled={busy}
                 />
                 <button className="primary-button" type="button" onClick={() => void addFriend()} disabled={!lineId.trim() || busy}>
-                  {busy ? <LoaderCircle className="spin" size={15}/> : <UserPlus size={15}/>} เพิ่มเพื่อน
+                  {busy ? <LoaderCircle className="spin" size={15}/> : <UserPlus size={15}/>} {t("เพิ่มเพื่อน")}
                 </button>
               </div>
             </label>
-            <div className="new-chat-note"><Info size={14}/><span>บัญชีที่ปิดการค้นหาด้วย LINE ID จะค้นหาไม่พบตามข้อจำกัดของ LINE</span></div>
+            <div className="new-chat-note"><Info size={14}/><span>{t("บัญชีที่ปิดการค้นหาด้วย LINE ID จะค้นหาไม่พบตามข้อจำกัดของ LINE")}</span></div>
           </div>
         ) : tab === "openchat" ? (
           <div className="new-chat-pane add-friend-pane">
-            <div className="new-chat-hero"><Sparkles size={24}/><div><strong>สร้าง OpenChat</strong><span>สร้าง Square/OpenChat ใหม่ผ่าน LINE โดยตรง</span></div></div>
+            <div className="new-chat-hero"><Sparkles size={24}/><div><strong>{t("สร้าง OpenChat")}</strong><span>{t("สร้าง Square/OpenChat ใหม่ผ่าน LINE โดยตรง")}</span></div></div>
             <label className="new-chat-field">
-              <span>ชื่อ OpenChat</span>
-              <input maxLength={50} value={openChatName} onChange={(event) => setOpenChatName(event.target.value)} placeholder="ชื่อ OpenChat" autoFocus disabled={busy} />
+              <span>{t("ชื่อ OpenChat")}</span>
+              <input maxLength={50} value={openChatName} onChange={(event) => setOpenChatName(event.target.value)} placeholder={t("ชื่อ OpenChat")} autoFocus disabled={busy} />
             </label>
             <label className="new-chat-field">
-              <span>คำอธิบาย</span>
-              <textarea maxLength={500} value={openChatDescription} onChange={(event) => setOpenChatDescription(event.target.value)} placeholder="รายละเอียดของ OpenChat (ไม่บังคับ)" disabled={busy} />
+              <span>{t("คำอธิบาย")}</span>
+              <textarea maxLength={500} value={openChatDescription} onChange={(event) => setOpenChatDescription(event.target.value)} placeholder={t("รายละเอียดของ OpenChat (ไม่บังคับ)")} disabled={busy} />
             </label>
             <button type="button" className={`new-chat-switch ${openChatSearchable ? "on" : ""}`} onClick={() => setOpenChatSearchable((value) => !value)} disabled={busy}>
-              <span><strong>ค้นหา OpenChat นี้ได้</strong><small>อนุญาตให้คนอื่นค้นหาห้องจาก LINE</small></span>
+              <span><strong>{t("ค้นหา OpenChat นี้ได้")}</strong><small>{t("อนุญาตให้คนอื่นค้นหาห้องจาก LINE")}</small></span>
               <span className="new-chat-switch-knob" />
             </button>
             <div className="new-chat-openchat-action">
               <button className="primary-button" type="button" onClick={() => void createOpenChat()} disabled={!openChatName.trim() || busy}>
-                {busy ? <LoaderCircle className="spin" size={15}/> : <Sparkles size={15}/>} สร้าง OpenChat
+                {busy ? <LoaderCircle className="spin" size={15}/> : <Sparkles size={15}/>} {t("สร้าง OpenChat")}
               </button>
             </div>
           </div>
@@ -6006,11 +6018,11 @@ function NewChatModal({
           <div className="new-chat-pane">
             {tab === "group" ? (
               <label className="new-chat-field group-name-field">
-                <span>ชื่อกลุ่ม</span>
-                <input maxLength={50} value={groupName} onChange={(event) => setGroupName(event.target.value)} placeholder="ตั้งชื่อกลุ่ม" autoFocus />
+                <span>{t("ชื่อกลุ่ม")}</span>
+                <input maxLength={50} value={groupName} onChange={(event) => setGroupName(event.target.value)} placeholder={t("ตั้งชื่อกลุ่ม")} autoFocus />
               </label>
             ) : null}
-            <div className="new-chat-search"><Search size={16}/><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={tab === "group" ? "ค้นหาเพื่อนเพื่อเพิ่มเข้ากลุ่ม" : "ค้นหาเพื่อน"} /></div>
+            <div className="new-chat-search"><Search size={16}/><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={tab === "group" ? t("ค้นหาเพื่อนเพื่อเพิ่มเข้ากลุ่ม") : t("ค้นหาเพื่อน")} /></div>
             <div className="new-chat-friends">
               {filteredFriends.length ? filteredFriends.map((friend) => {
                 const checked = selected.includes(friend.id);
@@ -6028,17 +6040,17 @@ function NewChatModal({
                     }}
                   >
                     <Avatar chat={friend} />
-                    <span className="new-chat-friend-copy"><strong>{friend.name}</strong><span>{friend.subtitle || "เพื่อน · LINE"}</span></span>
+                    <span className="new-chat-friend-copy"><strong>{friend.name}</strong><span>{friend.subtitle || t("เพื่อน · LINE")}</span></span>
                     {tab === "group" ? <span className={`new-chat-check ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span> : <MessageCircle size={17}/>}
                   </button>
                 );
-              }) : <div className="new-chat-empty"><Search size={22}/><strong>ไม่พบเพื่อน</strong><span>ลองค้นหาด้วยชื่ออื่น หรือเพิ่มเพื่อนด้วย LINE ID</span></div>}
+              }) : <div className="new-chat-empty"><Search size={22}/><strong>{t("ไม่พบเพื่อน")}</strong><span>{t("ลองค้นหาด้วยชื่ออื่น หรือเพิ่มเพื่อนด้วย LINE ID")}</span></div>}
             </div>
             {tab === "group" ? (
               <footer className="new-chat-footer">
-                <span>เลือกแล้ว {selected.length.toLocaleString("th-TH")} คน</span>
+                <span>{t("เลือกแล้ว {{count}} คน", { count: selected.length.toLocaleString("en-US") })}</span>
                 <button className="primary-button" type="button" onClick={() => void createGroup()} disabled={!groupName.trim() || selected.length === 0 || busy}>
-                  {busy ? <LoaderCircle className="spin" size={15}/> : <Users size={15}/>} สร้างกลุ่ม
+                  {busy ? <LoaderCircle className="spin" size={15}/> : <Users size={15}/>} {t("สร้างกลุ่ม")}
                 </button>
               </footer>
             ) : null}
@@ -6066,6 +6078,7 @@ function SettingsModal({ initialTab, themeMode, dark, settings, callAvailable, o
   onProfileChange: (profile: ProfileResult) => void;
   onClose: () => void;
 }) {
+  const { t } = useAppTranslation();
   const [tab, setTab] = useState(initialTab);
   const english = settings.language === "en";
   const groups = [
@@ -6101,7 +6114,7 @@ function SettingsModal({ initialTab, themeMode, dark, settings, callAvailable, o
     "จัดการการแสดงผลและข้อมูลห้อง OpenChat": "OpenChat display and room data", "ข้อมูลในเครื่องและเครื่องมือการซิงก์": "Local data and sync tools",
     "เครื่องมือสำหรับตรวจสอบและแก้ปัญหา": "Diagnostics and troubleshooting", "รายละเอียดแอปและเวอร์ชัน": "App details and version"
   } : {};
-  const label = (value: string) => labels[value] ?? value;
+  const label = (value: string) => english ? (labels[value] ?? t(value)) : value;
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -6146,7 +6159,7 @@ function SettingsModal({ initialTab, themeMode, dark, settings, callAvailable, o
             <button type="button" className="icon-button settings-close" onClick={onClose} title={english ? "Close settings" : "ปิดหน้าตั้งค่า"} aria-label={english ? "Close settings" : "ปิดหน้าตั้งค่า"}><X size={19} /></button>
           </header>
           {tab === "ทั่วไป" && <GeneralSettings settings={settings} themeMode={themeMode} dark={dark} english={english} onLanguageChange={onLanguageChange} onThemeMode={onThemeMode} onSetting={onSetting} />}
-          {tab === "โปรไฟล์" && (lineyEngine.isNative ? <LineProfileSettings onUpdated={onProfileChange} /> : <FeatureSettings title="โปรไฟล์" body="เปิด LINE จากแอป Liney บน Linux เพื่อแก้โปรไฟล์" />)}
+          {tab === "โปรไฟล์" && (lineyEngine.isNative ? <LineProfileSettings onUpdated={onProfileChange} /> : <FeatureSettings title={t("โปรไฟล์")} body={t("เปิด LINE จากแอป Liney บน Linux เพื่อแก้โปรไฟล์")} />)}
           {tab === "Appearance" && <AppearanceSettings settings={settings} themeMode={themeMode} dark={dark} onThemeMode={onThemeMode} onDensity={onDensity} onRadius={onRadius} />}
           {tab === "OpenChat" && <OpenChatSettings settings={settings} onSetting={onSetting} />}
           {tab === "การแจ้งเตือน" && <NotificationSettings settings={settings} onSetting={onSetting} />}
@@ -6176,7 +6189,7 @@ function GeneralSettings({ settings, themeMode, dark, english, onLanguageChange,
     </SettingsGroup>
     <SettingsGroup title={english ? "Startup" : "เริ่มต้นระบบ"}>
       <SettingRow title={english ? "Launch at startup" : "เปิดแอปพร้อมระบบ"} subtitle={english ? "Start Liney when you sign in to your desktop" : "เริ่ม Liney เมื่อเข้าสู่เดสก์ท็อป"}><Toggle checked={settings.startup} onChange={(checked) => onSetting("startup", checked)} /></SettingRow>
-      <SettingRow title={english ? "Minimize to system tray" : "ย่อไว้ใน System Tray"} subtitle={english ? "Close the window without quitting Liney" : english ? "Close the window without quitting Liney" : "ปิดหน้าต่างโดยไม่ออกจากระบบ"}><Toggle checked={settings.tray} onChange={(checked) => onSetting("tray", checked)} /></SettingRow>
+      <SettingRow title={english ? "Minimize to system tray" : "ย่อไว้ใน System Tray"} subtitle={english ? "Close the window without quitting Liney" : "ปิดหน้าต่างโดยไม่ออกจากระบบ"}><Toggle checked={settings.tray} onChange={(checked) => onSetting("tray", checked)} /></SettingRow>
     </SettingsGroup>
     <SettingsGroup title="Appearance">
       <SettingRow title={english ? "Follow system theme" : "ปรับตามธีมระบบ"} subtitle={english ? "Automatically follow your desktop Light / Dark mode" : "ติดตาม Light / Dark ของเดสก์ท็อประบบแบบอัตโนมัติ"}><Toggle checked={themeMode === "system"} onChange={(checked) => onThemeMode(checked ? "system" : (dark ? "dark" : "light"))} /></SettingRow>
@@ -6186,99 +6199,108 @@ function GeneralSettings({ settings, themeMode, dark, english, onLanguageChange,
 }
 
 function AppearanceSettings({ settings, themeMode, dark, onThemeMode, onDensity, onRadius }: { settings: AppSettings; themeMode: ThemeMode; dark: boolean; onThemeMode: (v: ThemeMode) => void; onDensity: (value: AppSettings["density"]) => void; onRadius: (value: AppSettings["radius"]) => void }) {
+  const { t } = useAppTranslation();
   return <div className="settings-scroll">
-    <SettingsGroup title="ธีม"><ThemeCards themeMode={themeMode} dark={dark} onThemeMode={onThemeMode} /></SettingsGroup>
-    <SettingsGroup title="ความหนาแน่น">
-      <SettingRow title="ระยะห่างของรายการ" subtitle="กำหนดความแน่นของรายการแชต"><Segment options={["Compact", "Comfortable", "Spacious"]} selected={settings.density} onChange={(value) => onDensity(value as AppSettings["density"])} /></SettingRow>
-      <SettingRow title="มุมโค้ง" subtitle="ใช้มุมโค้งแบบ modern desktop"><Segment options={["Soft", "Round"]} selected={settings.radius} onChange={(value) => onRadius(value as AppSettings["radius"])} /></SettingRow>
+    <SettingsGroup title={t("ธีม")}><ThemeCards themeMode={themeMode} dark={dark} onThemeMode={onThemeMode} /></SettingsGroup>
+    <SettingsGroup title={t("ความหนาแน่น")}>
+      <SettingRow title={t("ระยะห่างของรายการ")} subtitle={t("กำหนดความแน่นของรายการแชต")}><Segment options={["Compact", "Comfortable", "Spacious"]} selected={settings.density} onChange={(value) => onDensity(value as AppSettings["density"])} /></SettingRow>
+      <SettingRow title={t("มุมโค้ง")} subtitle={t("ใช้มุมโค้งแบบ modern desktop")}><Segment options={["Soft", "Round"]} selected={settings.radius} onChange={(value) => onRadius(value as AppSettings["radius"])} /></SettingRow>
     </SettingsGroup>
   </div>;
 }
 
 function NotificationSettings({ settings, onSetting }: { settings: AppSettings; onSetting: (key: keyof AppSettings, value: boolean) => void }) {
+  const { t } = useAppTranslation();
   return <div className="settings-scroll">
-    <SettingsGroup title="วิธีการแจ้งเตือน">
-      <SettingRow title="แจ้งเตือนบนเดสก์ท็อป" subtitle="ใช้ระบบแจ้งเตือนของเดสก์ท็อปที่กำลังใช้งาน"><Toggle checked={settings.desktopNotifications} onChange={(checked) => onSetting("desktopNotifications", checked)} /></SettingRow>
-      <SettingRow title="แสดงตัวอย่างข้อความ" subtitle="แสดงเนื้อหาใน notification"><Toggle checked={settings.notificationPreview} onChange={(checked) => onSetting("notificationPreview", checked)} /></SettingRow>
-      <SettingRow title="เสียงแจ้งเตือนข้อความ" subtitle="เล่นเสียงเมื่อมีข้อความใหม่"><Toggle checked={settings.notificationSound} onChange={(checked) => onSetting("notificationSound", checked)} /></SettingRow>
-      <SettingRow title="แจ้งเตือนสายเข้า" subtitle="แสดงการแจ้งเตือนของเดสก์ท็อปเมื่อมีคนโทรเข้า"><Toggle checked={settings.callNotifications} onChange={(checked) => onSetting("callNotifications", checked)} /></SettingRow>
-      <SettingRow title="เสียงสายโทร" subtitle="เล่น ringtone ตอนสายเข้า และ ringback ตอนโทรออก"><Toggle checked={settings.callSound} onChange={(checked) => onSetting("callSound", checked)} /></SettingRow>
+    <SettingsGroup title={t("วิธีการแจ้งเตือน")}>
+      <SettingRow title={t("แจ้งเตือนบนเดสก์ท็อป")} subtitle={t("ใช้ระบบแจ้งเตือนของเดสก์ท็อปที่กำลังใช้งาน")}><Toggle checked={settings.desktopNotifications} onChange={(checked) => onSetting("desktopNotifications", checked)} /></SettingRow>
+      <SettingRow title={t("แสดงตัวอย่างข้อความ")} subtitle={t("แสดงเนื้อหาใน notification")}><Toggle checked={settings.notificationPreview} onChange={(checked) => onSetting("notificationPreview", checked)} /></SettingRow>
+      <SettingRow title={t("เสียงแจ้งเตือนข้อความ")} subtitle={t("เล่นเสียงเมื่อมีข้อความใหม่")}><Toggle checked={settings.notificationSound} onChange={(checked) => onSetting("notificationSound", checked)} /></SettingRow>
+      <SettingRow title={t("แจ้งเตือนสายเข้า")} subtitle={t("แสดงการแจ้งเตือนของเดสก์ท็อปเมื่อมีคนโทรเข้า")}><Toggle checked={settings.callNotifications} onChange={(checked) => onSetting("callNotifications", checked)} /></SettingRow>
+      <SettingRow title={t("เสียงสายโทร")} subtitle={t("เล่น ringtone ตอนสายเข้า และ ringback ตอนโทรออก")}><Toggle checked={settings.callSound} onChange={(checked) => onSetting("callSound", checked)} /></SettingRow>
     </SettingsGroup>
-    <SettingsGroup title="เสียง">
-      <SettingRow title="เสียงเริ่มต้น" subtitle="Liney Soft + Liney Call"><span className="settings-status status-good">เสียงข้อความและเสียงโทรตั้งค่าแยกกัน</span></SettingRow>
+    <SettingsGroup title={t("เสียง")}>
+      <SettingRow title={t("เสียงเริ่มต้น")} subtitle="Liney Soft + Liney Call"><span className="settings-status status-good">{t("เสียงข้อความและเสียงโทรตั้งค่าแยกกัน")}</span></SettingRow>
     </SettingsGroup>
   </div>;
 }
 
 function OpenChatSettings({ settings, onSetting }: { settings: AppSettings; onSetting: (key: keyof AppSettings, value: boolean) => void }) {
+  const { t } = useAppTranslation();
   return <div className="settings-scroll">
     <div className="feature-banner">
       <div className="feature-icon"><Sparkles size={21}/></div>
-      <div><strong>OpenChat powered by LINEJS Square</strong><p>รายการและ event โหลดจาก LINEJS โดยตรงเมื่อเปิดใช้งาน</p></div>
+      <div><strong>OpenChat powered by LINEJS Square</strong><p>{t("รายการและ event โหลดจาก LINEJS โดยตรงเมื่อเปิดใช้งาน")}</p></div>
       <span className="beta-chip">ENGINE READY</span>
     </div>
     <SettingsGroup title="OpenChat">
-      <SettingRow title="แสดง OpenChat แยกจากแชตปกติ" subtitle="เพิ่มแท็บ OpenChat บนแถบซ้าย"><Toggle checked={settings.openchat} onChange={(checked) => onSetting("openchat", checked)} /></SettingRow>
-      <SettingRow title="LiveTalk" subtitle="จะเปิดเมื่อมี implementation และ live test ครบ"><span className="settings-status">ยังไม่รองรับ</span></SettingRow>
-      <SettingRow title="อัปเดตแบบ Realtime" subtitle="ใช้ push event และ polling fallback เมื่อ stream ของ Square เงียบ"><Toggle checked={settings.openchatRealtimeRefresh} onChange={(checked) => onSetting("openchatRealtimeRefresh", checked)} /></SettingRow>
-      <SettingRow title="ดาวน์โหลดสื่ออัตโนมัติ" subtitle="รูปภาพจากห้อง OpenChat"><Toggle checked={settings.autoMedia} onChange={(checked) => onSetting("autoMedia", checked)} /></SettingRow>
+      <SettingRow title={t("แสดง OpenChat แยกจากแชตปกติ")} subtitle={t("เพิ่มแท็บ OpenChat บนแถบซ้าย")}><Toggle checked={settings.openchat} onChange={(checked) => onSetting("openchat", checked)} /></SettingRow>
+      <SettingRow title="LiveTalk" subtitle={t("จะเปิดเมื่อมี implementation และ live test ครบ")}><span className="settings-status">{t("ยังไม่รองรับ")}</span></SettingRow>
+      <SettingRow title={t("อัปเดตแบบ Realtime")} subtitle={t("ใช้ push event และ polling fallback เมื่อ stream ของ Square เงียบ")}><Toggle checked={settings.openchatRealtimeRefresh} onChange={(checked) => onSetting("openchatRealtimeRefresh", checked)} /></SettingRow>
+      <SettingRow title={t("ดาวน์โหลดสื่ออัตโนมัติ")} subtitle={t("รูปภาพจากห้อง OpenChat")}><Toggle checked={settings.autoMedia} onChange={(checked) => onSetting("autoMedia", checked)} /></SettingRow>
     </SettingsGroup>
   </div>;
 }
 
 function ChatSettings({ settings, onSetting, onClearHistory, onClearStickerCache }: { settings: AppSettings; onSetting: (key: keyof AppSettings, value: boolean) => void; onClearHistory: () => void; onClearStickerCache: () => void }) {
+  const { t } = useAppTranslation();
   return <div className="settings-scroll">
-    <SettingsGroup title="การอ่านข้อความ">
-      <SettingRow title="อ่านเมื่อเลื่อนถึงข้อความล่าสุด" subtitle="ข้อความใหม่จะยังไม่ถูกอ่านจนกว่าจะเลื่อนถึงด้านล่าง"><Toggle checked={settings.markReadOnBottom} onChange={(checked) => onSetting("markReadOnBottom", checked)} /></SettingRow>
-      <SettingRow title="เส้นข้อความใหม่" subtitle="แสดงคำว่า ‘ข้อความใหม่’ ก่อนข้อความที่ยังไม่ได้อ่าน"><Toggle checked={settings.showUnreadDivider} onChange={(checked) => onSetting("showUnreadDivider", checked)} /></SettingRow>
-      <SettingRow title="จำนวนคนที่อ่าน" subtitle="ข้อความที่คุณส่งจะแสดงจำนวนผู้อ่านเมื่อ LINE ส่งข้อมูลมา"><Toggle checked={settings.showReadCount} onChange={(checked) => onSetting("showReadCount", checked)} /></SettingRow>
-      <SettingRow title="ตามข้อความล่าสุดอัตโนมัติ" subtitle="ถ้าอยู่ท้ายแชต ให้เลื่อนตามข้อความใหม่โดยไม่เด้งตอนกำลังอ่านข้อความเก่า"><Toggle checked={settings.autoScrollNewMessages} onChange={(checked) => onSetting("autoScrollNewMessages", checked)} /></SettingRow>
+    <SettingsGroup title={t("การอ่านข้อความ")}>
+      <SettingRow title={t("อ่านเมื่อเลื่อนถึงข้อความล่าสุด")} subtitle={t("ข้อความใหม่จะยังไม่ถูกอ่านจนกว่าจะเลื่อนถึงด้านล่าง")}><Toggle checked={settings.markReadOnBottom} onChange={(checked) => onSetting("markReadOnBottom", checked)} /></SettingRow>
+      <SettingRow title={t("เส้นข้อความใหม่")} subtitle={t("แสดงคำว่า ‘ข้อความใหม่’ ก่อนข้อความที่ยังไม่ได้อ่าน")}><Toggle checked={settings.showUnreadDivider} onChange={(checked) => onSetting("showUnreadDivider", checked)} /></SettingRow>
+      <SettingRow title={t("จำนวนคนที่อ่าน")} subtitle={t("ข้อความที่คุณส่งจะแสดงจำนวนผู้อ่านเมื่อ LINE ส่งข้อมูลมา")}><Toggle checked={settings.showReadCount} onChange={(checked) => onSetting("showReadCount", checked)} /></SettingRow>
+      <SettingRow title={t("ตามข้อความล่าสุดอัตโนมัติ")} subtitle={t("ถ้าอยู่ท้ายแชต ให้เลื่อนตามข้อความใหม่โดยไม่เด้งตอนกำลังอ่านข้อความเก่า")}><Toggle checked={settings.autoScrollNewMessages} onChange={(checked) => onSetting("autoScrollNewMessages", checked)} /></SettingRow>
     </SettingsGroup>
-    <SettingsGroup title="ประวัติและแคช">
-      <SettingRow title="ล้างประวัติในเครื่อง" subtitle="ล้าง SQLite history และ media cache โดยไม่ลบข้อความบน LINE"><button className="secondary-button danger-outline" type="button" onClick={onClearHistory}>ล้างประวัติ</button></SettingRow>
-      <SettingRow title="ล้างแคชสติกเกอร์" subtitle="ดึงรายการสติกเกอร์ที่เป็นเจ้าของใหม่"><button className="secondary-button" type="button" onClick={onClearStickerCache}>ล้างแคช</button></SettingRow>
+    <SettingsGroup title={t("ประวัติและแคช")}>
+      <SettingRow title={t("ล้างประวัติในเครื่อง")} subtitle={t("ล้าง SQLite history และ media cache โดยไม่ลบข้อความบน LINE")}><button className="secondary-button danger-outline" type="button" onClick={onClearHistory}>{t("ล้างประวัติ")}</button></SettingRow>
+      <SettingRow title={t("ล้างแคชสติกเกอร์")} subtitle={t("ดึงรายการสติกเกอร์ที่เป็นเจ้าของใหม่")}><button className="secondary-button" type="button" onClick={onClearStickerCache}>{t("ล้างแคช")}</button></SettingRow>
     </SettingsGroup>
-    <SettingsGroup title="การส่งข้อความ"><SettingRow title="Outbox recovery" subtitle="ข้อความมี local ID, retry และกู้สถานะหลัง timeout"><span className="settings-status status-good">เปิดใช้งาน</span></SettingRow></SettingsGroup>
+    <SettingsGroup title={t("การส่งข้อความ")}><SettingRow title="Outbox recovery" subtitle={t("ข้อความมี local ID, retry และกู้สถานะหลัง timeout")}><span className="settings-status status-good">{t("เปิดใช้งาน")}</span></SettingRow></SettingsGroup>
   </div>;
 }
 
 function MediaSettings({ settings, onSetting }: { settings: AppSettings; onSetting: (key: keyof AppSettings, value: boolean) => void }) {
+  const { t } = useAppTranslation();
   return <div className="settings-scroll">
-    <SettingsGroup title="ตัวดูรูปภาพ">
-      <SettingRow title="เปิดรูปในหน้าต่างแยก" subtitle="ใช้หน้าต่างดูรูปแบบ LINE และไม่บังหน้าต่างแชตหลัก"><Toggle checked={settings.openImagesInWindow} onChange={(checked) => onSetting("openImagesInWindow", checked)} /></SettingRow>
-      <SettingRow title="วนรูปเมื่อถึงรูปสุดท้าย" subtitle="กดลูกศรถัดไปจากรูปสุดท้ายเพื่อกลับไปรูปแรก"><Toggle checked={settings.loopImageGallery} onChange={(checked) => onSetting("loopImageGallery", checked)} /></SettingRow>
+    <SettingsGroup title={t("ตัวดูรูปภาพ")}>
+      <SettingRow title={t("เปิดรูปในหน้าต่างแยก")} subtitle={t("ใช้หน้าต่างดูรูปแบบ LINE และไม่บังหน้าต่างแชตหลัก")}><Toggle checked={settings.openImagesInWindow} onChange={(checked) => onSetting("openImagesInWindow", checked)} /></SettingRow>
+      <SettingRow title={t("วนรูปเมื่อถึงรูปสุดท้าย")} subtitle={t("กดลูกศรถัดไปจากรูปสุดท้ายเพื่อกลับไปรูปแรก")}><Toggle checked={settings.loopImageGallery} onChange={(checked) => onSetting("loopImageGallery", checked)} /></SettingRow>
     </SettingsGroup>
-    <SettingsGroup title="การโหลดสื่อ">
-      <SettingRow title="โหลดรูป OpenChat อัตโนมัติ" subtitle="ปิดได้หากต้องการลดการใช้เน็ตใน OpenChat"><Toggle checked={settings.autoMedia} onChange={(checked) => onSetting("autoMedia", checked)} /></SettingRow>
-      <SettingRow title="รูปในแชต" subtitle="แคช preview ในเครื่องและเปิดรูปเต็มจากหน้าต่างดูรูป"><span className="settings-status status-good">Cache-first</span></SettingRow>
+    <SettingsGroup title={t("การโหลดสื่อ")}>
+      <SettingRow title={t("โหลดรูป OpenChat อัตโนมัติ")} subtitle={t("ปิดได้หากต้องการลดการใช้เน็ตใน OpenChat")}><Toggle checked={settings.autoMedia} onChange={(checked) => onSetting("autoMedia", checked)} /></SettingRow>
+      <SettingRow title={t("รูปในแชต")} subtitle={t("แคช preview ในเครื่องและเปิดรูปเต็มจากหน้าต่างดูรูป")}><span className="settings-status status-good">Cache-first</span></SettingRow>
     </SettingsGroup>
   </div>;
 }
 
 function CallSettings({ available }: { available: boolean }) {
+  const { t } = useAppTranslation();
   return <div className="settings-scroll">
-    <div className="feature-banner"><div className="feature-icon"><Phone size={21}/></div><div><strong>เสียง 1:1</strong><p>{available ? "PipeWire + Opus พร้อม · ขาออกใช้ PLANET และขาเข้าใช้ Andromeda answer flow" : "ยังไม่รองรับบนระบบนี้"}</p></div><span className={`beta-chip ${available ? "status-good" : ""}`}>{available ? "CALL READY" : "DISABLED"}</span></div>
-    <SettingsGroup title="ขอบเขตการโทร">
-      <SettingRow title="เสียง 1:1 ขาออก" subtitle="PLANET/Cassini · โทรออก mute เลือกลำโพง และวางสาย"><span className={`settings-status ${available ? "status-good" : ""}`}>{available ? "เปิดใช้งาน" : "ยังไม่พร้อม"}</span></SettingRow>
-      <SettingRow title="สายเรียกเข้า" subtitle="Andromeda INVITE → 100/180/200 → ACK + SRTP/Opus"><span className={`settings-status ${available ? "status-good" : ""}`}>{available ? "Experimental · เปิดรับสาย" : "ยังไม่พร้อม"}</span></SettingRow>
-      <SettingRow title="ปฏิเสธสาย" subtitle="ปิดหน้ารับสายในเครื่อง; LINEJS 3.4.2 ยังไม่มี reject RPC ระดับสูง"><span className="settings-status">Local dismiss</span></SettingRow>
-      <SettingRow title="วิดีโอ / group call / LiveTalk" subtitle="ยังไม่เปิดจนกว่า media lifecycle และ live test จะครบ"><span className="settings-status">ปิดไว้</span></SettingRow>
+    <div className="feature-banner"><div className="feature-icon"><Phone size={21}/></div><div><strong>{t("เสียง 1:1")}</strong><p>{available ? "PipeWire + Opus พร้อม · ขาออกใช้ PLANET และขาเข้าใช้ Andromeda answer flow" : t("ยังไม่รองรับบนระบบนี้")}</p></div><span className={`beta-chip ${available ? "status-good" : ""}`}>{available ? "CALL READY" : "DISABLED"}</span></div>
+    <SettingsGroup title={t("ขอบเขตการโทร")}>
+      <SettingRow title={t("เสียง 1:1 ขาออก")} subtitle={t("PLANET/Cassini · โทรออก mute เลือกลำโพง และวางสาย")}><span className={`settings-status ${available ? "status-good" : ""}`}>{available ? t("เปิดใช้งาน") : t("ยังไม่พร้อม")}</span></SettingRow>
+      <SettingRow title={t("สายเรียกเข้า")} subtitle="Andromeda INVITE → 100/180/200 → ACK + SRTP/Opus"><span className={`settings-status ${available ? "status-good" : ""}`}>{available ? t("Experimental · เปิดรับสาย") : "ยังไม่พร้อม"}</span></SettingRow>
+      <SettingRow title={t("ปฏิเสธสาย")} subtitle={t("ปิดหน้ารับสายในเครื่อง; LINEJS 3.4.2 ยังไม่มี reject RPC ระดับสูง")}><span className="settings-status">Local dismiss</span></SettingRow>
+      <SettingRow title={t("วิดีโอ / group call / LiveTalk")} subtitle={t("ยังไม่เปิดจนกว่า media lifecycle และ live test จะครบ")}><span className="settings-status">{t("ปิดไว้")}</span></SettingRow>
     </SettingsGroup>
   </div>;
 }
 
 function FeatureSettings({ title, body }: { title: string; body: string }) {
-  return <div className="settings-scroll"><div className="settings-placeholder"><div className="placeholder-orb"><Users size={25}/></div><h3>{title}</h3><p>{body}</p><span className="settings-status status-good">เชื่อมกับ LINE โดยตรง</span></div></div>;
+  const { t } = useAppTranslation();
+  return <div className="settings-scroll"><div className="settings-placeholder"><div className="placeholder-orb"><Users size={25}/></div><h3>{title}</h3><p>{body}</p><span className="settings-status status-good">{t("เชื่อมกับ LINE โดยตรง")}</span></div></div>;
 }
 
 function AdvancedSettings({ onClearHistory, onFullSync }: { onClearHistory: () => void; onFullSync: () => void }) {
-  return <div className="settings-scroll"><SettingsGroup title="การดูแลข้อมูล"><SettingRow title="ล้างข้อมูลในเครื่อง" subtitle="ใช้เมื่อจะส่งต่อเครื่องหรือแก้ปัญหา database"><button className="secondary-button danger-outline" type="button" onClick={onClearHistory}>ล้างประวัติ</button></SettingRow></SettingsGroup><SettingsGroup title="การเชื่อมต่อ"><SettingRow title="Full sync" subtitle="ซิงก์ friends, Talk, OpenChat และประวัติล่าสุดเมื่อสั่งแบบเต็ม"><button className="secondary-button" type="button" onClick={onFullSync}>เริ่ม Full sync</button></SettingRow></SettingsGroup></div>;
+  const { t } = useAppTranslation();
+  return <div className="settings-scroll"><SettingsGroup title={t("การดูแลข้อมูล")}><SettingRow title={t("ล้างข้อมูลในเครื่อง")} subtitle={t("ใช้เมื่อจะส่งต่อเครื่องหรือแก้ปัญหา database")}><button className="secondary-button danger-outline" type="button" onClick={onClearHistory}>ล้างประวัติ</button></SettingRow></SettingsGroup><SettingsGroup title={t("การเชื่อมต่อ")}><SettingRow title="Full sync" subtitle={t("ซิงก์ friends, Talk, OpenChat และประวัติล่าสุดเมื่อสั่งแบบเต็ม")}><button className="secondary-button" type="button" onClick={onFullSync}>{t("เริ่ม Full sync")}</button></SettingRow></SettingsGroup></div>;
 }
 
 function DeveloperSettings({ settings, onSetting }: { settings: AppSettings; onSetting: (key: keyof AppSettings, value: boolean) => void }) {
+  const { t } = useAppTranslation();
   return <div className="settings-scroll">
-    <SettingsGroup title="เครื่องมือสำหรับนักพัฒนา">
-      <SettingRow title="Flex / Rich → Raw JSON" subtitle="แสดง JSON แทนการ์ดข้อความ Flex และ Rich เพื่อ Debug สามารถสลับกลับในแต่ละข้อความได้ และอาจมีข้อมูลส่วนตัวของข้อความ">
+    <SettingsGroup title={t("เครื่องมือสำหรับนักพัฒนา")}>
+      <SettingRow title="Flex / Rich → Raw JSON" subtitle={t("แสดง JSON แทนการ์ดข้อความ Flex และ Rich เพื่อ Debug สามารถสลับกลับในแต่ละข้อความได้ และอาจมีข้อมูลส่วนตัวของข้อความ")}>
         <Toggle checked={settings.developerFlexRaw} onChange={(enabled) => onSetting("developerFlexRaw", enabled)} />
       </SettingRow>
     </SettingsGroup>
@@ -6286,6 +6308,7 @@ function DeveloperSettings({ settings, onSetting }: { settings: AppSettings; onS
 }
 
 function AboutSettings() {
+  const { t } = useAppTranslation();
   const [update, setUpdate] = useState<{status:string;channel:string;version:string;availableVersion?:string|null;releaseNotes?:string;percent?:number;error?:string|null}>({status:"idle",channel:"preview",version:"0.1.4"});
   const [busy, setBusy] = useState(false);
   const [deferredVersion, setDeferredVersion] = useState<string | null>(null);
@@ -6309,17 +6332,17 @@ function AboutSettings() {
       setUpdate(current => ({...current,status:"error",error:String(error).slice(0,300)}));
     } finally { setBusy(false); }
   };
-  const statusText:Record<string,string> = {idle:"ยังไม่ได้ตรวจสอบ",checking:"กำลังตรวจสอบเวอร์ชัน…",available:"มีเวอร์ชันใหม่",downloading:`กำลังดาวน์โหลด ${update.percent ?? 0}%`,downloaded:"ดาวน์โหลดและตรวจสอบไฟล์แล้ว",current:"ใช้เวอร์ชันล่าสุดแล้ว",unconfigured:"ยังไม่ได้ตั้งค่า Update Feed",error:"ตรวจสอบการอัปเดตไม่สำเร็จ"};
+  const statusText:Record<string,string> = {idle:t("ยังไม่ได้ตรวจสอบ"),checking:t("กำลังตรวจสอบเวอร์ชัน…"),available:t("มีเวอร์ชันใหม่"),downloading:t("กำลังดาวน์โหลด {{percent}}%", { percent: update.percent ?? 0 }),downloaded:t("ดาวน์โหลดและตรวจสอบไฟล์แล้ว"),current:t("ใช้เวอร์ชันล่าสุดแล้ว"),unconfigured:t("ยังไม่ได้ตั้งค่า Update Feed"),error:t("ตรวจสอบการอัปเดตไม่สำเร็จ")};
   return <div className="settings-scroll">
     <div className="settings-placeholder"><div className="placeholder-orb"><Info size={25}/></div><h3>Liney Electron Preview</h3><p>Unofficial LINE client สำหรับ Linux · React + Electron · LINEJS Worker · SQLite history</p><span className="settings-status">Version {update.version} · {update.channel.toUpperCase()} channel</span></div>
     <SettingsGroup title="Software Updates">
-      <div className="setting-row"><div><strong>{statusText[update.status] || "สถานะการอัปเดต"}</strong><span>{update.availableVersion ? `เวอร์ชันใหม่ ${update.availableVersion}` : "ตรวจสอบเวอร์ชันใหม่จาก Cytech Team"}</span></div><div className="setting-control"><button type="button" className="settings-action-button" disabled={busy || update.status === "checking" || update.status === "downloading"} onClick={() => void run("check_for_updates")}><RefreshCw size={14}/> ตรวจสอบ</button></div></div>
-      {update.status === "available" && update.availableVersion !== deferredVersion && <div className="setting-row"><div><strong>พร้อมอัปเดต</strong><span>ดาวน์โหลดได้โดยไม่ปิดแอป และจะติดตั้งเมื่อยืนยัน</span></div><div className="setting-control"><button type="button" className="settings-action-button" onClick={() => setDeferredVersion(update.availableVersion || null)}>ไว้ภายหลัง</button><button type="button" className="settings-action-button primary" disabled={busy} onClick={() => void run("download_update")}>ดาวน์โหลด</button></div></div>}
+      <div className="setting-row"><div><strong>{statusText[update.status] || t("สถานะการอัปเดต")}</strong><span>{update.availableVersion ? t("เวอร์ชันใหม่ {{version}}", { version: update.availableVersion }) : t("ตรวจสอบเวอร์ชันใหม่จาก Cytech Team")}</span></div><div className="setting-control"><button type="button" className="settings-action-button" disabled={busy || update.status === "checking" || update.status === "downloading"} onClick={() => void run("check_for_updates")}><RefreshCw size={14}/> {t("ตรวจสอบ")}</button></div></div>
+      {update.status === "available" && update.availableVersion !== deferredVersion && <div className="setting-row"><div><strong>{t("พร้อมอัปเดต")}</strong><span>{t("ดาวน์โหลดได้โดยไม่ปิดแอป และจะติดตั้งเมื่อยืนยัน")}</span></div><div className="setting-control"><button type="button" className="settings-action-button" onClick={() => setDeferredVersion(update.availableVersion || null)}>{t("ไว้ภายหลัง")}</button><button type="button" className="settings-action-button primary" disabled={busy} onClick={() => void run("download_update")}>{t("ดาวน์โหลด")}</button></div></div>}
       {update.status === "downloading" && <div className="setting-row"><div><strong>Download progress</strong><span>{update.percent ?? 0}%</span></div><div className="setting-control"><progress max="100" value={update.percent ?? 0}/></div></div>}
-      {update.status === "downloaded" && <div className="setting-row"><div><strong>พร้อมติดตั้ง</strong><span>ไฟล์อัปเดตผ่านการตรวจสอบความถูกต้องแล้ว</span></div><div className="setting-control"><button type="button" className="settings-action-button primary" onClick={() => void run("install_update")}>Restart & Update</button></div></div>}
+      {update.status === "downloaded" && <div className="setting-row"><div><strong>{t("พร้อมติดตั้ง")}</strong><span>{t("ไฟล์อัปเดตผ่านการตรวจสอบความถูกต้องแล้ว")}</span></div><div className="setting-control"><button type="button" className="settings-action-button primary" onClick={() => void run("install_update")}>Restart & Update</button></div></div>}
       {update.releaseNotes && <div className="update-release-notes"><strong>Release notes</strong><p>{update.releaseNotes}</p></div>}
       {update.error && <p className="update-error">{update.error}</p>}
-      <p className="update-footnote">ช่องทาง Preview และ Stable แยกจากกัน · ตรวจสอบลายเซ็นและ SHA-512 ตาม metadata ของแพ็กเกจ · ระบบอัปเดตอัตโนมัติรองรับ AppImage เท่านั้น</p>
+      <p className="update-footnote">{t("ช่องทาง Preview และ Stable แยกจากกัน · ตรวจสอบลายเซ็นและ SHA-512 ตาม metadata ของแพ็กเกจ · ระบบอัปเดตอัตโนมัติรองรับ AppImage เท่านั้น")}</p>
     </SettingsGroup>
   </div>;
 }
