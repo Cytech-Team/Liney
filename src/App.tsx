@@ -264,10 +264,12 @@ type AppSettings = {
   radius: "Soft" | "Round";
 };
 
+const AUTOSTART_OPT_IN_KEY = "liney.autostart.explicit-opt-in.v1";
+
 const defaultSettings: AppSettings = {
   language: "th",
-  // Electron preview does not silently add autostart entries.
-  startup: typeof window === "undefined" || !window.lineyDesktop,
+  // Disabled by default; startup is always an explicit user opt-in.
+  startup: false,
   tray: true,
   desktopNotifications: true,
   notificationPreview: true,
@@ -307,6 +309,11 @@ function readSettings(): AppSettings {
       parsed.autoMedia = true;
       localStorage.setItem("liney.openchat-media-default.v2", "applied");
     }
+    // Earlier builds set startup=true as a default and saved it immediately
+    // on launch, so saved=true does NOT prove that the user opted in.
+    // Migrate those installations to OFF, and require a fresh explicit opt-in.
+    parsed.startup = localStorage.getItem(AUTOSTART_OPT_IN_KEY) === "1"
+      && parsed.startup === true;
     return { ...defaultSettings, ...parsed, language: parsed.language ?? preferredLanguage };
   } catch {
     return { ...defaultSettings, language: preferredLanguage };
@@ -931,6 +938,14 @@ function MainApp() {
   }, [syncProgress.visible, syncProgress.phase]);
 
   function updateSetting<K extends keyof AppSettings>(key: K, value: AppSettings[K]) {
+    if (key === "startup") {
+      // Changing startup is an explicit action in Settings; unlike the
+      // previous default, merely opening Liney must never enable autostart.
+      try {
+        if (value === true) localStorage.setItem(AUTOSTART_OPT_IN_KEY, "1");
+        else localStorage.removeItem(AUTOSTART_OPT_IN_KEY);
+      } catch { /* best effort */ }
+    }
     setSettings((current) => ({ ...current, [key]: value }));
   }
 
