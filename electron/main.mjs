@@ -405,10 +405,12 @@ async function verifyNativeEditShortcuts(win) {
   win.focus();
   stage = "snapshot-clipboard";
   const previousClipboard = await clipboard.read();
-  const restorableClipboardItems = await Promise.all(previousClipboard.map(async (item) => {
-    const entries = await Promise.all(item.types.map(async (type) => [type, await item.getType(type)]));
-    return new ClipboardItem(Object.fromEntries(entries));
-  }));
+  const restorableClipboardItems = await Promise.all(previousClipboard
+    .filter((item) => item.types.length > 0)
+    .map(async (item) => {
+      const entries = await Promise.all(item.types.map(async (type) => [type, await item.getType(type)]));
+      return new ClipboardItem(Object.fromEntries(entries));
+    }));
   resetEditActionCalls();
   const fieldId = "liney-native-edit-shortcut-smoke";
   stage = "find-electron-x11-window";
