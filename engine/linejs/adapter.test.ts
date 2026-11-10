@@ -85,6 +85,7 @@ describe("LineJsAdapter fallback polling", () => {
     };
     const client = {
       base: {
+        square: { fetchMyEvents: async () => ({ events: [], syncToken: "sync" }) },
         createPolling: () => { created += 1; return polling; },
       },
     } as any;
@@ -95,7 +96,58 @@ describe("LineJsAdapter fallback polling", () => {
     session.talk({ pollingInterval: 250 });
 
     expect(created).toBe(1);
-    expect(calls).toEqual(["talk:true", "square:true", "talk:true"]);
+    expect(calls).toEqual(["talk:true", "talk:true"]);
+  });
+
+  test("drains Square continuation pages before releasing the shared PUSH cursor", async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const events: string[] = [];
+    let releasePush!: () => void;
+    const pushStarted = new Promise<void>((resolve) => { releasePush = resolve; });
+    let pushFinished = false;
+    const pollingState = { sync: { square: "initial-sync", talk: {} }, _listenTalkEvents: () => ({}) };
+    const client = {
+      base: {
+        square: {
+          fetchMyEvents: async (request: Record<string, unknown>) => {
+            requests.push(request);
+            if (request.subscriptionId) {
+              pushFinished = true;
+              return { events: [], syncToken: "push-sync" };
+            }
+            if (!request.continuationToken) {
+              releasePush();
+              return { events: [{ id: "page-1" }], syncToken: "page-sync", continuationToken: "next-page" };
+            }
+            return { events: [{ id: "page-2" }], syncToken: "final-sync" };
+          },
+        },
+        createPolling: () => pollingState,
+      },
+    } as any;
+
+    const session = createPollingSession(client);
+    const controller = new AbortController();
+    const iterator = session.square({ signal: controller.signal, pollingInterval: 60_000 })[Symbol.asyncIterator]();
+    const first = await iterator.next();
+    events.push(first.value.id);
+
+    const pushRequest = client.base.square.fetchMyEvents({ subscriptionId: 7, syncToken: "ignored" });
+    await pushStarted;
+    const second = await iterator.next();
+    events.push(second.value.id);
+    controller.abort();
+    const finished = await iterator.next();
+    expect(finished.done).toBe(true);
+    await pushRequest;
+
+    expect(events).toEqual(["page-1", "page-2"]);
+    expect(requests.slice(0, 2)).toEqual([
+      { syncToken: "initial-sync", continuationToken: undefined, limit: 100 },
+      { syncToken: "page-sync", continuationToken: "next-page", limit: 100 },
+    ]);
+    expect(pushFinished).toBe(true);
+    expect(pollingState.sync.square).toBe("final-sync");
   });
 });
 
@@ -110,6 +162,7 @@ describe("LineJsAdapter fallback polling", () => {
     };
     const client = {
       base: {
+        square: { fetchMyEvents: async () => ({ events: [], syncToken: "sync" }) },
         createPolling: () => { created += 1; return polling; },
       },
     } as any;
@@ -120,7 +173,7 @@ describe("LineJsAdapter fallback polling", () => {
     session.talk({ pollingInterval: 250 });
 
     expect(created).toBe(1);
-    expect(calls).toEqual(["talk:true", "square:true", "talk:true"]);
+    expect(calls).toEqual(["talk:true", "talk:true"]);
   });
 });
 

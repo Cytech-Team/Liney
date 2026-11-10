@@ -809,10 +809,102 @@ export type LineyPollingSession = {
 };
 
 export function createPollingSession(client: LineClient): LineyPollingSession {
-  const polling = (client as any).base.createPolling();
+  const base = (client as any).base;
+  const polling = base.createPolling();
+  const square = base.square;
+  const fetchMyEvents = square.fetchMyEvents;
+
+  // PUSH and REST share LINEJS's Square syncToken. Serialize every fetch and
+  // keep a REST pagination cycle exclusive until all continuation pages have
+  // been yielded. Otherwise PUSH can commit the page-level syncToken while
+  // REST still has an outstanding continuationToken.
+  let fetchLock: Promise<void> = Promise.resolve();
+  const acquireFetchLock = async (): Promise<() => void> => {
+    const previous = fetchLock;
+    let release!: () => void;
+    fetchLock = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    return release;
+  };
+
+  square.fetchMyEvents = async function (...args: unknown[]) {
+    const release = await acquireFetchLock();
+    try {
+      return await fetchMyEvents.apply(this, args as never);
+    } finally {
+      release();
+    }
+  };
+
+  // The initial PUSH sign-on response also commits poll.sync.square directly
+  // (without calling square.fetchMyEvents), so put that callback behind the
+  // same lock. Conn invokes it without awaiting; the original handler already
+  // owns its internal error handling.
+  const push = base.push;
+  const onSignOnResponse = push?.onSignOnResponse;
+  if (typeof onSignOnResponse === "function") {
+    push.onSignOnResponse = (...args: unknown[]) => acquireFetchLock().then(async (release) => {
+      try {
+        return await onSignOnResponse(...args);
+      } finally {
+        release();
+      }
+    }).catch((error: unknown) => {
+      try { base.log?.("PUSH sign-on response failed", { error }); } catch { /* best effort */ }
+    });
+  }
+
+  const squareStream = async function* (options: LineyPollingOptions = {}) {
+    const pollingInterval = options.pollingInterval ?? 1000;
+    const wait = (ms: number) => new Promise<void>((resolve) => {
+      if (options.signal?.aborted) return resolve();
+      const timer = setTimeout(done, ms);
+      function done() {
+        clearTimeout(timer);
+        options.signal?.removeEventListener("abort", done);
+        resolve();
+      }
+      options.signal?.addEventListener("abort", done, { once: true });
+    });
+
+    while (!options.signal?.aborted) {
+      let release: (() => void) | undefined;
+      try {
+        release = await acquireFetchLock();
+        if (options.signal?.aborted) break;
+        let continuationToken: string | undefined;
+        let syncToken = polling.sync.square;
+
+        do {
+          const response = await fetchMyEvents.call(square, {
+            syncToken,
+            continuationToken,
+            limit: 100,
+          });
+          syncToken = response.syncToken ?? syncToken;
+          continuationToken = response.continuationToken;
+
+          // Keep the lock while yielding the entire response/page chain. If
+          // the primary transport recovers, the fallback supervisor drains
+          // this cycle before PUSH is allowed to advance the shared cursor.
+          for (const event of response.events ?? []) yield event;
+        } while (continuationToken);
+
+        polling.sync.square = syncToken;
+      } catch (error) {
+        options.onError?.(error);
+      } finally {
+        release?.();
+      }
+
+      await wait(pollingInterval);
+      if (options.signal?.aborted) break;
+    }
+  };
+
   return {
     talk: (options = {}) => polling._listenTalkEvents(options),
-    square: (options = {}) => polling._listenSquareEvents(options),
+    square: (options = {}) => squareStream(options),
   };
 }
 
