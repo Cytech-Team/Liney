@@ -201,6 +201,7 @@ async function ensureEngine() {
       } else entry.resolve(packet.result);
     });
     worker.on("error", (error) => {
+      console.error("LINEJS worker startup/runtime error:", error?.stack || error);
       broadcast("liney:engine:event", {type:"engine.error",message:String(error.message)});
       engineRejectAll("LINEJS worker failed");
     });
