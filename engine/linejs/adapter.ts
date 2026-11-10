@@ -984,8 +984,72 @@ export function uploadObjTalk(client: LineClient, ...args: any[]) {
 
 export type TalkMediaObjectType = "image" | "video" | "audio" | "file" | "gif";
 
+function registeredE2EEPublicKey(value: unknown): Buffer | undefined {
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+    const key = Buffer.from(value);
+    return key.length === 32 ? key : undefined;
+  }
+  if (typeof value !== "string") return undefined;
+
+  // LINEJS types expose keyData as Buffer | string. Thrift normally returns
+  // Buffer, while some compatible clients serialize binary as base64 or a
+  // Latin-1 byte string. Normalize all supported representations.
+  const base64 = Buffer.from(value, "base64");
+  if (base64.length === 32) return base64;
+  if (value.length === 32 && Array.from(value).every((char) => (char.codePointAt(0) ?? 256) <= 255)) {
+    const binary = Buffer.from(value, "latin1");
+    if (binary.length === 32) return binary;
+  }
+  return undefined;
+}
+
 /**
- * LINEJS 3.4.2 can upload Talk media with E2EE, but its public helper does
+ * LINE accepts an E2EE envelope without being able to prove that the sender's
+ * local private key matches the public key registered for that key ID. A
+ * stale keychain can therefore produce a successfully uploaded message that
+ * every recipient is unable to decrypt. Check the active key before uploading
+ * any encrypted media; never rotate keys automatically on this path.
+ */
+async function assertActiveE2EESenderKeyMatchesServer(client: LineClient): Promise<void> {
+  const base = (client as any).base;
+  const e2ee = base?.e2ee;
+  const selfMid = String(base?.profile?.mid ?? "").trim();
+  if (!selfMid || typeof e2ee?.getE2EESelfKeyData !== "function") {
+    throw new Error("LINE E2EE sender key is unavailable. Reconnect this account with QR before sending files.");
+  }
+  if (typeof e2ee.verifyE2EEKeyPair !== "function" || typeof base?.talk?.getE2EEPublicKeys !== "function") {
+    throw new Error("LINE cannot verify the active E2EE sender key. Reconnect this account with QR before sending files.");
+  }
+
+  const activeKey = await e2ee.getE2EESelfKeyData(selfMid);
+  const keyId = String(activeKey?.keyId ?? "").trim();
+  const privateKey = Buffer.from(String(activeKey?.privKey ?? ""), "base64");
+  const localPublicKey = Buffer.from(String(activeKey?.pubKey ?? ""), "base64");
+  if (!keyId || privateKey.length !== 32 || localPublicKey.length !== 32
+    || !e2ee.verifyE2EEKeyPair(privateKey, localPublicKey)) {
+    throw new Error("The active LINE E2EE keypair is invalid. Reconnect this account with QR before sending files.");
+  }
+
+  const registeredKeys = await base.talk.getE2EEPublicKeys();
+  if (!Array.isArray(registeredKeys)) {
+    throw new Error("LINE did not return the registered E2EE sender keys. File upload was stopped.");
+  }
+  const registeredKey = registeredKeys.find((entry: any) =>
+    String(entry?.keyId ?? entry?.[2] ?? "") === keyId);
+  const registeredPublicKeyData = registeredKey?.keyData ?? registeredKey?.[4];
+  const registeredPublicKey = registeredE2EEPublicKey(registeredPublicKeyData);
+  if (!registeredPublicKey) {
+    throw new Error("The active LINE E2EE sender key is not registered on LINE. Refresh the keychain with QR before sending files.");
+  }
+  if (registeredPublicKey.length !== 32
+    || !registeredPublicKey.equals(localPublicKey)
+    || !e2ee.verifyE2EEKeyPair(privateKey, registeredPublicKey)) {
+    throw new Error("The active LINE E2EE sender key does not match LINE's registered public key. Refresh the keychain with QR before sending files.");
+  }
+}
+
+/**
+ * LINEJS 3.5.0 can upload Talk media with E2EE, but its public helper does
  * not expose relatedMessageId. Keep the upstream wire sequence here at the
  * adapter boundary and add the reply relation only to the final Talk message.
  * This avoids downgrading media replies to plaintext OBS messages.
@@ -1013,6 +1077,7 @@ export async function sendTalkMediaE2EE(
     gif: ["emi", 1],
   };
   const [obsNamespace, contentType] = typeSet[oType];
+  await assertActiveE2EESenderKeyMatchesServer(client);
   const ext = filename?.split(".").at(-1)?.trim() || "bin";
   const params: Record<string, string> = { type: "file" };
   if (oType === "gif") params.cat = "original";
