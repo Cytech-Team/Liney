@@ -1,6 +1,7 @@
 import { bindClientStorage, createTemporaryQrStorage, getTargetProfiles, LineJsAdapter, parseE2EEKeyData, type LineClient, type LineyPollingSession } from "./linejs/adapter";
 import { resolveTalkOwnership, reconcileTalkOwnership } from "./talk-ownership";
 import { createLoginAttemptGuard } from "./auth/login-guard";
+import { createAuthFinalizationBarrier } from "./auth/auth-finalization";
 import { presentOwnProfile } from "./linejs/profile-display";
 import { resolveFavoriteTime } from "./linejs/favorite-state";
 // Keep all LINEJS values behind the adapter boundary. This makes replacing the
@@ -87,6 +88,7 @@ let ACCOUNT_ID = "default";
 if (!parentPort) process.umask(0o077); // Node Workers inherit the host's secure umask.
 let client: LineClient | null = null;
 const loginAttemptGuard = createLoginAttemptGuard();
+const authFinalizationBarrier = createAuthFinalizationBarrier();
 let authGeneration = 0;
 let listenerAbort: AbortController | null = null;
 let currentProfile: any = null;
@@ -527,7 +529,10 @@ function readCredential(): AuthCredential | null {
 }
 
 async function clearLocalSession() {
+  // Invalidate in-flight login/finalization immediately, then wait for any
+  // finalizer already past its generation check before clearing shared state.
   authGeneration += 1;
+  await authFinalizationBarrier.wait();
   // Invalidate an outstanding QR login. Keep its in-flight guard until the
   // LINEJS promise settles so a second login cannot race the shared storage.
   listenerAbort?.abort();
@@ -4031,40 +4036,53 @@ function attachEvents(next: LineClient) {
   }
 }
 
-async function finishAuthentication(next: LineClient, restored: boolean) {
-  // Validate the session against LINE before declaring it ready.  Full sync is
-  // deliberately *not* part of this critical path: waiting for hundreds of
-  // rooms here held the entire desktop login screen in "starting" state.
-  const profile: any = await next.getMyProfile();
-  const account = await activateAccount(profile);
-  database.consolidateTalkIdentityAliases(ACCOUNT_ID);
-  client = next;
-  currentProfile = presentOwnProfile(normalize(profile));
-  database.upsertAccount(ACCOUNT_ID, {
-    mid: String(profile?.mid ?? ""),
-    displayName: String(profile?.displayName ?? ""),
+function finishAuthentication(next: LineClient, restored: boolean, generation: number): Promise<void> {
+  return authFinalizationBarrier.track(async () => {
+    if (generation !== authGeneration) return;
+
+    // Validate the session against LINE before declaring it ready. Full sync is
+    // deliberately not part of this critical path.
+    const profile: any = await next.getMyProfile();
+    if (generation !== authGeneration) return;
+
+    const account = await activateAccount(profile);
+    // activateAccount can itself await account-switch cleanup. Logout may have
+    // invalidated this attempt while that cleanup was in progress.
+    if (generation !== authGeneration) return;
+
+    database.consolidateTalkIdentityAliases(ACCOUNT_ID);
+    database.upsertAccount(ACCOUNT_ID, {
+      mid: String(profile?.mid ?? ""),
+      displayName: String(profile?.displayName ?? ""),
+    });
+    prunePersistentCache(true);
+
+    // Persist before publishing an authenticated client. If logout starts
+    // during persistence, it waits for this task and clears the credential
+    // after this operation settles.
+    const credentialStorage = await persistCredential(next);
+    if (generation !== authGeneration) return;
+
+    client = next;
+    currentProfile = presentOwnProfile(normalize(profile));
+    callManager.attach(next);
+    attachEvents(next);
+    emit({
+      type: "auth.ready",
+      restored,
+      clientIdentity: clientIdentity(),
+      profile: currentProfile,
+      authTokenPresent: Boolean(LineJsAdapter.authToken(next)),
+      storage: credentialStorage,
+      accountChanged: account.changed && !account.migrated,
+    });
+    const fullCompleted = database.getSyncState(ACCOUNT_ID, "full-complete")?.status === "ready";
+    const mode = !fullCompleted || process.env.LINEY_FULL_SYNC_ON_LOGIN === "1" ? "full" : "delta";
+    if (process.env.LINEY_LIGHT_START !== "1") {
+      void startSync(mode).catch(() => undefined);
+    }
+    void resumePendingOutbox();
   });
-  prunePersistentCache(true);
-  callManager.attach(next);
-  attachEvents(next);
-  const credentialStorage = await persistCredential(next);
-  emit({
-    type: "auth.ready",
-    restored,
-    clientIdentity: clientIdentity(),
-    profile: currentProfile,
-    authTokenPresent: Boolean(LineJsAdapter.authToken(next)),
-    storage: credentialStorage,
-    accountChanged: account.changed && !account.migrated,
-  });
-  // The first successful account-wide pass is durable. Subsequent launches
-  // refresh changed/new rooms in the background without replaying all history.
-  const fullCompleted = database.getSyncState(ACCOUNT_ID, "full-complete")?.status === "ready";
-  const mode = !fullCompleted || process.env.LINEY_FULL_SYNC_ON_LOGIN === "1" ? "full" : "delta";
-  if (process.env.LINEY_LIGHT_START !== "1") {
-    void startSync(mode).catch(() => undefined);
-  }
-  void resumePendingOutbox();
 }
 
 async function startQrLogin(id: string) {
@@ -4112,7 +4130,7 @@ async function startQrLogin(id: string) {
     );
     void login.then(async (next) => {
       if (generation !== authGeneration) return;
-      await finishAuthentication(next, false);
+      await finishAuthentication(next, false, generation);
     }).catch((error) => {
       if (generation !== authGeneration) return;
       if (!acknowledged) replyError(id, error);
@@ -4263,7 +4281,7 @@ async function importE2EEKeychainViaQr(id: string) {
     }
 
     bindClientStorage(next, store);
-    await finishAuthentication(next, false);
+    await finishAuthentication(next, false, generation);
     void recoverPendingE2EE(next).catch((error) => emit({ type: "event.e2ee.recovery_error", error: errorInfo(error).message }));
     emit({
       id,
@@ -4318,7 +4336,7 @@ async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: un
       },
     );
     if (generation !== authGeneration) return;
-    await finishAuthentication(next, false);
+    await finishAuthentication(next, false, generation);
     emit({ id, ok: true, result: { authenticated: true } });
   } catch (error) {
     replyError(id, error);
@@ -4356,7 +4374,7 @@ async function restoreToken(id: string, token: unknown) {
       storage: store,
     });
     if (generation !== authGeneration) return;
-    await finishAuthentication(next, true);
+    await finishAuthentication(next, true, generation);
     emit({ id, ok: true, result: { authenticated: true } });
   } catch (error) {
     replyError(id, error);
@@ -4376,7 +4394,7 @@ async function autoRestore() {
       storage: store,
     });
     if (generation !== authGeneration) return;
-    await finishAuthentication(next, true);
+    await finishAuthentication(next, true, generation);
   } catch (error) {
     client = null;
     emit({
