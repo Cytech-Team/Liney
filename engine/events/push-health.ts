@@ -11,10 +11,10 @@ export type PushConnectionState = {
 };
 
 /**
- * Polling is fallback-only. A quiet but connected push transport is healthy;
+ * Polling is fallback-only. A quiet but synced push transport is healthy;
  * the absence of chat events is not evidence that the connection is stale.
- * During initial connection setup, give PUSH a short grace period so REST
- * polling does not race the first PUSH sync request.
+ * During startup, wait for the initial Talk sync handshake before allowing
+ * REST polling to compete for the shared LINE revision cursor.
  */
 export function shouldUsePollingFallback(state: PushConnectionState): boolean {
   if (state.healthy && state.connectedSince > 0) return false;
