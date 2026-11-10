@@ -4,6 +4,7 @@ import { invoke } from "./lib/desktop-api/core";
 import { open as openFileDialog } from "./lib/desktop-api/dialog";
 import { emitTo, listen } from "./lib/desktop-api/event";
 import { getCurrentWindow } from "./lib/desktop-api/window";
+import { reduceLineTransportState } from "./transport-status";
 import { WebviewWindow } from "./lib/desktop-api/webview-window";
 import { createPortal } from "react-dom";
 import {
@@ -1100,14 +1101,7 @@ function MainApp() {
         if (event.clientIdentity && typeof event.clientIdentity === "object") setClientIdentity(event.clientIdentity as ClientIdentityResult);
       }
       if (event.type === "engine.error") setEngineState("error");
-      if (event.type === "event.transport" && event.transport === "line") {
-        if (event.state === "connected") setTransportState("connected");
-        else if (event.state === "reconnecting") setTransportState("reconnecting");
-      }
-      if (event.type === "event.transport.error" && (event.transport === "talk" || event.transport === "openchat" || event.transport === "talk-poll" || event.transport === "openchat-poll")) {
-        setTransportState("degraded");
-      }
-      if (event.type === "auth.logged_out" || event.type === "auth.restore_failed") setTransportState("unknown");
+      setTransportState((current) => reduceLineTransportState(current, event));
       if (event.type === "engine.closed") {
         setEngineState("error");
         setAuthBusy(false);
