@@ -4122,9 +4122,10 @@ async function startQrLogin(id: string) {
       releaseLogin();
     });
   } catch (error) {
-    if (generation !== authGeneration) return;
-    if (!acknowledged) replyError(id, error);
-    else emit({ type: "auth.error", error: errorInfo(error) });
+    if (generation === authGeneration) {
+      if (!acknowledged) replyError(id, error);
+      else emit({ type: "auth.error", error: errorInfo(error) });
+    }
     releaseLogin();
   }
 }
