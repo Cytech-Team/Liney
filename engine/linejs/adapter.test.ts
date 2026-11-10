@@ -274,7 +274,7 @@ describe("LineJsAdapter fallback polling", () => {
 
     const fetchResult = await Promise.race([
       client.base.square.fetchMyEvents({ syncToken: "initial-sync" }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("cursor lock was not released")), 250)),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("cursor lock was not released")), 250)),
     ]);
 
     expect(fetchResult.syncToken).toBe("rest-sync");
