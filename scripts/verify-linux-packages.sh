@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OUTPUT_DIR="${1:-release-electron}"
+OUTPUT_DIR="$(realpath "${1:-release-electron}")"
 VERSION="$(node -p 'require("./package.json").version')"
 APPIMAGE="$OUTPUT_DIR/Liney-Electron-Preview-${VERSION}-x86_64.AppImage"
 DEB="$OUTPUT_DIR/Liney-Electron-Preview-${VERSION}-amd64.deb"
 RPM="$OUTPUT_DIR/Liney-Electron-Preview-${VERSION}-x86_64.rpm"
 
-for tool in file dpkg-deb rpm bsdtar xvfb-run xdotool timeout ldd; do
+for tool in file dpkg-deb rpm rpm2cpio cpio xvfb-run xdotool timeout ldd; do
   command -v "$tool" >/dev/null || {
     echo "Missing required package verification tool: $tool" >&2
     exit 1
@@ -19,16 +19,19 @@ for artifact in "$APPIMAGE" "$DEB" "$RPM"; do
   file "$artifact"
 done
 
-# Validate package metadata instead of only checking that an archive exists.
+PACKAGE_ROOT="$(mktemp -d)"
+trap 'rm -rf "$PACKAGE_ROOT"' EXIT
+
+# Validate package metadata without relying on a host RPM database.
 [[ "$(dpkg-deb --field "$DEB" Package)" == "liney" ]]
 [[ "$(dpkg-deb --field "$DEB" Version)" == "$VERSION" ]]
 [[ "$(dpkg-deb --field "$DEB" Architecture)" == "amd64" ]]
-RPM_ID="$(rpm -qp --queryformat '%{VERSION} %{ARCH}' "$RPM")"
+mkdir -p "$PACKAGE_ROOT/rpmdb"
+rpm --dbpath "$PACKAGE_ROOT/rpmdb" --initdb
+RPM_ID="$(rpm --dbpath "$PACKAGE_ROOT/rpmdb" -qp --queryformat '%{VERSION} %{ARCH}' "$RPM")"
 [[ "$RPM_ID" == "${VERSION} x86_64" ]]
-rpm -qpl "$RPM" | grep -Fqx '/opt/Liney Electron Preview/liney'
-
-PACKAGE_ROOT="$(mktemp -d)"
-trap 'rm -rf "$PACKAGE_ROOT"' EXIT
+rpm --dbpath "$PACKAGE_ROOT/rpmdb" -qpl "$RPM" > "$PACKAGE_ROOT/rpm-files.txt"
+grep -Fqx '/opt/Liney Electron Preview/liney' "$PACKAGE_ROOT/rpm-files.txt"
 dpkg-deb --extract "$DEB" "$PACKAGE_ROOT/deb"
 DEB_APP="$PACKAGE_ROOT/deb/opt/Liney Electron Preview/liney"
 test -x "$DEB_APP"
@@ -38,7 +41,7 @@ grep -Fqx 'Exec="/opt/Liney Electron Preview/liney" %U' \
   "$PACKAGE_ROOT/deb/usr/share/applications/dev.cytechteam.liney.electron-preview.desktop"
 
 mkdir -p "$PACKAGE_ROOT/rpm"
-bsdtar -xf "$RPM" -C "$PACKAGE_ROOT/rpm"
+rpm2cpio "$RPM" | (cd "$PACKAGE_ROOT/rpm" && cpio -idm --quiet)
 RPM_APP="$PACKAGE_ROOT/rpm/opt/Liney Electron Preview/liney"
 test -x "$RPM_APP"
 test -s "$PACKAGE_ROOT/rpm/opt/Liney Electron Preview/resources/app.asar"
@@ -47,9 +50,11 @@ for payload in deb rpm; do
   NATIVE="$PACKAGE_ROOT/$payload/opt/Liney Electron Preview/resources/app.asar.unpacked/electron/native"
   for helper in liney-media liney-audio liney-screen liney-screen-wayland liney-screen-x11; do
     test -x "$NATIVE/$helper"
-    ! ldd "$NATIVE/$helper" | grep -q 'not found'
+    ldd "$NATIVE/$helper" > "$PACKAGE_ROOT/${payload}-${helper}.ldd" 2>&1
+    ! grep -q 'not found' "$PACKAGE_ROOT/${payload}-${helper}.ldd"
   done
-  "$NATIVE/liney-media" --liney-keyring-probe | grep -q '"available":'
+  "$NATIVE/liney-media" --liney-keyring-probe > "$PACKAGE_ROOT/${payload}-keyring.json"
+  grep -q '"available":' "$PACKAGE_ROOT/${payload}-keyring.json"
 done
 
 run_smoke() {
@@ -65,7 +70,7 @@ run_smoke() {
     LINEY_DISABLE_AUTO_RESTORE=1 \
     LINEY_ELECTRON_SMOKE=1 \
     timeout -k 2s 60s xvfb-run -a --server-args='-screen 0 1280x800x24' \
-      "$@" --no-sandbox >"$logfile" 2>&1
+      env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET "$@" --no-sandbox --ozone-platform=x11 >"$logfile" 2>&1
   local status=$?
   set -e
   cat "$logfile"
@@ -92,8 +97,13 @@ run_smoke() {
   done
 }
 
-# Exercise the real AppImage launcher without requiring FUSE.
-run_smoke appimage "$APPIMAGE" --appimage-extract-and-run
+# Extract the AppImage without requiring FUSE, then smoke-test its real binary.
+mkdir -p "$PACKAGE_ROOT/appimage"
+(
+  cd "$PACKAGE_ROOT/appimage"
+  "$APPIMAGE" --appimage-extract >/dev/null
+)
+run_smoke appimage "$PACKAGE_ROOT/appimage/squashfs-root/liney"
 
 # Exercise the executable and resources from the actual DEB archive without
 # installing anything into the CI runner.
