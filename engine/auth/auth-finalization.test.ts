@@ -68,11 +68,12 @@ describe("auth finalization barrier", () => {
     const waiting = barrier.wait().then(() => { waited = true; });
 
     await Promise.resolve();
-    settleFirst();
-    await first;
     const second = barrier.track(() => new Promise<void>((resolve) => {
       settleSecond = resolve;
     }));
+    await Promise.resolve();
+    settleFirst();
+    await first;
     await Promise.resolve();
     expect(waited).toBe(false);
 
