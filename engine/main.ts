@@ -4036,21 +4036,21 @@ function attachEvents(next: LineClient) {
   }
 }
 
-async function finishAuthentication(next: LineClient, restored: boolean, generation: number): Promise<void> {
-  if (generation !== authGeneration) return;
+async function finishAuthentication(next: LineClient, restored: boolean, generation: number): Promise<boolean> {
+  if (generation !== authGeneration) return false;
 
   // Profile validation is read-only and can remain outside the finalization
   // barrier, so Logout never waits on a stalled LINE network request.
   const profile: any = await next.getMyProfile();
-  if (generation !== authGeneration) return;
+  if (generation !== authGeneration) return false;
 
-  await authFinalizationBarrier.track(async () => {
-    if (generation !== authGeneration) return;
+  return authFinalizationBarrier.track(async (): Promise<boolean> => {
+    if (generation !== authGeneration) return false;
 
     const account = await activateAccount(profile);
     // activateAccount can itself await account-switch cleanup. Logout may have
     // invalidated this attempt while that cleanup was in progress.
-    if (generation !== authGeneration) return;
+    if (generation !== authGeneration) return false;
 
     database.consolidateTalkIdentityAliases(ACCOUNT_ID);
     database.upsertAccount(ACCOUNT_ID, {
@@ -4063,7 +4063,7 @@ async function finishAuthentication(next: LineClient, restored: boolean, generat
     // during persistence, it waits for this task and clears the credential
     // after this operation settles.
     const credentialStorage = await persistCredential(next);
-    if (generation !== authGeneration) return;
+    if (generation !== authGeneration) return false;
 
     client = next;
     currentProfile = presentOwnProfile(normalize(profile));
@@ -4084,6 +4084,7 @@ async function finishAuthentication(next: LineClient, restored: boolean, generat
       void startSync(mode).catch(() => undefined);
     }
     void resumePendingOutbox();
+    return true;
   });
 }
 
@@ -4283,7 +4284,7 @@ async function importE2EEKeychainViaQr(id: string) {
     }
 
     bindClientStorage(next, store);
-    await finishAuthentication(next, false, generation);
+    if (!(await finishAuthentication(next, false, generation))) return;
     void recoverPendingE2EE(next).catch((error) => emit({ type: "event.e2ee.recovery_error", error: errorInfo(error).message }));
     emit({
       id,
@@ -4338,7 +4339,7 @@ async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: un
       },
     );
     if (generation !== authGeneration) return;
-    await finishAuthentication(next, false, generation);
+    if (!(await finishAuthentication(next, false, generation))) return;
     emit({ id, ok: true, result: { authenticated: true } });
   } catch (error) {
     replyError(id, error);
@@ -4376,7 +4377,7 @@ async function restoreToken(id: string, token: unknown) {
       storage: store,
     });
     if (generation !== authGeneration) return;
-    await finishAuthentication(next, true, generation);
+    if (!(await finishAuthentication(next, true, generation))) return;
     emit({ id, ok: true, result: { authenticated: true } });
   } catch (error) {
     replyError(id, error);
