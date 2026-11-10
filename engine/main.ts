@@ -4316,7 +4316,7 @@ async function importE2EEKeychainViaQr(id: string) {
     }
 
     bindClientStorage(next, store);
-    if (!(await finishAuthentication(next, false, generation))) return;
+    if (!(await finishAuthentication(next, false, generation, temporary!))) return;
     void recoverPendingE2EE(next).catch((error) => emit({ type: "event.e2ee.recovery_error", error: errorInfo(error).message }));
     emit({
       id,
@@ -4373,7 +4373,7 @@ async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: un
       },
     );
     if (generation !== authGeneration) return;
-    if (!(await finishAuthentication(next, false, generation, authStorage))) return;
+    if (!(await finishAuthentication(next, false, generation, authStorage!))) return;
     emit({ id, ok: true, result: { authenticated: true } });
   } catch (error) {
     replyError(id, error);
@@ -4414,7 +4414,7 @@ async function restoreToken(id: string, token: unknown) {
       storage: authStorage.storage,
     });
     if (generation !== authGeneration) return;
-    if (!(await finishAuthentication(next, true, generation, authStorage))) return;
+    if (!(await finishAuthentication(next, true, generation, authStorage!))) return;
     emit({ id, ok: true, result: { authenticated: true } });
   } catch (error) {
     replyError(id, error);
@@ -4429,8 +4429,9 @@ async function autoRestore() {
   if (!credential) return;
   const generation = authGeneration;
   emit({ type: "auth.restoring" });
-  const authStorage = await createAuthAttemptStorage();
+  let authStorage: ReturnType<typeof createTemporaryQrStorage> | null = null;
   try {
+    authStorage = await createAuthAttemptStorage();
     const next = await loginWithAuthToken(credential as any, {
       device: clientIdentity().device,
       storage: authStorage.storage,
@@ -4445,7 +4446,7 @@ async function autoRestore() {
       error: errorInfo(error).message,
     });
   } finally {
-    await authStorage.clear().catch(() => undefined);
+    await authStorage?.clear().catch(() => undefined);
   }
 }
 
