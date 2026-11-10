@@ -490,6 +490,22 @@ function normalize(value: any): any {
   return normalizeJsonValue(value);
 }
 
+async function createAuthAttemptStorage() {
+  const initialData: Record<string, unknown> = { ...store.getAll() };
+  const refreshToken = await store.get("refreshToken");
+  if (typeof refreshToken === "string" && refreshToken) initialData.refreshToken = refreshToken;
+  return createTemporaryQrStorage(initialData);
+}
+
+async function commitAuthAttemptStorage(authStorage: ReturnType<typeof createTemporaryQrStorage>): Promise<void> {
+  for (const [key, value] of Object.entries(authStorage.snapshot())) {
+    await store.set(key, value as any);
+  }
+  const refreshToken = await authStorage.storage.get("refreshToken");
+  if (typeof refreshToken === "string" && refreshToken) await store.set("refreshToken", refreshToken);
+  else await store.delete("refreshToken");
+}
+
 async function persistCredential(next: LineClient): Promise<CredentialPersistenceMode> {
   const refreshToken = await store.get("refreshToken");
   const expireValue = await store.get("expire");
@@ -4036,7 +4052,12 @@ function attachEvents(next: LineClient) {
   }
 }
 
-async function finishAuthentication(next: LineClient, restored: boolean, generation: number): Promise<boolean> {
+async function finishAuthentication(
+  next: LineClient,
+  restored: boolean,
+  generation: number,
+  authStorage: ReturnType<typeof createTemporaryQrStorage>,
+): Promise<boolean> {
   if (generation !== authGeneration) return false;
 
   // Profile validation is read-only and can remain outside the finalization
@@ -4051,6 +4072,13 @@ async function finishAuthentication(next: LineClient, restored: boolean, generat
     // activateAccount can itself await account-switch cleanup. Logout may have
     // invalidated this attempt while that cleanup was in progress.
     if (generation !== authGeneration) return false;
+
+    // LINEJS authenticates against an isolated in-memory store. Commit its
+    // mutations only inside the finalization barrier so Logout either
+    // invalidates before any write or waits and clears every committed write.
+    await commitAuthAttemptStorage(authStorage);
+    if (generation !== authGeneration) return false;
+    bindClientStorage(next, store);
 
     database.consolidateTalkIdentityAliases(ACCOUNT_ID);
     database.upsertAccount(ACCOUNT_ID, {
@@ -4100,6 +4128,7 @@ async function startQrLogin(id: string) {
   }
   const generation = ++authGeneration;
   let acknowledged = false;
+  let authStorage: ReturnType<typeof createTemporaryQrStorage> | null = null;
   const acknowledgeStarted = () => {
     if (acknowledged || generation !== authGeneration) return;
     acknowledged = true;
@@ -4112,6 +4141,7 @@ async function startQrLogin(id: string) {
     // QR login resolves only after the user completes authentication. Keep
     // that promise in the worker, but acknowledge the RPC as soon as LINEJS
     // has produced the QR/PIN challenge.
+    authStorage = await createAuthAttemptStorage();
     const login = loginWithBrandedQR(
       {
         onReceiveQRUrl(url) {
@@ -4127,19 +4157,20 @@ async function startQrLogin(id: string) {
       },
       {
         device: identity.device,
-        storage: store,
+        storage: authStorage.storage,
       },
       identity,
     );
     void login.then(async (next) => {
       if (generation !== authGeneration) return;
-      await finishAuthentication(next, false, generation);
+      await finishAuthentication(next, false, generation, authStorage!);
     }).catch((error) => {
       if (generation !== authGeneration) return;
       if (!acknowledged) replyError(id, error);
       else emit({ type: "auth.error", error: errorInfo(error) });
-    }).finally(() => {
+    }).finally(async () => {
       // A stale login still owns the single LINEJS auth slot until it settles.
+      await authStorage?.clear().catch(() => undefined);
       releaseLogin();
     });
   } catch (error) {
@@ -4147,6 +4178,7 @@ async function startQrLogin(id: string) {
       if (!acknowledged) replyError(id, error);
       else emit({ type: "auth.error", error: errorInfo(error) });
     }
+    await authStorage?.clear().catch(() => undefined);
     releaseLogin();
   }
 }
@@ -4322,9 +4354,11 @@ async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: un
     return;
   }
   const generation = ++authGeneration;
+  let authStorage: ReturnType<typeof createTemporaryQrStorage> | null = null;
   try {
     listenerAbort?.abort();
     client = null;
+    authStorage = await createAuthAttemptStorage();
     const next = await loginWithPassword(
       {
         email,
@@ -4335,11 +4369,11 @@ async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: un
       },
       {
         device: clientIdentity().device,
-        storage: store,
+        storage: authStorage.storage,
       },
     );
     if (generation !== authGeneration) return;
-    if (!(await finishAuthentication(next, false, generation))) return;
+    if (!(await finishAuthentication(next, false, generation, authStorage))) return;
     emit({ id, ok: true, result: { authenticated: true } });
   } catch (error) {
     replyError(id, error);
@@ -4347,6 +4381,7 @@ async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: un
     // Do not retain the user's password in the engine after the login attempt.
     email = "";
     password = "";
+    await authStorage?.clear().catch(() => undefined);
     releaseLogin();
   }
 }
@@ -4369,19 +4404,22 @@ async function restoreToken(id: string, token: unknown) {
     return;
   }
   const generation = ++authGeneration;
+  let authStorage: ReturnType<typeof createTemporaryQrStorage> | null = null;
   try {
     listenerAbort?.abort();
     client = null;
+    authStorage = await createAuthAttemptStorage();
     const next = await loginWithAuthToken(token as any, {
       device: clientIdentity().device,
-      storage: store,
+      storage: authStorage.storage,
     });
     if (generation !== authGeneration) return;
-    if (!(await finishAuthentication(next, true, generation))) return;
+    if (!(await finishAuthentication(next, true, generation, authStorage))) return;
     emit({ id, ok: true, result: { authenticated: true } });
   } catch (error) {
     replyError(id, error);
   } finally {
+    await authStorage?.clear().catch(() => undefined);
     releaseLogin();
   }
 }
@@ -4391,13 +4429,14 @@ async function autoRestore() {
   if (!credential) return;
   const generation = authGeneration;
   emit({ type: "auth.restoring" });
+  const authStorage = await createAuthAttemptStorage();
   try {
     const next = await loginWithAuthToken(credential as any, {
       device: clientIdentity().device,
-      storage: store,
+      storage: authStorage.storage,
     });
     if (generation !== authGeneration) return;
-    await finishAuthentication(next, true, generation);
+    await finishAuthentication(next, true, generation, authStorage);
   } catch (error) {
     if (generation !== authGeneration) return;
     client = null;
@@ -4405,6 +4444,8 @@ async function autoRestore() {
       type: "auth.restore_failed",
       error: errorInfo(error).message,
     });
+  } finally {
+    await authStorage.clear().catch(() => undefined);
   }
 }
 
