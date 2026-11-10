@@ -4321,8 +4321,18 @@ async function restoreToken(id: string, token: unknown) {
     emit({ id, ok: true, result: { authenticated: true, restored: true } });
     return;
   }
+  // Token restore shares LINEJS storage with QR, password, and E2EE login.
+  // It must own the same auth slot to prevent concurrent credential writes.
+  if (loginInFlight) {
+    replyError(id, new Error("login already in progress"));
+    return;
+  }
+
+  loginInFlight = true;
   const generation = ++authGeneration;
   try {
+    listenerAbort?.abort();
+    client = null;
     const next = await loginWithAuthToken(token as any, {
       device: clientIdentity().device,
       storage: store,
@@ -4332,6 +4342,8 @@ async function restoreToken(id: string, token: unknown) {
     emit({ id, ok: true, result: { authenticated: true } });
   } catch (error) {
     replyError(id, error);
+  } finally {
+    loginInFlight = false;
   }
 }
 
