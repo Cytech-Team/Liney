@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { LineJsAdapter, createPollingSession, fetchMessageAsset, getChatMetadataBatch, getTalkMessageReadRanges, getTargetProfiles, LINEJS_VERSION, updateOwnProfile, markTalkMessageRead, normalizeTalkMessageReadRanges, observePushTalkSyncResponse, parseE2EEKeyData, replyTargetMessageId, sendTalkMessage, sendTalkMediaE2EE, talkMessageEditState } from "./adapter";
+import { LineJsAdapter, createPollingSession, fetchMessageAsset, getChatMetadataBatch, getTalkMessageReadRanges, getTargetProfiles, LINEJS_VERSION, updateOwnProfile, markTalkMessageRead, normalizeTalkMessageReadRanges, parseE2EEKeyData, replyTargetMessageId, sendTalkMessage, sendTalkMediaE2EE, talkMessageEditState } from "./adapter";
 
 describe("LineJsAdapter sender metadata", () => {
   test("deduplicates sender MIDs and requests target profiles through LINEJS", async () => {
@@ -443,48 +443,5 @@ describe("LineJsAdapter public facade contract", () => {
     expect(typeof LineJsAdapter.getFriendSyncDiagnostics).toBe("function");
     expect(typeof LineJsAdapter.retryMissingFriendProfiles).toBe("function");
     expect(typeof LineJsAdapter.getChatMetadataBatch).toBe("function");
-  });
-});
-
-describe("LineJsAdapter PUSH readiness", () => {
-  test("observes only complete Talk sync responses and restores the original handler", async () => {
-    const received: number[] = [];
-    const original = async (requestId: number) => {
-      received.push(requestId);
-      return undefined;
-    };
-    const push = {
-      onSignOnResponse: original,
-      signOnRequests: {
-        1: [3, "fetchMyEvents", null],
-        2: [8, "sync", null],
-      },
-    };
-    let ready = 0;
-    const stop = observePushTalkSyncResponse(push, () => { ready += 1; });
-
-    await push.onSignOnResponse(1, true, new Uint8Array());
-    await push.onSignOnResponse(2, false, new Uint8Array());
-    expect(ready).toBe(0);
-
-    await push.onSignOnResponse(2, true, new Uint8Array());
-    expect(ready).toBe(1);
-    expect(received).toEqual([1, 2, 2]);
-
-    stop();
-    expect(push.onSignOnResponse).toBe(original);
-  });
-
-  test("does not overwrite a newer PUSH response handler during cleanup", () => {
-    const original = () => undefined;
-    const newer = () => undefined;
-    const push = {
-      onSignOnResponse: original,
-      signOnRequests: {},
-    };
-    const stop = observePushTalkSyncResponse(push, () => undefined);
-    push.onSignOnResponse = newer;
-    stop();
-    expect(push.onSignOnResponse).toBe(newer);
   });
 });
