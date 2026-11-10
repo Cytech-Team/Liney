@@ -850,20 +850,21 @@ export function createPollingSession(client: LineClient): LineyPollingSession {
   const onPushResponse = push?.onPushResponse;
   if (typeof onPushResponse === "function") {
     push.onPushResponse = (...args: unknown[]) => acquireFetchLock().then(async (release) => {
-      let result: unknown;
       try {
-        pushResponseOwnsFetchLock = true;
-        result = onPushResponse.apply(push, args);
-      } finally {
-        pushResponseOwnsFetchLock = false;
-      }
-      try {
+        let result: unknown;
+        try {
+          pushResponseOwnsFetchLock = true;
+          result = onPushResponse.apply(push, args);
+        } finally {
+          pushResponseOwnsFetchLock = false;
+        }
         return await result;
+      } catch (error) {
+        try { base.log?.("PUSH response failed", { error }); } catch { /* best effort */ }
       } finally {
+        // Release even if LINEJS throws synchronously before returning a Promise.
         release();
       }
-    }).catch((error: unknown) => {
-      try { base.log?.("PUSH response failed", { error }); } catch { /* best effort */ }
     });
   }
 
