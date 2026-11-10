@@ -1,0 +1,89 @@
+name: Bug Report
+description: Report a problem or unexpected behavior in Liney.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Before submitting
+
+        Please check whether a similar issue has already been reported.
+
+        **Language preference:** English is recommended so contributors can review reports more easily. However, **Thai (ภาษาไทย) is fully welcome**. Please write in whichever language you are most comfortable with. We will do our best to understand and assist you.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Describe the bug
+      description: A clear and concise description of what is going wrong.
+      placeholder: Tell us what happened...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the steps needed to reproduce the problem.
+      placeholder: |
+        1. Open Liney
+        2. Go to ...
+        3. Click ...
+        4. See the error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead?
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Liney version
+      description: Which version are you using?
+      placeholder: "e.g. v0.1.4"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: Include the OS name and version.
+      placeholder: "e.g. Lubuntu 24.04"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, screenshots, or recordings
+      description: Attach relevant logs or screenshots. Please remove passwords, tokens, and other sensitive information before posting.
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have checked that a similar issue has not already been reported.
+          required: true
+        - label: I have removed sensitive information from logs and screenshots.
+          required: true
