@@ -1,5 +1,6 @@
 import { bindClientStorage, createTemporaryQrStorage, getTargetProfiles, LineJsAdapter, parseE2EEKeyData, type LineClient, type LineyPollingSession } from "./linejs/adapter";
 import { resolveTalkOwnership, reconcileTalkOwnership } from "./talk-ownership";
+import { createLoginAttemptGuard } from "./auth/login-guard";
 import { presentOwnProfile } from "./linejs/profile-display";
 import { resolveFavoriteTime } from "./linejs/favorite-state";
 // Keep all LINEJS values behind the adapter boundary. This makes replacing the
@@ -85,7 +86,7 @@ const LINEJS_VERSION = LineJsAdapter.version;
 let ACCOUNT_ID = "default";
 if (!parentPort) process.umask(0o077); // Node Workers inherit the host's secure umask.
 let client: LineClient | null = null;
-let loginInFlight = false;
+const loginAttemptGuard = createLoginAttemptGuard();
 let authGeneration = 0;
 let listenerAbort: AbortController | null = null;
 let currentProfile: any = null;
@@ -4067,11 +4068,15 @@ async function finishAuthentication(next: LineClient, restored: boolean) {
 }
 
 async function startQrLogin(id: string) {
-  if (loginInFlight) {
+  if (loginAttemptGuard.isLocked()) {
     replyError(id, new Error("login already in progress"));
     return;
   }
-  loginInFlight = true;
+  const releaseLogin = loginAttemptGuard.tryAcquire();
+  if (!releaseLogin) {
+    replyError(id, new Error("login already in progress"));
+    return;
+  }
   const generation = ++authGeneration;
   let acknowledged = false;
   const acknowledgeStarted = () => {
@@ -4114,13 +4119,13 @@ async function startQrLogin(id: string) {
       else emit({ type: "auth.error", error: errorInfo(error) });
     }).finally(() => {
       // A stale login still owns the single LINEJS auth slot until it settles.
-      loginInFlight = false;
+      releaseLogin();
     });
   } catch (error) {
     if (generation !== authGeneration) return;
     if (!acknowledged) replyError(id, error);
     else emit({ type: "auth.error", error: errorInfo(error) });
-    loginInFlight = false;
+    releaseLogin();
   }
 }
 
@@ -4159,12 +4164,16 @@ async function importE2EEKeychainViaQr(id: string) {
     replyError(id, new Error("ต้องเชื่อมต่อบัญชี LINE ก่อนนำเข้าคีย์"));
     return;
   }
-  if (loginInFlight) {
+  if (loginAttemptGuard.isLocked()) {
     replyError(id, new Error("มีการเข้าสู่ระบบอีกครั้งกำลังทำงานอยู่"));
     return;
   }
 
-  loginInFlight = true;
+  const releaseLogin = loginAttemptGuard.tryAcquire();
+  if (!releaseLogin) {
+    replyError(id, new Error("login already in progress"));
+    return;
+  }
   const generation = authGeneration;
   let temporary: ReturnType<typeof createTemporaryQrStorage> | null = null;
   try {
@@ -4264,12 +4273,12 @@ async function importE2EEKeychainViaQr(id: string) {
     replyError(id, error);
   } finally {
     if (temporary) await temporary.clear().catch(() => undefined);
-    loginInFlight = false;
+    releaseLogin();
   }
 }
 
 async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: unknown) {
-  if (loginInFlight) {
+  if (loginAttemptGuard.isLocked()) {
     replyError(id, new Error("login already in progress"));
     return;
   }
@@ -4285,7 +4294,11 @@ async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: un
     return;
   }
 
-  loginInFlight = true;
+  const releaseLogin = loginAttemptGuard.tryAcquire();
+  if (!releaseLogin) {
+    replyError(id, new Error("login already in progress"));
+    return;
+  }
   const generation = ++authGeneration;
   try {
     listenerAbort?.abort();
@@ -4312,7 +4325,7 @@ async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: un
     // Do not retain the user's password in the engine after the login attempt.
     email = "";
     password = "";
-    loginInFlight = false;
+    releaseLogin();
   }
 }
 
@@ -4323,12 +4336,16 @@ async function restoreToken(id: string, token: unknown) {
   }
   // Token restore shares LINEJS storage with QR, password, and E2EE login.
   // It must own the same auth slot to prevent concurrent credential writes.
-  if (loginInFlight) {
+  if (loginAttemptGuard.isLocked()) {
     replyError(id, new Error("login already in progress"));
     return;
   }
 
-  loginInFlight = true;
+  const releaseLogin = loginAttemptGuard.tryAcquire();
+  if (!releaseLogin) {
+    replyError(id, new Error("login already in progress"));
+    return;
+  }
   const generation = ++authGeneration;
   try {
     listenerAbort?.abort();
@@ -4343,7 +4360,7 @@ async function restoreToken(id: string, token: unknown) {
   } catch (error) {
     replyError(id, error);
   } finally {
-    loginInFlight = false;
+    releaseLogin();
   }
 }
 
