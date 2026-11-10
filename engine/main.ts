@@ -4036,13 +4036,15 @@ function attachEvents(next: LineClient) {
   }
 }
 
-function finishAuthentication(next: LineClient, restored: boolean, generation: number): Promise<void> {
-  return authFinalizationBarrier.track(async () => {
-    if (generation !== authGeneration) return;
+async function finishAuthentication(next: LineClient, restored: boolean, generation: number): Promise<void> {
+  if (generation !== authGeneration) return;
 
-    // Validate the session against LINE before declaring it ready. Full sync is
-    // deliberately not part of this critical path.
-    const profile: any = await next.getMyProfile();
+  // Profile validation is read-only and can remain outside the finalization
+  // barrier, so Logout never waits on a stalled LINE network request.
+  const profile: any = await next.getMyProfile();
+  if (generation !== authGeneration) return;
+
+  await authFinalizationBarrier.track(async () => {
     if (generation !== authGeneration) return;
 
     const account = await activateAccount(profile);
@@ -4396,6 +4398,7 @@ async function autoRestore() {
     if (generation !== authGeneration) return;
     await finishAuthentication(next, true, generation);
   } catch (error) {
+    if (generation !== authGeneration) return;
     client = null;
     emit({
       type: "auth.restore_failed",
