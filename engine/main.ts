@@ -3912,15 +3912,17 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
           emit({ type: "event.transport", transport: "line", state: "connected" });
           resolveTalkSync();
         });
+        const handshakeTimeout = new AbortController();
         const readPromise = LineJsAdapter.readPush(push, [3, 8]);
         let startupResult: "ready" | "closed" | "timeout";
         try {
           startupResult = await Promise.race([
             talkSyncReady.then(() => "ready" as const),
             readPromise.then(() => "closed" as const),
-            waitForSignal(PUSH_SYNC_RESPONSE_TIMEOUT_MS, signal).then(() => "timeout" as const),
+            waitForSignal(PUSH_SYNC_RESPONSE_TIMEOUT_MS, handshakeTimeout.signal).then(() => "timeout" as const),
           ]);
         } finally {
+          handshakeTimeout.abort();
           stopObserving();
         }
 
