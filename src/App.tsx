@@ -4,6 +4,7 @@ import { invoke } from "./lib/desktop-api/core";
 import { open as openFileDialog } from "./lib/desktop-api/dialog";
 import { emitTo, listen } from "./lib/desktop-api/event";
 import { getCurrentWindow } from "./lib/desktop-api/window";
+import { reduceLineTransportState } from "./transport-status";
 import { WebviewWindow } from "./lib/desktop-api/webview-window";
 import { createPortal } from "react-dom";
 import {
@@ -788,6 +789,7 @@ function MainApp() {
   );
   const dark = themeMode === "system" ? systemDark : themeMode === "dark";
   const [engineState, setEngineState] = useState<EngineState>(usesEngineRuntime ? "starting" : "browser-mock");
+  const [transportState, setTransportState] = useState<"unknown" | "connected" | "reconnecting" | "degraded">("unknown");
   const [engineVersion, setEngineVersion] = useState("3.3.2");
   const [syncStatus, setSyncStatus] = useState("");
   const [syncProgress, setSyncProgress] = useState<SyncProgressState>({ visible: false, phase: "metadata", done: 0, total: 0, failed: 0 });
@@ -1099,6 +1101,7 @@ function MainApp() {
         if (event.clientIdentity && typeof event.clientIdentity === "object") setClientIdentity(event.clientIdentity as ClientIdentityResult);
       }
       if (event.type === "engine.error") setEngineState("error");
+      setTransportState((current) => reduceLineTransportState(current, event));
       if (event.type === "engine.closed") {
         setEngineState("error");
         setAuthBusy(false);
@@ -3602,6 +3605,8 @@ function MainApp() {
       />
       <TimelineConversation
         chat={activeChat}
+        transportState={transportState}
+        transportVisible={authenticated && usesEngineRuntime}
         emptyFallback={activeTimelineEmptyFallback}
         onRetryHistory={() => {
           forcedHistoryRefreshRef.current.add(activeChat.id);
@@ -4293,6 +4298,8 @@ function StickerPackCover({ packageId, fallback }: { packageId: string; fallback
 
 function Conversation({
   chat,
+  transportState,
+  transportVisible,
   messages,
   composer,
   onComposer,
@@ -4339,6 +4346,8 @@ function Conversation({
   jumpNonce,
 }: {
   chat: Chat;
+  transportState: "unknown" | "connected" | "reconnecting" | "degraded";
+  transportVisible: boolean;
   messages: Message[] | undefined;
   composer: string;
   onComposer: (value: string) => void;
@@ -4857,6 +4866,18 @@ function Conversation({
               {chat.kind === "openchat" && <span className="openchat-chip">OpenChat</span>}
             </div>
             <span>{chat.detail ?? chat.subtitle}</span>
+            {transportVisible && (
+              <span
+                className="liney-transport-indicator"
+                role="status"
+                aria-live="polite"
+                title={transportState === "connected" ? "LINE PUSH connected" : transportState === "reconnecting" ? "LINE transport reconnecting" : transportState === "degraded" ? "LINE message stream reported an error" : "Waiting for LINE transport status"}
+                data-state={transportState}
+              >
+                <span className="liney-transport-indicator-dot" />
+                {transportState === "connected" ? t("เชื่อมต่อแล้ว") : transportState === "reconnecting" ? t("กำลังเชื่อมต่อใหม่") : transportState === "degraded" ? t("พบปัญหาการซิงก์") : t("รอสถานะการเชื่อมต่อ")}
+              </span>
+            )}
           </div>
         </div>
         <div className="header-actions" ref={headerActionsRef}>

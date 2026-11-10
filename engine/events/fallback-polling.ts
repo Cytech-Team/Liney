@@ -46,9 +46,10 @@ async function stopWhenPrimaryRecovers(
  *
  * The caller owns the underlying poller/session and should keep it stable for
  * the lifetime of the authenticated client. This helper only supervises when
- * that stream is allowed to run. An active polling cycle is aborted as soon as
- * the primary transport becomes healthy, even if the fallback stream has not
- * yielded an event yet.
+ * that stream is allowed to run. When the primary transport recovers, the
+ * active cycle is signalled to stop; the current response batch is drained
+ * before the iterator exits so a page-level sync token cannot skip events
+ * that have not yet been dispatched.
  */
 export async function runFallbackPolling<T>({
   signal,
@@ -81,10 +82,11 @@ export async function runFallbackPolling<T>({
     try {
       for await (const event of createStream(cycle.signal)) {
         if (signal.aborted) return;
-        if (!shouldPoll()) {
-          cycle.abort();
-          break;
-        }
+        // Do not break here when the primary transport recovers. LINEJS
+        // advances some cursors for the entire response page before yielding
+        // its events (notably Square syncToken). Drain that page before the
+        // generator observes cycleSignal and exits, or remaining events in
+        // the page would be permanently skipped.
         // A delivered event proves the fallback path is making forward
         // progress. Clear failure history so an old outage cannot keep the
         // circuit open after the network has recovered.

@@ -27,7 +27,7 @@ import { createInterface, type Interface } from "node:readline";
 import { parentPort } from "node:worker_threads";
 import { runFallbackPolling } from "./events/fallback-polling";
 import { OrderedOperationDispatcher, talkOperationIdentity, squareOperationIdentity } from "./events/ordered-operation-dispatcher";
-import { PUSH_STARTUP_GRACE_MS, PUSH_SYNC_RESPONSE_TIMEOUT_MS, shouldUsePollingFallback } from "./events/push-health";
+import { PUSH_HEARTBEAT_CHECK_INTERVAL_MS, PUSH_HEARTBEAT_TIMEOUT_MS, PUSH_STARTUP_GRACE_MS, PUSH_SYNC_RESPONSE_TIMEOUT_MS, isPushHeartbeatStale, shouldUsePollingFallback } from "./events/push-health";
 import {
   SYSTEM_ACCOUNT_EVENT_THROTTLE_MS,
   SYSTEM_ACCOUNT_MISSING_BASELINE_CURSOR,
@@ -3929,8 +3929,10 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
         if (startupResult !== "ready") {
           pushHealthy = false;
           pushConnectedSince = 0;
-          // A known failed handshake should not wait out the startup grace.
-          pushFallbackNotBefore = Date.now();
+          // Keep REST polling gated until the old PUSH socket and its reader
+          // have fully stopped; otherwise both transports can advance the
+          // shared LINE revision cursor during teardown.
+          pushFallbackNotBefore = Number.POSITIVE_INFINITY;
           if (!signal.aborted) {
             emit({
               type: "event.transport",
@@ -3943,9 +3945,32 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
           }
           await LineJsAdapter.closePushConnections(push);
           await readPromise.catch(() => undefined);
+          pushFallbackNotBefore = Date.now();
           backoff = Math.min(backoff * 2, 30_000);
         } else {
-          await readPromise;
+          // LINEJS already receives protocol heartbeat frames every 30s.
+          // Use those acknowledgements (not chat activity) to detect a stream
+          // that remains open but has stopped making progress.
+          let lastHeartbeatAt = Date.now();
+          const stopHeartbeatObserver = LineJsAdapter.observePushHeartbeat(push, () => {
+            lastHeartbeatAt = Date.now();
+          });
+          const heartbeatMonitor = new AbortController();
+          const monitorHeartbeat = async () => {
+            while (!heartbeatMonitor.signal.aborted && !signal.aborted) {
+              await waitForSignal(PUSH_HEARTBEAT_CHECK_INTERVAL_MS, heartbeatMonitor.signal);
+              if (heartbeatMonitor.signal.aborted || signal.aborted) return;
+              if (isPushHeartbeatStale(lastHeartbeatAt, Date.now())) {
+                throw new Error(`PUSH heartbeat missing for ${PUSH_HEARTBEAT_TIMEOUT_MS}ms`);
+              }
+            }
+          };
+          try {
+            await Promise.race([readPromise, monitorHeartbeat()]);
+          } finally {
+            heartbeatMonitor.abort();
+            stopHeartbeatObserver();
+          }
           // A completed read means the primary transport is gone. Always
           // re-enable fallback while reconnecting, even after a long session.
           pushHealthy = false;
@@ -3960,11 +3985,12 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
       } catch (error) {
         pushHealthy = false;
         pushConnectedSince = 0;
-        pushFallbackNotBefore = Date.now();
+        pushFallbackNotBefore = Number.POSITIVE_INFINITY;
         if (!signal.aborted) {
           emit({ type: "event.transport", transport: "line", state: "reconnecting", error: errorInfo(error).message });
         }
         await LineJsAdapter.closePushConnections(push);
+        pushFallbackNotBefore = Date.now();
         backoff = Math.min(backoff * 2, 30_000);
       }
       if (signal.aborted || client !== next) break;

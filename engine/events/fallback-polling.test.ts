@@ -36,6 +36,38 @@ describe("fallback polling supervisor", () => {
     await task;
   });
 
+  test("drains the current response batch when the primary transport recovers", async () => {
+    const parent = new AbortController();
+    let fallbackNeeded = true;
+    const delivered: number[] = [];
+
+    const task = runFallbackPolling({
+      signal: parent.signal,
+      shouldPoll: () => fallbackNeeded,
+      activeCheckMs: 2,
+      idleCheckMs: 2,
+      retryDelayMs: 2,
+      createStream: async function* (signal) {
+        // Simulate LINEJS yielding a response page after it has already
+        // advanced the page-level cursor. The cycle abort is observed only
+        // after the complete page has been yielded.
+        yield 1;
+        yield 2;
+        yield 3;
+        while (!signal.aborted) await sleep(2);
+      },
+      onEvent: async (event) => {
+        delivered.push(event);
+        if (event === 1) fallbackNeeded = false;
+      },
+    });
+
+    await sleep(20);
+    expect(delivered).toEqual([1, 2, 3]);
+    parent.abort();
+    await task;
+  });
+
   test("does not start fallback polling while the primary transport is healthy", async () => {
     const parent = new AbortController();
     let fallbackNeeded = false;
