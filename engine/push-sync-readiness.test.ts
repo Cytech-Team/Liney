@@ -23,7 +23,7 @@ describe("PUSH Talk sync readiness", () => {
 
   test("marks readiness only after a complete Talk sync response", async () => {
     const received: number[] = [];
-    const original = async (requestId: number) => {
+    const original = async (requestId: number, _isFin?: boolean, _data?: Uint8Array) => {
       received.push(requestId);
       return undefined;
     };
