@@ -1,0 +1,55 @@
+name: Feature Request
+description: Suggest an idea or improvement for Liney.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Before submitting
+
+        Please check whether this feature has already been suggested.
+
+        **Language preference:** English is recommended so contributors can review suggestions more easily. However, **Thai (ภาษาไทย) is fully welcome**. Please write in whichever language you are most comfortable with. We will do our best to understand and assist you.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Is your feature request related to a problem?
+      description: Describe the problem or limitation you are trying to solve.
+      placeholder: I'm frustrated when...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Describe the solution you'd like
+      description: A clear description of what you want to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe any alternative solutions or features you've considered.
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Add screenshots, mockups, examples, or any other context.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have checked that this feature has not already been suggested.
+          required: true
