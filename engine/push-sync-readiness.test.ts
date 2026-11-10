@@ -21,6 +21,22 @@ describe("PUSH Talk sync readiness", () => {
     })).toBe(true);
   });
 
+  test("keeps REST fallback gated while a failed PUSH connection is closing", () => {
+    const now = 100_000;
+    expect(shouldUsePollingFallback({
+      healthy: false,
+      connectedSince: 0,
+      fallbackNotBefore: Number.POSITIVE_INFINITY,
+      now,
+    })).toBe(false);
+    expect(shouldUsePollingFallback({
+      healthy: false,
+      connectedSince: 0,
+      fallbackNotBefore: now,
+      now,
+    })).toBe(true);
+  });
+
   test("detects a stale PUSH heartbeat without treating quiet chats as stale", () => {
     const lastHeartbeatAt = 100_000;
     expect(PUSH_HEARTBEAT_TIMEOUT_MS).toBe(95_000);

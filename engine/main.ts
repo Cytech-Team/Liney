@@ -3929,8 +3929,10 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
         if (startupResult !== "ready") {
           pushHealthy = false;
           pushConnectedSince = 0;
-          // A known failed handshake should not wait out the startup grace.
-          pushFallbackNotBefore = Date.now();
+          // Keep REST polling gated until the old PUSH socket and its reader
+          // have fully stopped; otherwise both transports can advance the
+          // shared LINE revision cursor during teardown.
+          pushFallbackNotBefore = Number.POSITIVE_INFINITY;
           if (!signal.aborted) {
             emit({
               type: "event.transport",
@@ -3943,6 +3945,7 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
           }
           await LineJsAdapter.closePushConnections(push);
           await readPromise.catch(() => undefined);
+          pushFallbackNotBefore = Date.now();
           backoff = Math.min(backoff * 2, 30_000);
         } else {
           // LINEJS already receives protocol heartbeat frames every 30s.
@@ -3982,11 +3985,12 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
       } catch (error) {
         pushHealthy = false;
         pushConnectedSince = 0;
-        pushFallbackNotBefore = Date.now();
+        pushFallbackNotBefore = Number.POSITIVE_INFINITY;
         if (!signal.aborted) {
           emit({ type: "event.transport", transport: "line", state: "reconnecting", error: errorInfo(error).message });
         }
         await LineJsAdapter.closePushConnections(push);
+        pushFallbackNotBefore = Date.now();
         backoff = Math.min(backoff * 2, 30_000);
       }
       if (signal.aborted || client !== next) break;
