@@ -81,6 +81,7 @@ describe("auth finalization barrier", () => {
     await Promise.all([second, waiting]);
     expect(waited).toBe(true);
   });
+
   test("logout clears auth-storage writes that finish after logout starts", async () => {
     const barrier = createAuthFinalizationBarrier();
     const durable = new Map<string, string>();
@@ -94,6 +95,8 @@ describe("auth finalization barrier", () => {
       durable.set("refreshToken", "late-token");
     });
 
+    // Ensure the finalizer has entered its protected write before Logout.
+    while (!finishWrite) await Promise.resolve();
     generation += 1;
     let logoutFinished = false;
     const logout = barrier.wait().then(() => {
@@ -101,7 +104,6 @@ describe("auth finalization barrier", () => {
       logoutFinished = true;
     });
 
-    while (!finishWrite) await Promise.resolve();
     expect(logoutFinished).toBe(false);
     finishWrite();
     await Promise.all([finalization, logout]);
@@ -127,5 +129,4 @@ describe("auth finalization barrier", () => {
     durable.clear();
     expect(durable.size).toBe(0);
   });
-
 });
