@@ -245,6 +245,43 @@ describe("LineJsAdapter fallback polling", () => {
     await iterator.next();
   });
 
+  test("releases the shared cursor lock when a PUSH handler throws synchronously", async () => {
+    const errors: unknown[] = [];
+    let fetchCalls = 0;
+    const client = {
+      base: {
+        push: {
+          onPushResponse: () => {
+            throw new Error("synchronous PUSH failure");
+          },
+        },
+        square: {
+          fetchMyEvents: async () => {
+            fetchCalls++;
+            return { events: [], syncToken: "rest-sync" };
+          },
+        },
+        createPolling: () => ({
+          sync: { square: "initial-sync", talk: {} },
+          _listenTalkEvents: () => ({}),
+        }),
+        log: (_message: string, details: unknown) => errors.push(details),
+      },
+    } as any;
+
+    createPollingSession(client);
+    await client.base.push.onPushResponse({});
+
+    const fetchResult = await Promise.race([
+      client.base.square.fetchMyEvents({ syncToken: "initial-sync" }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("cursor lock was not released")), 250)),
+    ]);
+
+    expect(fetchResult.syncToken).toBe("rest-sync");
+    expect(fetchCalls).toBe(1);
+    expect(errors).toHaveLength(1);
+  });
+
   test("serializes PUSH sign-on cursor updates behind an active Square pagination chain", async () => {
     const pollingState = { sync: { square: "initial-sync", talk: {} }, _listenTalkEvents: () => ({}) };
     const requests: Array<Record<string, unknown>> = [];
