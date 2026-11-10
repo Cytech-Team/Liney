@@ -49,6 +49,23 @@ describe("PUSH Talk sync readiness", () => {
     expect(push.onSignOnResponse).toBe(original);
   });
 
+  test("does not mark a rejected Talk sync response as ready", async () => {
+    const original = async () => false;
+    const push = {
+      onSignOnResponse: original,
+      signOnRequests: { 1: [8, "sync", null] },
+    };
+    let ready = 0;
+    const stop = observePushTalkSyncResponse(push, () => { ready += 1; });
+
+    const result = await push.onSignOnResponse(1, true, new Uint8Array());
+    expect(result).toBe(false);
+    expect(ready).toBe(0);
+
+    stop();
+    expect(push.onSignOnResponse).toBe(original);
+  });
+
   test("does not overwrite a newer PUSH response handler during cleanup", () => {
     const original = () => undefined;
     const newer = () => undefined;

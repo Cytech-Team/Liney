@@ -873,7 +873,9 @@ export function observePushTalkSyncResponse(pushClient: any, onResponse: () => v
       && Number(request[0]) === 8
       && request[1] === "sync";
     const result = await original.call(pushClient, requestId, isFin, data);
-    if (isTalkSyncResponse) {
+    // LINEJS returns false when it cannot parse or accept a sign-on response.
+    // Do not promote a rejected Talk sync handshake to a healthy transport.
+    if (isTalkSyncResponse && result !== false) {
       try { onResponse(); } catch { /* readiness observers must not break LINEJS frame handling */ }
     }
     return result;
