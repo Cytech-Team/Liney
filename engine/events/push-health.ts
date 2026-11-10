@@ -1,4 +1,7 @@
-export const PUSH_STARTUP_GRACE_MS = 3_000;
+// Do not start REST polling until the initial PUSH Talk subscription has
+// had the same bounded window to produce its first sync response.
+export const PUSH_SYNC_RESPONSE_TIMEOUT_MS = 8_000;
+export const PUSH_STARTUP_GRACE_MS = PUSH_SYNC_RESPONSE_TIMEOUT_MS;
 
 export type PushConnectionState = {
   healthy: boolean;
