@@ -4142,6 +4142,11 @@ async function startQrLogin(id: string) {
     // that promise in the worker, but acknowledge the RPC as soon as LINEJS
     // has produced the QR/PIN challenge.
     authStorage = await createAuthAttemptStorage();
+    if (generation !== authGeneration) {
+      await authStorage.clear();
+      releaseLogin();
+      return;
+    }
     const login = loginWithBrandedQR(
       {
         onReceiveQRUrl(url) {
@@ -4359,6 +4364,7 @@ async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: un
     listenerAbort?.abort();
     client = null;
     authStorage = await createAuthAttemptStorage();
+    if (generation !== authGeneration) return;
     const next = await loginWithPassword(
       {
         email,
@@ -4409,6 +4415,7 @@ async function restoreToken(id: string, token: unknown) {
     listenerAbort?.abort();
     client = null;
     authStorage = await createAuthAttemptStorage();
+    if (generation !== authGeneration) return;
     const next = await loginWithAuthToken(token as any, {
       device: clientIdentity().device,
       storage: authStorage.storage,
@@ -4432,6 +4439,7 @@ async function autoRestore() {
   let authStorage: ReturnType<typeof createTemporaryQrStorage> | null = null;
   try {
     authStorage = await createAuthAttemptStorage();
+    if (generation !== authGeneration) return;
     const next = await loginWithAuthToken(credential as any, {
       device: clientIdentity().device,
       storage: authStorage.storage,
