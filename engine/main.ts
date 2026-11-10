@@ -27,7 +27,7 @@ import { createInterface, type Interface } from "node:readline";
 import { parentPort } from "node:worker_threads";
 import { runFallbackPolling } from "./events/fallback-polling";
 import { OrderedOperationDispatcher, talkOperationIdentity, squareOperationIdentity } from "./events/ordered-operation-dispatcher";
-import { PUSH_STARTUP_GRACE_MS, shouldUsePollingFallback } from "./events/push-health";
+import { PUSH_STARTUP_GRACE_MS, PUSH_SYNC_RESPONSE_TIMEOUT_MS, shouldUsePollingFallback } from "./events/push-health";
 import {
   SYSTEM_ACCOUNT_EVENT_THROTTLE_MS,
   SYSTEM_ACCOUNT_MISSING_BASELINE_CURSOR,
@@ -3900,19 +3900,57 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
       try {
         LineJsAdapter.setPushListening(push, true);
         await LineJsAdapter.initializePushConnection(push, 1, [3, 8]);
-        pushHealthy = true;
-        pushConnectedSince = Date.now();
-        emit({ type: "event.transport", transport: "line", state: "connected" });
-        await LineJsAdapter.readPush(push, [3, 8]);
-        // A connection that drops immediately is not healthy. Increase the
-        // delay for those loops so a broken PUSH endpoint cannot spin and
-        // starve the REST fallback; reset only after a stable connection.
-        if (Date.now() - cycleStartedAt >= 10_000) {
-          backoff = 1_000;
-        } else {
+
+        // Opening HTTP/2 only proves that the socket exists. Do not disable
+        // REST fallback until LINE has answered the initial Talk sync request.
+        let resolveTalkSync!: () => void;
+        const talkSyncReady = new Promise<void>((resolve) => { resolveTalkSync = resolve; });
+        const stopObserving = LineJsAdapter.observePushTalkSyncResponse(push, () => {
+          if (signal.aborted || client !== next || pushHealthy) return;
+          pushHealthy = true;
+          pushConnectedSince = Date.now();
+          emit({ type: "event.transport", transport: "line", state: "connected" });
+          resolveTalkSync();
+        });
+        const readPromise = LineJsAdapter.readPush(push, [3, 8]);
+        let startupResult: "ready" | "closed" | "timeout";
+        try {
+          startupResult = await Promise.race([
+            talkSyncReady.then(() => "ready" as const),
+            readPromise.then(() => "closed" as const),
+            waitForSignal(PUSH_SYNC_RESPONSE_TIMEOUT_MS, signal).then(() => "timeout" as const),
+          ]);
+        } finally {
+          stopObserving();
+        }
+
+        if (startupResult !== "ready") {
           pushHealthy = false;
           pushConnectedSince = 0;
+          if (!signal.aborted) {
+            emit({
+              type: "event.transport",
+              transport: "line",
+              state: "reconnecting",
+              error: startupResult === "timeout"
+                ? `Talk Sync did not respond within ${PUSH_SYNC_RESPONSE_TIMEOUT_MS}ms`
+                : "PUSH connection closed before Talk Sync became ready",
+            });
+          }
+          await LineJsAdapter.closePushConnections(push);
+          await readPromise.catch(() => undefined);
           backoff = Math.min(backoff * 2, 30_000);
+        } else {
+          await readPromise;
+          // A completed read means the primary transport is gone. Always
+          // re-enable fallback while reconnecting, even after a long session.
+          pushHealthy = false;
+          pushConnectedSince = 0;
+          if (Date.now() - cycleStartedAt >= 10_000) {
+            backoff = 1_000;
+          } else {
+            backoff = Math.min(backoff * 2, 30_000);
+          }
         }
       } catch (error) {
         pushHealthy = false;
