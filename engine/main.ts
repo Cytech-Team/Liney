@@ -4308,9 +4308,9 @@ async function importE2EEKeychainViaQr(id: string) {
       return left.localeCompare(right);
     });
     for (const [key, value] of changedEntries) {
-      await store.set(key, value as any);
+      await temporary.storage.set(key, value as any);
     }
-    const savedAlias = await store.get(aliasKey);
+    const savedAlias = await temporary.storage.get(aliasKey);
     const savedKey = parseE2EEKeyData(savedAlias);
     if (
       String(savedKey?.keyId ?? "") !== selectedKeyId
@@ -4320,7 +4320,6 @@ async function importE2EEKeychainViaQr(id: string) {
       throw new Error("บันทึก keychain ลงเครื่องไม่สำเร็จ");
     }
 
-    bindClientStorage(next, store);
     if (!(await finishAuthentication(next, false, generation, temporary!))) return;
     void recoverPendingE2EE(next).catch((error) => emit({ type: "event.e2ee.recovery_error", error: errorInfo(error).message }));
     emit({
