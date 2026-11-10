@@ -17,7 +17,7 @@
     "web:preview": "vite preview",
     "lint": "oxlint",
     "test": "bun test",
-    "test:unit": "bun test engine/*.test.ts",
+    "test:unit": "bun test engine",
     "verify:release": "npm run doctor && npm test && npm run lint && npm run electron:engine && npm run electron:web && git diff --check",
     "build:rpm": "npm run electron:engine && npm run electron:web && npm run electron:helpers && electron-builder --linux rpm",
     "release:local": "sh scripts/package-release.sh",

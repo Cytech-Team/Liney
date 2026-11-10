@@ -1,5 +1,7 @@
 import { bindClientStorage, createTemporaryQrStorage, getTargetProfiles, LineJsAdapter, parseE2EEKeyData, type LineClient, type LineyPollingSession } from "./linejs/adapter";
 import { resolveTalkOwnership, reconcileTalkOwnership } from "./talk-ownership";
+import { createLoginAttemptGuard } from "./auth/login-guard";
+import { createAuthFinalizationBarrier } from "./auth/auth-finalization";
 import { presentOwnProfile } from "./linejs/profile-display";
 import { resolveFavoriteTime } from "./linejs/favorite-state";
 // Keep all LINEJS values behind the adapter boundary. This makes replacing the
@@ -85,7 +87,8 @@ const LINEJS_VERSION = LineJsAdapter.version;
 let ACCOUNT_ID = "default";
 if (!parentPort) process.umask(0o077); // Node Workers inherit the host's secure umask.
 let client: LineClient | null = null;
-let loginInFlight = false;
+const loginAttemptGuard = createLoginAttemptGuard();
+const authFinalizationBarrier = createAuthFinalizationBarrier();
 let authGeneration = 0;
 let listenerAbort: AbortController | null = null;
 let currentProfile: any = null;
@@ -487,6 +490,22 @@ function normalize(value: any): any {
   return normalizeJsonValue(value);
 }
 
+async function createAuthAttemptStorage() {
+  const initialData: Record<string, unknown> = { ...store.getAll() };
+  const refreshToken = await store.get("refreshToken");
+  if (typeof refreshToken === "string" && refreshToken) initialData.refreshToken = refreshToken;
+  return createTemporaryQrStorage(initialData);
+}
+
+async function commitAuthAttemptStorage(authStorage: ReturnType<typeof createTemporaryQrStorage>): Promise<void> {
+  for (const [key, value] of Object.entries(authStorage.snapshot())) {
+    await store.set(key, value as any);
+  }
+  const refreshToken = await authStorage.storage.get("refreshToken");
+  if (typeof refreshToken === "string" && refreshToken) await store.set("refreshToken", refreshToken);
+  else await store.delete("refreshToken");
+}
+
 async function persistCredential(next: LineClient): Promise<CredentialPersistenceMode> {
   const refreshToken = await store.get("refreshToken");
   const expireValue = await store.get("expire");
@@ -526,7 +545,12 @@ function readCredential(): AuthCredential | null {
 }
 
 async function clearLocalSession() {
+  // Invalidate in-flight login/finalization immediately, then wait for any
+  // finalizer already past its generation check before clearing shared state.
   authGeneration += 1;
+  await authFinalizationBarrier.wait();
+  // Invalidate an outstanding QR login. Keep its in-flight guard until the
+  // LINEJS promise settles so a second login cannot race the shared storage.
   listenerAbort?.abort();
   listenerAbort = null;
   // Full sync is cancellable and must not continue writing the previous
@@ -4028,75 +4052,139 @@ function attachEvents(next: LineClient) {
   }
 }
 
-async function finishAuthentication(next: LineClient, restored: boolean) {
-  // Validate the session against LINE before declaring it ready.  Full sync is
-  // deliberately *not* part of this critical path: waiting for hundreds of
-  // rooms here held the entire desktop login screen in "starting" state.
+async function finishAuthentication(
+  next: LineClient,
+  restored: boolean,
+  generation: number,
+  authStorage: ReturnType<typeof createTemporaryQrStorage>,
+): Promise<boolean> {
+  if (generation !== authGeneration) return false;
+
+  // Profile validation is read-only and can remain outside the finalization
+  // barrier, so Logout never waits on a stalled LINE network request.
   const profile: any = await next.getMyProfile();
-  const account = await activateAccount(profile);
-  database.consolidateTalkIdentityAliases(ACCOUNT_ID);
-  client = next;
-  currentProfile = presentOwnProfile(normalize(profile));
-  database.upsertAccount(ACCOUNT_ID, {
-    mid: String(profile?.mid ?? ""),
-    displayName: String(profile?.displayName ?? ""),
+  if (generation !== authGeneration) return false;
+
+  return authFinalizationBarrier.track(async (): Promise<boolean> => {
+    if (generation !== authGeneration) return false;
+
+    const account = await activateAccount(profile);
+    // activateAccount can itself await account-switch cleanup. Logout may have
+    // invalidated this attempt while that cleanup was in progress.
+    if (generation !== authGeneration) return false;
+
+    // LINEJS authenticates against an isolated in-memory store. Commit its
+    // mutations only inside the finalization barrier so Logout either
+    // invalidates before any write or waits and clears every committed write.
+    await commitAuthAttemptStorage(authStorage);
+    if (generation !== authGeneration) return false;
+    bindClientStorage(next, store);
+
+    database.consolidateTalkIdentityAliases(ACCOUNT_ID);
+    database.upsertAccount(ACCOUNT_ID, {
+      mid: String(profile?.mid ?? ""),
+      displayName: String(profile?.displayName ?? ""),
+    });
+    prunePersistentCache(true);
+
+    // Persist before publishing an authenticated client. If logout starts
+    // during persistence, it waits for this task and clears the credential
+    // after this operation settles.
+    const credentialStorage = await persistCredential(next);
+    if (generation !== authGeneration) return false;
+
+    client = next;
+    currentProfile = presentOwnProfile(normalize(profile));
+    callManager.attach(next);
+    attachEvents(next);
+    emit({
+      type: "auth.ready",
+      restored,
+      clientIdentity: clientIdentity(),
+      profile: currentProfile,
+      authTokenPresent: Boolean(LineJsAdapter.authToken(next)),
+      storage: credentialStorage,
+      accountChanged: account.changed && !account.migrated,
+    });
+    const fullCompleted = database.getSyncState(ACCOUNT_ID, "full-complete")?.status === "ready";
+    const mode = !fullCompleted || process.env.LINEY_FULL_SYNC_ON_LOGIN === "1" ? "full" : "delta";
+    if (process.env.LINEY_LIGHT_START !== "1") {
+      void startSync(mode).catch(() => undefined);
+    }
+    void resumePendingOutbox();
+    return true;
   });
-  prunePersistentCache(true);
-  callManager.attach(next);
-  attachEvents(next);
-  const credentialStorage = await persistCredential(next);
-  emit({
-    type: "auth.ready",
-    restored,
-    clientIdentity: clientIdentity(),
-    profile: currentProfile,
-    authTokenPresent: Boolean(LineJsAdapter.authToken(next)),
-    storage: credentialStorage,
-    accountChanged: account.changed && !account.migrated,
-  });
-  // The first successful account-wide pass is durable. Subsequent launches
-  // refresh changed/new rooms in the background without replaying all history.
-  const fullCompleted = database.getSyncState(ACCOUNT_ID, "full-complete")?.status === "ready";
-  const mode = !fullCompleted || process.env.LINEY_FULL_SYNC_ON_LOGIN === "1" ? "full" : "delta";
-  if (process.env.LINEY_LIGHT_START !== "1") {
-    void startSync(mode).catch(() => undefined);
-  }
-  void resumePendingOutbox();
 }
 
 async function startQrLogin(id: string) {
-  if (loginInFlight) {
+  if (loginAttemptGuard.isLocked()) {
     replyError(id, new Error("login already in progress"));
     return;
   }
-  loginInFlight = true;
+  const releaseLogin = loginAttemptGuard.tryAcquire();
+  if (!releaseLogin) {
+    replyError(id, new Error("login already in progress"));
+    return;
+  }
   const generation = ++authGeneration;
+  let acknowledged = false;
+  let authStorage: ReturnType<typeof createTemporaryQrStorage> | null = null;
+  const acknowledgeStarted = () => {
+    if (acknowledged || generation !== authGeneration) return;
+    acknowledged = true;
+    emit({ id, ok: true, result: { authenticated: false, started: true } });
+  };
   try {
     listenerAbort?.abort();
     client = null;
     const identity = clientIdentity();
-    const next = await loginWithBrandedQR(
+    // QR login resolves only after the user completes authentication. Keep
+    // that promise in the worker, but acknowledge the RPC as soon as LINEJS
+    // has produced the QR/PIN challenge.
+    authStorage = await createAuthAttemptStorage();
+    if (generation !== authGeneration) {
+      await authStorage.clear();
+      releaseLogin();
+      return;
+    }
+    const login = loginWithBrandedQR(
       {
         onReceiveQRUrl(url) {
+          if (generation !== authGeneration) return;
           emit({ type: "auth.qr", url });
+          acknowledgeStarted();
         },
         onPincodeRequest(pin) {
+          if (generation !== authGeneration) return;
           emit({ type: "auth.pin", pin });
+          acknowledgeStarted();
         },
       },
       {
         device: identity.device,
-        storage: store,
+        storage: authStorage.storage,
       },
       identity,
     );
-    if (generation !== authGeneration) return;
-    await finishAuthentication(next, false);
-    emit({ id, ok: true, result: { authenticated: true } });
+    void login.then(async (next) => {
+      if (generation !== authGeneration) return;
+      await finishAuthentication(next, false, generation, authStorage!);
+    }).catch((error) => {
+      if (generation !== authGeneration) return;
+      if (!acknowledged) replyError(id, error);
+      else emit({ type: "auth.error", error: errorInfo(error) });
+    }).finally(async () => {
+      // A stale login still owns the single LINEJS auth slot until it settles.
+      await authStorage?.clear().catch(() => undefined);
+      releaseLogin();
+    });
   } catch (error) {
-    replyError(id, error);
-  } finally {
-    loginInFlight = false;
+    if (generation === authGeneration) {
+      if (!acknowledged) replyError(id, error);
+      else emit({ type: "auth.error", error: errorInfo(error) });
+    }
+    await authStorage?.clear().catch(() => undefined);
+    releaseLogin();
   }
 }
 
@@ -4135,12 +4223,16 @@ async function importE2EEKeychainViaQr(id: string) {
     replyError(id, new Error("ต้องเชื่อมต่อบัญชี LINE ก่อนนำเข้าคีย์"));
     return;
   }
-  if (loginInFlight) {
+  if (loginAttemptGuard.isLocked()) {
     replyError(id, new Error("มีการเข้าสู่ระบบอีกครั้งกำลังทำงานอยู่"));
     return;
   }
 
-  loginInFlight = true;
+  const releaseLogin = loginAttemptGuard.tryAcquire();
+  if (!releaseLogin) {
+    replyError(id, new Error("login already in progress"));
+    return;
+  }
   const generation = authGeneration;
   let temporary: ReturnType<typeof createTemporaryQrStorage> | null = null;
   try {
@@ -4216,9 +4308,9 @@ async function importE2EEKeychainViaQr(id: string) {
       return left.localeCompare(right);
     });
     for (const [key, value] of changedEntries) {
-      await store.set(key, value as any);
+      await temporary.storage.set(key, value as any);
     }
-    const savedAlias = await store.get(aliasKey);
+    const savedAlias = await temporary.storage.get(aliasKey);
     const savedKey = parseE2EEKeyData(savedAlias);
     if (
       String(savedKey?.keyId ?? "") !== selectedKeyId
@@ -4228,8 +4320,7 @@ async function importE2EEKeychainViaQr(id: string) {
       throw new Error("บันทึก keychain ลงเครื่องไม่สำเร็จ");
     }
 
-    bindClientStorage(next, store);
-    await finishAuthentication(next, false);
+    if (!(await finishAuthentication(next, false, generation, temporary!))) return;
     void recoverPendingE2EE(next).catch((error) => emit({ type: "event.e2ee.recovery_error", error: errorInfo(error).message }));
     emit({
       id,
@@ -4240,12 +4331,12 @@ async function importE2EEKeychainViaQr(id: string) {
     replyError(id, error);
   } finally {
     if (temporary) await temporary.clear().catch(() => undefined);
-    loginInFlight = false;
+    releaseLogin();
   }
 }
 
 async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: unknown) {
-  if (loginInFlight) {
+  if (loginAttemptGuard.isLocked()) {
     replyError(id, new Error("login already in progress"));
     return;
   }
@@ -4261,11 +4352,18 @@ async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: un
     return;
   }
 
-  loginInFlight = true;
+  const releaseLogin = loginAttemptGuard.tryAcquire();
+  if (!releaseLogin) {
+    replyError(id, new Error("login already in progress"));
+    return;
+  }
   const generation = ++authGeneration;
+  let authStorage: ReturnType<typeof createTemporaryQrStorage> | null = null;
   try {
     listenerAbort?.abort();
     client = null;
+    authStorage = await createAuthAttemptStorage();
+    if (generation !== authGeneration) return;
     const next = await loginWithPassword(
       {
         email,
@@ -4276,11 +4374,11 @@ async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: un
       },
       {
         device: clientIdentity().device,
-        storage: store,
+        storage: authStorage.storage,
       },
     );
     if (generation !== authGeneration) return;
-    await finishAuthentication(next, false);
+    if (!(await finishAuthentication(next, false, generation, authStorage!))) return;
     emit({ id, ok: true, result: { authenticated: true } });
   } catch (error) {
     replyError(id, error);
@@ -4288,7 +4386,8 @@ async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: un
     // Do not retain the user's password in the engine after the login attempt.
     email = "";
     password = "";
-    loginInFlight = false;
+    await authStorage?.clear().catch(() => undefined);
+    releaseLogin();
   }
 }
 
@@ -4297,17 +4396,37 @@ async function restoreToken(id: string, token: unknown) {
     emit({ id, ok: true, result: { authenticated: true, restored: true } });
     return;
   }
+  // Token restore shares LINEJS storage with QR, password, and E2EE login.
+  // It must own the same auth slot to prevent concurrent credential writes.
+  if (loginAttemptGuard.isLocked()) {
+    replyError(id, new Error("login already in progress"));
+    return;
+  }
+
+  const releaseLogin = loginAttemptGuard.tryAcquire();
+  if (!releaseLogin) {
+    replyError(id, new Error("login already in progress"));
+    return;
+  }
   const generation = ++authGeneration;
+  let authStorage: ReturnType<typeof createTemporaryQrStorage> | null = null;
   try {
+    listenerAbort?.abort();
+    client = null;
+    authStorage = await createAuthAttemptStorage();
+    if (generation !== authGeneration) return;
     const next = await loginWithAuthToken(token as any, {
       device: clientIdentity().device,
-      storage: store,
+      storage: authStorage.storage,
     });
     if (generation !== authGeneration) return;
-    await finishAuthentication(next, true);
+    if (!(await finishAuthentication(next, true, generation, authStorage!))) return;
     emit({ id, ok: true, result: { authenticated: true } });
   } catch (error) {
     replyError(id, error);
+  } finally {
+    await authStorage?.clear().catch(() => undefined);
+    releaseLogin();
   }
 }
 
@@ -4316,19 +4435,25 @@ async function autoRestore() {
   if (!credential) return;
   const generation = authGeneration;
   emit({ type: "auth.restoring" });
+  let authStorage: ReturnType<typeof createTemporaryQrStorage> | null = null;
   try {
+    authStorage = await createAuthAttemptStorage();
+    if (generation !== authGeneration) return;
     const next = await loginWithAuthToken(credential as any, {
       device: clientIdentity().device,
-      storage: store,
+      storage: authStorage.storage,
     });
     if (generation !== authGeneration) return;
-    await finishAuthentication(next, true);
+    await finishAuthentication(next, true, generation, authStorage);
   } catch (error) {
+    if (generation !== authGeneration) return;
     client = null;
     emit({
       type: "auth.restore_failed",
       error: errorInfo(error).message,
     });
+  } finally {
+    await authStorage?.clear().catch(() => undefined);
   }
 }
 

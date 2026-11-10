@@ -1220,6 +1220,13 @@ function MainApp() {
         setAuthError("");
       }
       if (event.type === "auth.pin" && typeof event.pin === "string") setPin(event.pin);
+      if (event.type === "auth.error") {
+        const error = event.error as { message?: unknown } | undefined;
+        setQrUrl("");
+        setPin("");
+        setAuthBusy(false);
+        setAuthError(typeof error?.message === "string" ? error.message : "เข้าสู่ระบบ LINE ไม่สำเร็จ กรุณาลองใหม่");
+      }
       if (event.type === "auth.ready") {
         authenticatedRef.current = true;
         setAuthBusy(false);

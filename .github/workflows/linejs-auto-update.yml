@@ -1,13 +1,9 @@
 name: LINEJS auto update
 
 on:
+  # Run on every PR. Path filters can leave required checks permanently pending
+  # when a PR changes files outside the filter, blocking merge without a job.
   pull_request:
-    paths:
-      - 'package.json'
-      - 'bun.lock'
-      - 'engine/linejs/**'
-      - 'scripts/*linejs*'
-      - '.github/workflows/linejs-auto-update.yml'
   workflow_dispatch:
   schedule:
     - cron: '17 */6 * * *'
