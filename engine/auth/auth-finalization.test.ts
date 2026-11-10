@@ -101,7 +101,7 @@ describe("auth finalization barrier", () => {
       logoutFinished = true;
     });
 
-    await Promise.resolve();
+    while (!finishWrite) await Promise.resolve();
     expect(logoutFinished).toBe(false);
     finishWrite();
     await Promise.all([finalization, logout]);
