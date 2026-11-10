@@ -113,6 +113,7 @@ export const LineJsAdapter = {
   setPushListening,
   initializePushConnection,
   readPush,
+  observePushTalkSyncResponse,
   on,
   sendTalkMessage,
   uploadObjTalk,
@@ -854,6 +855,34 @@ export function initializePushConnection(pushClient: any, revision: number, oper
 
 export function readPush(pushClient: any, operations: number[]) {
   return pushClient.InitAndRead(operations);
+}
+
+/**
+ * Observe the first complete Talk sync response from the LEGY PUSH stream.
+ * A successful HTTP/2 connection alone does not prove that Talk events are
+ * subscribed and syncing. Keep this LINEJS-internal hook inside the adapter.
+ */
+export function observePushTalkSyncResponse(pushClient: any, onResponse: () => void): () => void {
+  const original = pushClient?.onSignOnResponse;
+  if (typeof original !== "function") throw new Error("LINEJS PUSH sign-on response handler is unavailable");
+
+  const wrapped = async (requestId: number, isFin: boolean, data: Uint8Array) => {
+    const request = pushClient.signOnRequests?.[requestId];
+    const isTalkSyncResponse = isFin
+      && Array.isArray(request)
+      && Number(request[0]) === 8
+      && request[1] === "sync";
+    const result = await original.call(pushClient, requestId, isFin, data);
+    if (isTalkSyncResponse) {
+      try { onResponse(); } catch { /* readiness observers must not break LINEJS frame handling */ }
+    }
+    return result;
+  };
+
+  pushClient.onSignOnResponse = wrapped;
+  return () => {
+    if (pushClient.onSignOnResponse === wrapped) pushClient.onSignOnResponse = original;
+  };
 }
 
 export function on(client: LineClient, event: string, listener: (...args: any[]) => void): void {
