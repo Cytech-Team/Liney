@@ -827,7 +827,13 @@ export function createPollingSession(client: LineClient): LineyPollingSession {
     return release;
   };
 
+  // A PUSH response owns the shared lock through LINEJS's cursor commit,
+  // which happens after its await of fetchMyEvents.
+  let pushResponseOwnsFetchLock = false;
   square.fetchMyEvents = async function (...args: unknown[]) {
+    if (pushResponseOwnsFetchLock) {
+      return await fetchMyEvents.apply(this, args as never);
+    }
     const release = await acquireFetchLock();
     try {
       return await fetchMyEvents.apply(this, args as never);
@@ -841,6 +847,26 @@ export function createPollingSession(client: LineClient): LineyPollingSession {
   // same lock. Conn invokes it without awaiting; the original handler already
   // owns its internal error handling.
   const push = base.push;
+  const onPushResponse = push?.onPushResponse;
+  if (typeof onPushResponse === "function") {
+    push.onPushResponse = (...args: unknown[]) => acquireFetchLock().then(async (release) => {
+      let result: unknown;
+      try {
+        pushResponseOwnsFetchLock = true;
+        result = onPushResponse.apply(push, args);
+      } finally {
+        pushResponseOwnsFetchLock = false;
+      }
+      try {
+        return await result;
+      } finally {
+        release();
+      }
+    }).catch((error: unknown) => {
+      try { base.log?.("PUSH response failed", { error }); } catch { /* best effort */ }
+    });
+  }
+
   const onSignOnResponse = push?.onSignOnResponse;
   if (typeof onSignOnResponse === "function") {
     push.onSignOnResponse = (...args: unknown[]) => acquireFetchLock().then(async (release) => {

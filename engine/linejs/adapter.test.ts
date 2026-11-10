@@ -150,6 +150,101 @@ describe("LineJsAdapter fallback polling", () => {
     expect(pollingState.sync.square).toBe("final-sync");
   });
 
+  test("serializes the complete PUSH response so it snapshots the committed REST cursor", async () => {
+    const pollingState = { sync: { square: "initial-sync", talk: {} }, _listenTalkEvents: () => ({}) };
+    const requests: Array<Record<string, unknown>> = [];
+    const client = {
+      base: {
+        push: {
+          onPushResponse: async () => {
+            const syncToken = pollingState.sync.square;
+            await client.base.square.fetchMyEvents({ subscriptionId: 7, syncToken });
+            pollingState.sync.square = "push-committed";
+          },
+        },
+        square: {
+          fetchMyEvents: async (request: Record<string, unknown>) => {
+            requests.push(request);
+            if (request.subscriptionId) return { events: [], syncToken: "push-response-sync" };
+            if (!request.continuationToken) {
+              return { events: [{ id: "page-1" }], syncToken: "page-sync", continuationToken: "next-page" };
+            }
+            return { events: [{ id: "page-2" }], syncToken: "final-sync" };
+          },
+        },
+        createPolling: () => pollingState,
+      },
+    } as any;
+
+    const session = createPollingSession(client);
+    const controller = new AbortController();
+    const iterator = session.square({ signal: controller.signal, pollingInterval: 60_000 })[Symbol.asyncIterator]();
+    expect((await iterator.next()).value.id).toBe("page-1");
+
+    const pushResponse = client.base.push.onPushResponse({});
+    await Promise.resolve();
+    expect(requests.some((request) => request.subscriptionId === 7)).toBe(false);
+
+    expect((await iterator.next()).value.id).toBe("page-2");
+    controller.abort();
+    expect((await iterator.next()).done).toBe(true);
+    await pushResponse;
+
+    expect(requests.find((request) => request.subscriptionId === 7)).toEqual({
+      subscriptionId: 7,
+      syncToken: "final-sync",
+    });
+    expect(pollingState.sync.square).toBe("push-committed");
+  });
+
+  test("keeps REST out until PUSH has committed its cursor after fetch", async () => {
+    const pollingState = { sync: { square: "before-push", talk: {} }, _listenTalkEvents: () => ({}) };
+    const requests: Array<Record<string, unknown>> = [];
+    let finishFetch!: () => void;
+    const fetchGate = new Promise<void>((resolve) => { finishFetch = resolve; });
+    let pushFetchStarted!: () => void;
+    const started = new Promise<void>((resolve) => { pushFetchStarted = resolve; });
+    const client = {
+      base: {
+        push: {
+          onPushResponse: async () => {
+            const cursor = pollingState.sync.square;
+            await client.base.square.fetchMyEvents({ subscriptionId: 9, syncToken: cursor });
+            pollingState.sync.square = "after-push-commit";
+          },
+        },
+        square: {
+          fetchMyEvents: async (request: Record<string, unknown>) => {
+            requests.push(request);
+            if (request.subscriptionId) {
+              pushFetchStarted();
+              await fetchGate;
+              return { events: [], syncToken: "push-result" };
+            }
+            return { events: [{ id: "rest-event" }], syncToken: "rest-result" };
+          },
+        },
+        createPolling: () => pollingState,
+      },
+    } as any;
+
+    const session = createPollingSession(client);
+    const pushResponse = client.base.push.onPushResponse({});
+    await started;
+    const controller = new AbortController();
+    const iterator = session.square({ signal: controller.signal, pollingInterval: 60_000 })[Symbol.asyncIterator]();
+    await Promise.resolve();
+    expect(requests.filter((request) => !request.subscriptionId)).toHaveLength(0);
+
+    finishFetch();
+    await pushResponse;
+    expect(pollingState.sync.square).toBe("after-push-commit");
+    expect((await iterator.next()).value.id).toBe("rest-event");
+    expect(requests.find((request) => !request.subscriptionId)?.syncToken).toBe("after-push-commit");
+    controller.abort();
+    await iterator.next();
+  });
+
   test("serializes PUSH sign-on cursor updates behind an active Square pagination chain", async () => {
     const pollingState = { sync: { square: "initial-sync", talk: {} }, _listenTalkEvents: () => ({}) };
     const requests: Array<Record<string, unknown>> = [];
