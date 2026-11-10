@@ -11,7 +11,7 @@ body:
 
         Please check whether this feature has already been suggested.
 
-        **Language preference:** English is recommended so contributors can review suggestions more easily. However, **Thai (ภาษาไทย) is fully welcome**. Please write in whichever language you are most comfortable with. We will do our best to understand and assist you.
+        **Language preference:** If you are Thai or comfortable writing in Thai, please submit your issue in **Thai (ภาษาไทย)**. If you are not a Thai speaker, please write in **English**. This helps us understand and respond to your report more accurately. Thank you for contributing to Liney!
 
   - type: textarea
     id: problem
