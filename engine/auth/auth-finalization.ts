@@ -1,25 +1,28 @@
 /**
- * Tracks the asynchronous session-finalization phase so logout can invalidate
- * the attempt immediately, then wait for any in-flight finalizer before
+ * Tracks asynchronous session-finalization phases so logout can invalidate
+ * attempts immediately, then wait for every in-flight finalizer before
  * clearing shared account and credential state.
  */
 export function createAuthFinalizationBarrier() {
-  let pending: Promise<void> | null = null;
+  const pending = new Set<Promise<void>>();
 
   return {
     track<T>(operation: () => Promise<T>): Promise<T> {
       const task = Promise.resolve().then(operation);
+      // Track a non-rejecting promise so a failed finalizer cannot leave the
+      // barrier permanently blocked or create an unhandled rejection.
       const settled = task.then(() => undefined, () => undefined);
-      pending = settled;
-      void settled.then(() => {
-        if (pending === settled) pending = null;
-      });
+      pending.add(settled);
+      void settled.then(() => pending.delete(settled));
       return task;
     },
 
     async wait(): Promise<void> {
-      const active = pending;
-      if (active) await active;
+      // Loop because another finalizer may be registered while we are waiting
+      // for the current batch to settle.
+      while (pending.size > 0) {
+        await Promise.all([...pending]);
+      }
     },
   };
 }
