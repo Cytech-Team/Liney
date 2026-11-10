@@ -527,9 +527,8 @@ function readCredential(): AuthCredential | null {
 
 async function clearLocalSession() {
   authGeneration += 1;
-  // Invalidate an outstanding QR login immediately. Its eventual completion
-  // is generation-checked and must not clear a newer login's in-flight flag.
-  loginInFlight = false;
+  // Invalidate an outstanding QR login. Keep its in-flight guard until the
+  // LINEJS promise settles so a second login cannot race the shared storage.
   listenerAbort?.abort();
   listenerAbort = null;
   // Full sync is cancellable and must not continue writing the previous
@@ -4114,7 +4113,8 @@ async function startQrLogin(id: string) {
       if (!acknowledged) replyError(id, error);
       else emit({ type: "auth.error", error: errorInfo(error) });
     }).finally(() => {
-      if (generation === authGeneration) loginInFlight = false;
+      // A stale login still owns the single LINEJS auth slot until it settles.
+      loginInFlight = false;
     });
   } catch (error) {
     if (generation !== authGeneration) return;
