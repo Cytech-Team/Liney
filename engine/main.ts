@@ -3929,6 +3929,8 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
         if (startupResult !== "ready") {
           pushHealthy = false;
           pushConnectedSince = 0;
+          // A known failed handshake should not wait out the startup grace.
+          pushFallbackNotBefore = Date.now();
           if (!signal.aborted) {
             emit({
               type: "event.transport",
@@ -3948,6 +3950,7 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
           // re-enable fallback while reconnecting, even after a long session.
           pushHealthy = false;
           pushConnectedSince = 0;
+          pushFallbackNotBefore = Date.now();
           if (Date.now() - cycleStartedAt >= 10_000) {
             backoff = 1_000;
           } else {
@@ -3957,6 +3960,7 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
       } catch (error) {
         pushHealthy = false;
         pushConnectedSince = 0;
+        pushFallbackNotBefore = Date.now();
         if (!signal.aborted) {
           emit({ type: "event.transport", transport: "line", state: "reconnecting", error: errorInfo(error).message });
         }
