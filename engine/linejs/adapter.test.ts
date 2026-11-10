@@ -149,6 +149,50 @@ describe("LineJsAdapter fallback polling", () => {
     expect(pushFinished).toBe(true);
     expect(pollingState.sync.square).toBe("final-sync");
   });
+
+  test("serializes PUSH sign-on cursor updates behind an active Square pagination chain", async () => {
+    const pollingState = { sync: { square: "initial-sync", talk: {} }, _listenTalkEvents: () => ({}) };
+    const requests: Array<Record<string, unknown>> = [];
+    let signOnFinished = false;
+    const client = {
+      base: {
+        push: {
+          onSignOnResponse: async () => {
+            pollingState.sync.square = "push-sign-on-sync";
+            signOnFinished = true;
+          },
+        },
+        square: {
+          fetchMyEvents: async (request: Record<string, unknown>) => {
+            requests.push(request);
+            if (!request.continuationToken) {
+              return { events: [{ id: "page-1" }], syncToken: "page-sync", continuationToken: "next-page" };
+            }
+            return { events: [{ id: "page-2" }], syncToken: "final-sync" };
+          },
+        },
+        createPolling: () => pollingState,
+      },
+    } as any;
+
+    const session = createPollingSession(client);
+    const controller = new AbortController();
+    const iterator = session.square({ signal: controller.signal, pollingInterval: 60_000 })[Symbol.asyncIterator]();
+    expect((await iterator.next()).value.id).toBe("page-1");
+
+    const signOn = client.base.push.onSignOnResponse();
+    await Promise.resolve();
+    expect(signOnFinished).toBe(false);
+
+    expect((await iterator.next()).value.id).toBe("page-2");
+    controller.abort();
+    expect((await iterator.next()).done).toBe(true);
+    await signOn;
+
+    expect(signOnFinished).toBe(true);
+    expect(pollingState.sync.square).toBe("push-sign-on-sync");
+    expect(requests).toHaveLength(2);
+  });
 });
 
 
