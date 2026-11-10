@@ -32,4 +32,52 @@ describe("auth finalization barrier", () => {
     await barrier.track(async () => undefined);
     await expect(barrier.wait()).resolves.toBeUndefined();
   });
+
+  test("waits for every concurrently tracked finalization", async () => {
+    const barrier = createAuthFinalizationBarrier();
+    let settleFirst!: () => void;
+    let settleSecond!: () => void;
+    const first = barrier.track(() => new Promise<void>((resolve) => {
+      settleFirst = resolve;
+    }));
+    const second = barrier.track(() => new Promise<void>((resolve) => {
+      settleSecond = resolve;
+    }));
+    let waited = false;
+    const waiting = barrier.wait().then(() => { waited = true; });
+
+    await Promise.resolve();
+    settleFirst();
+    await first;
+    await Promise.resolve();
+    expect(waited).toBe(false);
+
+    settleSecond();
+    await Promise.all([second, waiting]);
+    expect(waited).toBe(true);
+  });
+
+  test("waits for a finalization registered while waiting", async () => {
+    const barrier = createAuthFinalizationBarrier();
+    let settleFirst!: () => void;
+    let settleSecond!: () => void;
+    const first = barrier.track(() => new Promise<void>((resolve) => {
+      settleFirst = resolve;
+    }));
+    let waited = false;
+    const waiting = barrier.wait().then(() => { waited = true; });
+
+    await Promise.resolve();
+    settleFirst();
+    await first;
+    const second = barrier.track(() => new Promise<void>((resolve) => {
+      settleSecond = resolve;
+    }));
+    await Promise.resolve();
+    expect(waited).toBe(false);
+
+    settleSecond();
+    await Promise.all([second, waiting]);
+    expect(waited).toBe(true);
+  });
 });
