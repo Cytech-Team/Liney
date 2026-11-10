@@ -887,6 +887,22 @@ export function observePushTalkSyncResponse(pushClient: any, onResponse: () => v
   };
 }
 
+/** Observe LINEJS LEGY PUSH heartbeat acknowledgements without replacing its behavior. */
+export function observePushHeartbeat(pushClient: any, onHeartbeat: (pingId: number) => void): () => void {
+  const original = pushClient?.onPingCallback;
+  if (typeof original !== "function") throw new Error("LINEJS PUSH heartbeat handler is unavailable");
+
+  const wrapped = function (this: unknown, pingId: number) {
+    const result = original.call(this, pingId);
+    try { onHeartbeat(pingId); } catch { /* observers must not break LINEJS heartbeat handling */ }
+    return result;
+  };
+  pushClient.onPingCallback = wrapped;
+  return () => {
+    if (pushClient.onPingCallback === wrapped) pushClient.onPingCallback = original;
+  };
+}
+
 export function on(client: LineClient, event: string, listener: (...args: any[]) => void): void {
   (client as any).base.on(event, listener);
 }
