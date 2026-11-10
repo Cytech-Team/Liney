@@ -527,6 +527,9 @@ function readCredential(): AuthCredential | null {
 
 async function clearLocalSession() {
   authGeneration += 1;
+  // Invalidate an outstanding QR login immediately. Its eventual completion
+  // is generation-checked and must not clear a newer login's in-flight flag.
+  loginInFlight = false;
   listenerAbort?.abort();
   listenerAbort = null;
   // Full sync is cancellable and must not continue writing the previous
@@ -4071,17 +4074,30 @@ async function startQrLogin(id: string) {
   }
   loginInFlight = true;
   const generation = ++authGeneration;
+  let acknowledged = false;
+  const acknowledgeStarted = () => {
+    if (acknowledged || generation !== authGeneration) return;
+    acknowledged = true;
+    emit({ id, ok: true, result: { authenticated: false, started: true } });
+  };
   try {
     listenerAbort?.abort();
     client = null;
     const identity = clientIdentity();
-    const next = await loginWithBrandedQR(
+    // QR login resolves only after the user completes authentication. Keep
+    // that promise in the worker, but acknowledge the RPC as soon as LINEJS
+    // has produced the QR/PIN challenge.
+    const login = loginWithBrandedQR(
       {
         onReceiveQRUrl(url) {
+          if (generation !== authGeneration) return;
           emit({ type: "auth.qr", url });
+          acknowledgeStarted();
         },
         onPincodeRequest(pin) {
+          if (generation !== authGeneration) return;
           emit({ type: "auth.pin", pin });
+          acknowledgeStarted();
         },
       },
       {
@@ -4090,12 +4106,20 @@ async function startQrLogin(id: string) {
       },
       identity,
     );
-    if (generation !== authGeneration) return;
-    await finishAuthentication(next, false);
-    emit({ id, ok: true, result: { authenticated: true } });
+    void login.then(async (next) => {
+      if (generation !== authGeneration) return;
+      await finishAuthentication(next, false);
+    }).catch((error) => {
+      if (generation !== authGeneration) return;
+      if (!acknowledged) replyError(id, error);
+      else emit({ type: "auth.error", error: errorInfo(error) });
+    }).finally(() => {
+      if (generation === authGeneration) loginInFlight = false;
+    });
   } catch (error) {
-    replyError(id, error);
-  } finally {
+    if (generation !== authGeneration) return;
+    if (!acknowledged) replyError(id, error);
+    else emit({ type: "auth.error", error: errorInfo(error) });
     loginInFlight = false;
   }
 }
