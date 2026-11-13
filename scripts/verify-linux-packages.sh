@@ -22,6 +22,15 @@ done
 PACKAGE_ROOT="$(mktemp -d)"
 trap 'rm -rf "$PACKAGE_ROOT"' EXIT
 
+# Update feed metadata for AppImage auto-update (GitHub Releases).
+# electron-builder writes latest-linux.yml alongside the AppImage when
+# build.publish points at Cytech-Team/Liney. The updater verifies SHA-512
+# and signature from this file before downloading.
+YML="$OUTPUT_DIR/latest-linux.yml"
+test -s "$YML"
+grep -Fq "version: $VERSION" "$YML"
+grep -Fq "sha512" "$YML"
+
 # Validate package metadata without relying on a host RPM database.
 [[ "$(dpkg-deb --field "$DEB" Package)" == "liney" ]]
 [[ "$(dpkg-deb --field "$DEB" Version)" == "$VERSION" ]]
