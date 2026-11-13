@@ -325,6 +325,7 @@ const ENGLISH_TRANSLATIONS: Record<string, string> = {
   "กำลังดาวน์โหลด {{percent}}%": "Downloading {{percent}}%",
   "ดาวน์โหลดและตรวจสอบไฟล์แล้ว": "Downloaded and verified",
   "ใช้เวอร์ชันล่าสุดแล้ว": "You're up to date",
+  "ไม่พบเวอร์ชันใหม่": "No new version found",
   "ยังไม่ได้ตั้งค่า Update Feed": "Update feed isn't configured",
   "ตรวจสอบการอัปเดตไม่สำเร็จ": "Couldn't check for updates",
   "สถานะการอัปเดต": "Update status",
