@@ -95,7 +95,11 @@
     "rpm": {
       "artifactName": "Liney-Electron-Preview-${version}-${arch}.rpm"
     },
-    "publish": null,
+    "publish": {
+      "provider": "github",
+      "owner": "Cytech-Team",
+      "repo": "Liney"
+    },
     "asarUnpack": [
       "electron/dist/engine.mjs",
       "electron/native/**",

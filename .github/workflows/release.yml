@@ -43,6 +43,8 @@ jobs:
             release-electron/*.AppImage
             release-electron/*.deb
             release-electron/*.rpm
+            release-electron/*.yml
+            release-electron/*.blockmap
           if-no-files-found: error
           retention-days: 14
 
@@ -137,7 +139,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ls -lh release-electron/*.AppImage release-electron/*.deb release-electron/*.rpm release-electron/*.flatpak
+          ls -lh release-electron/*.AppImage release-electron/*.deb release-electron/*.rpm release-electron/*.flatpak release-electron/*.yml
+          ls -lh release-electron/*.blockmap || echo "No blockmap (differential update disabled)"
       - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@v2
         with:
@@ -147,3 +150,5 @@ jobs:
             release-electron/*.deb
             release-electron/*.rpm
             release-electron/*.flatpak
+            release-electron/*.yml
+            release-electron/*.blockmap

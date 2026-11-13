@@ -13,6 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { getEditActionCalls, hasNativeEditShortcuts, installNativeEditMenu, installNativeEditShortcuts, resetEditActionCalls } from "./edit-menu.mjs";
+import { resolveUpdaterConfig } from "./updater-config.mjs";
 
 protocol.registerSchemesAsPrivileged([
   {scheme:"lineyapp",privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}
@@ -67,8 +68,13 @@ let quitting = false;
 let tray = null;
 let closeToTray = false;
 let toneTimer = null;
-const updateChannel = process.env.LINEY_UPDATE_CHANNEL === "stable" ? "stable" : "preview";
-const updateFeedBase = String(process.env.LINEY_UPDATE_FEED_URL || "").trim().replace(/\/+$/, "");
+const updaterConfig = resolveUpdaterConfig({
+  isPackaged: app.isPackaged,
+  appImagePath: process.env.APPIMAGE,
+  feedUrlEnv: process.env.LINEY_UPDATE_FEED_URL,
+  updateChannelEnv: process.env.LINEY_UPDATE_CHANNEL,
+});
+const updateChannel = updaterConfig.displayChannel;
 let updateState = { status: "idle", channel: updateChannel, version: app.getVersion(), availableVersion: null, releaseNotes: "", percent: 0, error: null };
 let updateConfigured = false;
 function publishUpdateState(patch) {
@@ -76,12 +82,20 @@ function publishUpdateState(patch) {
   broadcast("liney:desktop:event", { name: "liney:updater:event", payload: updateState });
 }
 function configureUpdater() {
-  if (!app.isPackaged || !updateFeedBase || process.env.APPIMAGE === undefined) return false;
+  if (!updaterConfig.configured) return false;
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
-  autoUpdater.allowPrerelease = updateChannel === "preview";
-  autoUpdater.channel = updateChannel;
-  autoUpdater.setFeedURL({ provider: "generic", url: `${updateFeedBase}/${updateChannel}/` });
+  autoUpdater.allowPrerelease = updaterConfig.allowPrerelease;
+  // Keep autoUpdater.channel as default (latest) so both GitHub and generic
+  // feeds resolve `latest-linux.yml`. Setting it to "preview"/"stable" would
+  // make electron-updater look for `preview-linux.yml` which electron-builder
+  // never generates. Preview/Stable separation comes from GitHub stable vs
+  // prerelease tags (allowPrerelease) or from the generic URL subfolder.
+  if (updaterConfig.provider === "generic" && updaterConfig.url) {
+    autoUpdater.setFeedURL({ provider: "generic", url: updaterConfig.url });
+  }
+  // Default GitHub provider needs no setFeedURL: electron-builder bakes
+  // `app-update.yml` (owner Cytech-Team, repo Liney) into the packaged app.
   autoUpdater.on("checking-for-update", () => publishUpdateState({ status: "checking", error: null }));
   autoUpdater.on("update-available", info => {
     const releaseNotes = typeof info.releaseNotes === "string" ? info.releaseNotes : Array.isArray(info.releaseNotes) ? info.releaseNotes.map(note => note.note || "").join("\n") : "";
@@ -92,16 +106,16 @@ function configureUpdater() {
       toast.show();
     }
   });
-  autoUpdater.on("update-not-available", info => publishUpdateState({ status: "current", availableVersion: info.version, releaseNotes: "", percent: 0 }));
+  autoUpdater.on("update-not-available", () => publishUpdateState({ status: "current", availableVersion: null, releaseNotes: "", percent: 0, error: null }));
   autoUpdater.on("download-progress", progress => publishUpdateState({ status: "downloading", percent: Math.max(0, Math.min(100, Math.round(progress.percent || 0))) }));
-  autoUpdater.on("update-downloaded", info => publishUpdateState({ status: "downloaded", availableVersion: info.version, percent: 100 }));
-  autoUpdater.on("error", error => publishUpdateState({ status: "error", error: String(error?.message || error).slice(0, 500) }));
+  autoUpdater.on("update-downloaded", info => publishUpdateState({ status: "downloaded", availableVersion: info.version, percent: 100, error: null }));
+  autoUpdater.on("error", error => publishUpdateState({ status: "error", availableVersion: null, releaseNotes: "", error: String(error?.message || error).slice(0, 500) }));
   updateConfigured = true;
   return true;
 }
 async function checkForUpdates() {
   if (!updateConfigured) {
-    const reason = !app.isPackaged ? "Updates are disabled in development builds" : process.env.APPIMAGE === undefined ? "Automatic updates require the AppImage package" : "Update feed is not configured";
+    const reason = updaterConfig.reason || "Update feed is not configured";
     publishUpdateState({ status: "unconfigured", error: reason });
     return updateState;
   }
