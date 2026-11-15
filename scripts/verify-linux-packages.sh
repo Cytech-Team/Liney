@@ -40,23 +40,23 @@ rpm --dbpath "$PACKAGE_ROOT/rpmdb" --initdb
 RPM_ID="$(rpm --dbpath "$PACKAGE_ROOT/rpmdb" -qp --queryformat '%{VERSION} %{ARCH}' "$RPM")"
 [[ "$RPM_ID" == "${VERSION} x86_64" ]]
 rpm --dbpath "$PACKAGE_ROOT/rpmdb" -qpl "$RPM" > "$PACKAGE_ROOT/rpm-files.txt"
-grep -Fqx '/opt/Liney Electron Preview/liney' "$PACKAGE_ROOT/rpm-files.txt"
+grep -Fqx '/opt/Liney/liney' "$PACKAGE_ROOT/rpm-files.txt"
 dpkg-deb --extract "$DEB" "$PACKAGE_ROOT/deb"
-DEB_APP="$PACKAGE_ROOT/deb/opt/Liney Electron Preview/liney"
+DEB_APP="$PACKAGE_ROOT/deb/opt/Liney/liney"
 test -x "$DEB_APP"
-test -s "$PACKAGE_ROOT/deb/opt/Liney Electron Preview/resources/app.asar"
-test -x "$PACKAGE_ROOT/deb/opt/Liney Electron Preview/resources/app.asar.unpacked/electron/native/liney-media"
-grep -Fqx 'Exec="/opt/Liney Electron Preview/liney" %U' \
+test -s "$PACKAGE_ROOT/deb/opt/Liney/resources/app.asar"
+test -x "$PACKAGE_ROOT/deb/opt/Liney/resources/app.asar.unpacked/electron/native/liney-media"
+grep -Fqx 'Exec="/opt/Liney/liney" %U' \
   "$PACKAGE_ROOT/deb/usr/share/applications/dev.cytechteam.liney.electron-preview.desktop"
 
 mkdir -p "$PACKAGE_ROOT/rpm"
 rpm2cpio "$RPM" | (cd "$PACKAGE_ROOT/rpm" && cpio -idm --quiet)
-RPM_APP="$PACKAGE_ROOT/rpm/opt/Liney Electron Preview/liney"
+RPM_APP="$PACKAGE_ROOT/rpm/opt/Liney/liney"
 test -x "$RPM_APP"
-test -s "$PACKAGE_ROOT/rpm/opt/Liney Electron Preview/resources/app.asar"
+test -s "$PACKAGE_ROOT/rpm/opt/Liney/resources/app.asar"
 
 for payload in deb rpm; do
-  NATIVE="$PACKAGE_ROOT/$payload/opt/Liney Electron Preview/resources/app.asar.unpacked/electron/native"
+  NATIVE="$PACKAGE_ROOT/$payload/opt/Liney/resources/app.asar.unpacked/electron/native"
   for helper in liney-media liney-audio liney-screen liney-screen-wayland liney-screen-x11; do
     test -x "$NATIVE/$helper"
     ldd "$NATIVE/$helper" > "$PACKAGE_ROOT/${payload}-${helper}.ldd" 2>&1

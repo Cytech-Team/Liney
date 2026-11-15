@@ -22,7 +22,7 @@ const base = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(base, "..");
 const bundled = app.isPackaged;
 const preview = process.env.LINEY_ELECTRON_STABLE !== "1";
-app.setName(preview ? "Liney Electron Preview" : "Liney");
+app.setName("Liney");
 const stateDir = process.env.LINEY_DATA_DIR || path.join(
   process.env.XDG_DATA_HOME || path.join(app.getPath("home"), ".local/share"),
   preview ? "liney-electron-preview" : "liney"
