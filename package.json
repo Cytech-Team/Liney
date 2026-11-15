@@ -76,7 +76,7 @@
       "!**/node_modules/.cache/**"
     ],
     "linux": {
-      "category": "Network;InstantMessaging",
+      "category": "Network;InstantMessaging;Chat;",
       "icon": "branding/icons",
       "target": [
         "AppImage",
@@ -84,7 +84,20 @@
         "rpm"
       ],
       "syncDesktopName": true,
-      "maintainer": "Cytech Team Development"
+      "maintainer": "Cytech Team Development",
+      "desktop": {
+        "entry": {
+          "Name": "Liney — LINE, made for Linux.",
+          "Name[th]": "Liney — LINE, made for Linux.",
+          "GenericName": "UNOFFICIAL LINE desktop client for Linux",
+          "GenericName[th]": "โปรแกรมแชท LINE บนเดสก์ท็อป Linux (ไม่เป็นทางการ)",
+          "Comment": "A LINE client built for the Linux desktop",
+          "Comment[th]": "ไคลเอนต์ LINE ที่สร้างมาเพื่อเดสก์ท็อป Linux",
+          "Keywords": "line;chat;messenger;ไลน์;แชท;",
+          "StartupNotify": "true",
+          "StartupWMClass": "dev.cytechteam.liney.electron-preview"
+        }
+      }
     },
     "appImage": {
       "artifactName": "Liney-Electron-Preview-${version}-${arch}.AppImage"
