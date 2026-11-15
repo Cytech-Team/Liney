@@ -78,6 +78,9 @@ import { normalizeJsonValue } from "./serialization";
 import { stickerUrlFromRaw } from "./sticker";
 import { ownedStickersFromPurchases } from "./sticker-catalog";
 import { StickerCatalogCache } from "./sticker-catalog-cache";
+import { emojiFromPack, ownedEmojiPacksFromSummaries, sticonIdsFromMeta } from "./sticon-catalog";
+import type { OwnedEmoji, OwnedEmojiPack } from "./sticon-catalog";
+import { EmojiCatalogCache } from "./sticon-catalog-cache";
 import { SyncCoordinator } from "./sync/coordinator";
 import { PROTOCOL_VERSION } from "./protocol/protocol";
 
@@ -189,6 +192,8 @@ const GROUP_METADATA_RETRY_MS = 5 * 60_000;
 const squareSenderCache = new Map<string, SenderIdentity>();
 let ownedStickerCache: { expiresAt: number; stickers: ReturnType<typeof ownedStickersFromPurchases> } | null = null;
 const STICKER_CACHE_TTL_MS = 7 * 24 * 60 * 60_000;
+let ownedEmojiCache: { expiresAt: number; emoji: OwnedEmoji[] } | null = null;
+const EMOJI_CACHE_TTL_MS = 7 * 24 * 60 * 60_000;
 
 function invalidateChatListRefreshes(): void {
   for (const kind of Object.keys(chatListRefreshGeneration) as ChatListRefreshKind[]) {
@@ -313,6 +318,77 @@ async function listOwnedStickers(): Promise<ReturnType<typeof ownedStickersFromP
   return unique;
 }
 
+async function sticonPackFromPublicMetadata(pack: OwnedEmojiPack): Promise<OwnedEmoji[]> {
+  // Emoji packs expose their contents as an ordered sticon id list, not as
+  // sticker id ranges, so the manifest is the only public source of ids.
+  const response = await fetch(`https://stickershop.line-scdn.net/sticonshop/v1/product/${encodeURIComponent(pack.productId)}/android/meta.json`, {
+    signal: AbortSignal.timeout(10_000),
+    headers: { "accept": "application/json" },
+  });
+  if (!response.ok) return [];
+  return emojiFromPack(pack, sticonIdsFromMeta(await response.json()));
+}
+
+async function listOwnedEmoji(): Promise<OwnedEmoji[]> {
+  if (!client) throw new Error("not authenticated");
+  if (ownedEmojiCache && ownedEmojiCache.expiresAt > Date.now()) return ownedEmojiCache.emoji;
+  const cached = emojiCatalogCache.read();
+  if (cached) {
+    ownedEmojiCache = { expiresAt: Date.now() + 5 * 60_000, emoji: cached };
+    return cached;
+  }
+  const pageSize = 100;
+  const packs: OwnedEmojiPack[] = [];
+  let offset = 0;
+  let total = Number.POSITIVE_INFINITY;
+  try {
+    while (offset < total && offset < 2_000) {
+      const page = await LineJsAdapter.request(client,
+        [
+          [11, 2, "sticonshop"], [8, 3, offset], [8, 4, pageSize],
+          [12, 5, [[11, 1, "th"], [11, 2, "TH"]]],
+        ],
+        "getOwnedProductSummaries", 4, true, "/TSHOP4",
+      ) as unknown;
+      const result = shopResultAs<Record<string, unknown>>("ProductSummaryList", page);
+      const raw = page && typeof page === "object" ? page as Record<string, unknown> : {};
+      const entries = Array.isArray(result.productList) ? result.productList
+        : Array.isArray(raw.productList) ? raw.productList
+        : Array.isArray(raw["1"]) ? raw["1"] as unknown[] : [];
+      packs.push(...ownedEmojiPacksFromSummaries({ productList: entries }));
+      total = Math.max(0, Number(result.totalSize ?? raw.totalSize ?? raw["2"] ?? entries.length));
+      if (!entries.length) break;
+      offset += entries.length;
+    }
+  } catch (error) {
+    // The installed-products endpoint is not available on every desktop
+    // session; the picker degrades to chat history in that case.
+    console.warn("[emoji catalog] full inventory unavailable:", error instanceof Error ? error.message : String(error));
+  }
+  const emoji: OwnedEmoji[] = [];
+  let failure: unknown = null;
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(4, packs.length) }, async () => {
+    while (cursor < packs.length) {
+      const pack = packs[cursor++];
+      try {
+        emoji.push(...await sticonPackFromPublicMetadata(pack));
+      } catch (error) {
+        failure = error;
+        console.warn("[emoji catalog] pack metadata failed:", pack.productId, error instanceof Error ? error.message : String(error));
+      }
+    }
+  }));
+  if (!emoji.length) {
+    if (failure) throw failure; // Don't cache an empty catalogue as success.
+    return [];
+  }
+  const unique = [...new Map(emoji.map((item) => [`${item.productId}:${item.sticonId}`, item])).values()];
+  emojiCatalogCache.write(unique, Date.now() + EMOJI_CACHE_TTL_MS);
+  ownedEmojiCache = { expiresAt: Date.now() + 5 * 60_000, emoji: unique };
+  return unique;
+}
+
 function forgetOwnedSticker(packageId: string, stickerId: string): void {
   if (!/^\d{1,30}$/.test(packageId) || !/^\d{1,30}$/.test(stickerId)) return;
   if (ownedStickerCache) {
@@ -364,6 +440,7 @@ function databasePath() {
 
 ensureDataDir();
 const stickerCatalogCache = new StickerCatalogCache(join(dataPath(), "sticker-catalog-cache.json"));
+const emojiCatalogCache = new EmojiCatalogCache(join(dataPath(), "emoji-catalog-cache.json"));
 const keyring = new LineyKeyring();
 const credentialFallback = new LineyEncryptedFallback(dataPath(), configPath());
 const fallbackMigration = migrateFallbackCredentialToWallet(keyring, credentialFallback);
@@ -6037,6 +6114,13 @@ async function handle(request: any) {
       return;
     }
 
+    if (method === "emoji.catalog") {
+      // Owned LINE Emoji packs, so the picker does not depend on someone
+      // having already sent one in a chat.
+      emit({ id, ok: true, result: await listOwnedEmoji() });
+      return;
+    }
+
     if (method === "emoji.recent") {
       emit({ id, ok: true, result: database.listRecentEmoji(ACCOUNT_ID, Number(request?.params?.limit ?? 72)) });
       return;
@@ -6052,7 +6136,7 @@ async function handle(request: any) {
       const sticonId = String(request?.params?.sticonId ?? "").trim();
       const version = Number(request?.params?.version ?? 1);
       const resourceType = String(request?.params?.resourceType ?? "STATIC").trim().toUpperCase() || "STATIC";
-      if (!chatId || !/^\d{1,30}$/.test(productId) || !/^\d{1,30}$/.test(sticonId)) {
+      if (!chatId || !/^[0-9A-Za-z]{1,32}$/.test(productId) || !/^[0-9A-Za-z]{1,32}$/.test(sticonId)) {
         throw new Error("chatId, productId and sticonId are required");
       }
       if (database.getOutbox(ACCOUNT_ID, localId)) throw new Error("a message with this localId already exists");

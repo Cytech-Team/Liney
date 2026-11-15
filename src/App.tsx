@@ -206,6 +206,12 @@ type ProfileResult = { displayName?: string; mid?: string; pictureStatus?: strin
 type ClientIdentityResult = { displayName?: string; modelName?: string; systemName?: string; platform?: string; channel?: string; device?: string };
 type RecentSticker = { packageId: string; stickerId: string; version: string; option?: string; owned: boolean };
 type RecentEmoji = { productId: string; sticonId: string; version: string; resourceType: string; owned: boolean };
+
+function lineEmojiUrl(emoji: { productId: string; sticonId: string; resourceType?: string }): string {
+  // Animated LINE Emoji ship as a separate `_animation.png` asset.
+  const suffix = emoji.resourceType === "ANIMATION" ? "_animation" : "";
+  return `https://stickershop.line-scdn.net/sticonshop/v1/sticon/${encodeURIComponent(emoji.productId)}/android/${encodeURIComponent(emoji.sticonId)}${suffix}.png`;
+}
 type SyncProgressState = { visible: boolean; phase: "metadata" | "friends" | "chats" | "history" | "complete" | "error"; done: number; total: number; failed: number; error?: string; summary?: { friends?: number; talkChats?: number; openChats?: number; histories?: number; failedHistories?: number; elapsedMs?: number } };
 type ImageGalleryPayload = { title: string; index: number; loop: boolean; items: Array<{ id: string; src: string; time?: string }> };
 
@@ -2861,7 +2867,7 @@ function MainApp() {
     const now = Date.now();
     const chatId = activeChat.id;
     const chatKind = activeChat.kind;
-    const emojiUrl = `https://stickershop.line-scdn.net/sticonshop/v1/sticon/${encodeURIComponent(emoji.productId)}/android/${encodeURIComponent(emoji.sticonId)}.png`;
+    const emojiUrl = lineEmojiUrl(emoji);
     setMessageMap((current) => ({
       ...current,
       [chatId]: [...(current[chatId] ?? []), { id, author: "me", time: formatTime(now), createdTime: now, emojiUrl, status: "sending" }],
@@ -4425,6 +4431,7 @@ function Conversation({
   const [pickerTab, setPickerTab] = useState<"sticker" | "emoji">("sticker");
   const [recentStickers, setRecentStickers] = useState<RecentSticker[]>([]);
   const [recentEmoji, setRecentEmoji] = useState<RecentEmoji[]>([]);
+  const [ownedEmoji, setOwnedEmoji] = useState<RecentEmoji[]>([]);
   const [stickerPickerLoading, setStickerPickerLoading] = useState(false);
   const [selectedStickerPackId, setSelectedStickerPackId] = useState<string | null>(null);
   const [selectedEmojiPackId, setSelectedEmojiPackId] = useState<string | null>(null);
@@ -4573,12 +4580,14 @@ function Conversation({
     let cancelled = false;
     void Promise.allSettled([
       lineyEngine.request<RecentSticker[]>("sticker.catalog", {}, 45_000),
+      lineyEngine.request<RecentEmoji[]>("emoji.catalog", {}, 45_000),
       lineyEngine.request<RecentEmoji[]>("emoji.recent", { limit: 72 }),
     ])
-      .then(([stickers, emoji]) => {
+      .then(([stickers, catalog, emoji]) => {
         if (!cancelled) {
-          // A failure to load Emoji must not hide the owned sticker library.
+          // A failure to load one collection must not hide the others.
           setRecentStickers(stickers.status === "fulfilled" && Array.isArray(stickers.value) ? stickers.value : []);
+          setOwnedEmoji(catalog.status === "fulfilled" && Array.isArray(catalog.value) ? catalog.value : []);
           setRecentEmoji(emoji.status === "fulfilled" && Array.isArray(emoji.value) ? emoji.value : []);
         }
       })
@@ -4600,13 +4609,16 @@ function Conversation({
 
   const emojiPacks = useMemo(() => {
     const grouped = new Map<string, RecentEmoji[]>();
-    for (const emoji of recentEmoji) {
+    // Owned packs first so the picker opens on the account's own emoji, then
+    // anything already seen in chat history that is not owned.
+    for (const emoji of [...ownedEmoji, ...recentEmoji]) {
       const group = grouped.get(emoji.productId) ?? [];
+      if (group.some((item) => item.sticonId === emoji.sticonId)) continue;
       group.push(emoji);
       grouped.set(emoji.productId, group);
     }
     return [...grouped.entries()];
-  }, [recentEmoji]);
+  }, [ownedEmoji, recentEmoji]);
 
   const activeStickerPackId = stickerPacks.some(([id]) => id === selectedStickerPackId)
     ? selectedStickerPackId
@@ -5359,7 +5371,7 @@ function Conversation({
             {!stickerPickerLoading && pickerTab === "sticker" && stickerPacks.length === 0 ? <div className="sticker-picker-empty">{t("ไม่พบสติกเกอร์ที่บัญชีนี้เป็นเจ้าของ")}</div> : null}
             {!stickerPickerLoading && pickerTab === "emoji" && emojiPacks.length === 0 ? <div className="sticker-picker-empty">{t("ยังไม่มี LINE Emoji ในประวัติแชต")}</div> : null}
             {!stickerPickerLoading && pickerTab === "sticker" && selectedStickerPack ? <div className="sticker-chooser"><section className="sticker-pack-page"><div className="sticker-pack-label"><span>{t("แพ็ก #{{id}}", { id: selectedStickerPack[0] })}</span><small>{t("{{count}} ตัว · ของคุณ", { count: selectedStickerPack[1].length })}</small></div><div className="sticker-picker-grid">{selectedStickerPack[1].map((sticker) => { const src = `https://stickershop.line-scdn.net/stickershop/v1/sticker/${encodeURIComponent(sticker.stickerId)}/android/${sticker.option === "A" ? "sticker_animation.png" : "sticker.png"}`; return <button key={`${sticker.packageId}:${sticker.stickerId}`} type="button" title={t("ส่งสติกเกอร์ของคุณ")} onClick={() => { setStickerPickerOpen(false); void onSendSticker(sticker); }}><StickerImage src={src} className="sticker-picker-image" fallback={<span className="sticker-picker-unavailable">{t("ไม่พร้อม")}</span>} /></button>; })}</div></section><div className="sticker-pack-tabs" role="tablist" aria-label={t("แพ็กสติกเกอร์")}>{stickerPacks.map(([packageId, stickers]) => { const first = stickers[0]; const fallback = first ? <StickerImage src={`https://stickershop.line-scdn.net/stickershop/v1/sticker/${encodeURIComponent(first.stickerId)}/android/${first.option === "A" ? "sticker_animation.png" : "sticker.png"}`} className="sticker-pack-tab-image" fallback={<span className="sticker-picker-unavailable">{t("ไม่พร้อม")}</span>} /> : <span className="sticker-picker-unavailable">{t("ไม่พร้อม")}</span>; return <button key={packageId} className={packageId === selectedStickerPack[0] ? "active" : ""} role="tab" aria-selected={packageId === selectedStickerPack[0]} type="button" title={`แพ็ก #${packageId}`} onClick={() => setSelectedStickerPackId(packageId)}><StickerPackCover packageId={packageId} fallback={fallback} /></button>; })}</div></div> : null}
-            {!stickerPickerLoading && pickerTab === "emoji" && selectedEmojiPack ? <div className="sticker-chooser"><section className="sticker-pack-page"><div className="sticker-pack-label"><span>LINE Emoji #{selectedEmojiPack[0]}</span><small>{selectedEmojiPack[1].some((item) => item.owned) ? t("ของคุณ") : t("พบในแชต")}</small></div><div className="sticker-picker-grid emoji-picker-grid">{selectedEmojiPack[1].map((item) => { const src = `https://stickershop.line-scdn.net/sticonshop/v1/sticon/${encodeURIComponent(item.productId)}/android/${encodeURIComponent(item.sticonId)}.png`; return <button key={`${item.productId}:${item.sticonId}`} type="button" title={`ส่ง LINE Emoji · ${item.owned ? t("ของคุณ") : t("พบในแชต")}`} onClick={() => { setStickerPickerOpen(false); void onSendEmoji(item); }}><img src={src} alt="LINE Emoji" loading="lazy" referrerPolicy="no-referrer" /></button>; })}</div></section><div className="sticker-pack-tabs" role="tablist" aria-label={t("แพ็ก LINE Emoji")}>{emojiPacks.map(([productId, items]) => { const first = items[0]; const src = first ? `https://stickershop.line-scdn.net/sticonshop/v1/sticon/${encodeURIComponent(first.productId)}/android/${encodeURIComponent(first.sticonId)}.png` : ""; return <button key={productId} className={productId === selectedEmojiPack[0] ? "active" : ""} role="tab" aria-selected={productId === selectedEmojiPack[0]} type="button" title={`LINE Emoji #${productId}`} onClick={() => setSelectedEmojiPackId(productId)}>{src ? <img src={src} alt="LINE Emoji" loading="lazy" referrerPolicy="no-referrer" /> : null}</button>; })}</div></div> : null}
+            {!stickerPickerLoading && pickerTab === "emoji" && selectedEmojiPack ? <div className="sticker-chooser"><section className="sticker-pack-page"><div className="sticker-pack-label"><span>LINE Emoji #{selectedEmojiPack[0]}</span><small>{selectedEmojiPack[1].some((item) => item.owned) ? t("ของคุณ") : t("พบในแชต")}</small></div><div className="sticker-picker-grid emoji-picker-grid">{selectedEmojiPack[1].map((item) => { const src = lineEmojiUrl(item); return <button key={`${item.productId}:${item.sticonId}`} type="button" title={`ส่ง LINE Emoji · ${item.owned ? t("ของคุณ") : t("พบในแชต")}`} onClick={() => { setStickerPickerOpen(false); void onSendEmoji(item); }}><img src={src} alt="LINE Emoji" loading="lazy" referrerPolicy="no-referrer" /></button>; })}</div></section><div className="sticker-pack-tabs" role="tablist" aria-label={t("แพ็ก LINE Emoji")}>{emojiPacks.map(([productId, items]) => { const first = items[0]; const src = first ? lineEmojiUrl(first) : ""; return <button key={productId} className={productId === selectedEmojiPack[0] ? "active" : ""} role="tab" aria-selected={productId === selectedEmojiPack[0]} type="button" title={`LINE Emoji #${productId}`} onClick={() => setSelectedEmojiPackId(productId)}>{src ? <img src={src} alt="LINE Emoji" loading="lazy" referrerPolicy="no-referrer" /> : null}</button>; })}</div></div> : null}
           </div>
         ) : null}
       </div>

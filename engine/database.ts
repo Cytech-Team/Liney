@@ -1249,7 +1249,7 @@ export class LineyDatabase {
           const resource = value as Record<string, unknown>;
           const productId = String(resource.productId ?? "").trim();
           const sticonId = String(resource.sticonId ?? "").trim();
-          if (!/^\d{1,30}$/.test(productId) || !/^\d{1,30}$/.test(sticonId)) continue;
+          if (!/^[0-9A-Za-z]{1,32}$/.test(productId) || !/^[0-9A-Za-z]{1,32}$/.test(sticonId)) continue;
           const key = `${productId}:${sticonId}`;
           if (seen.has(key)) continue;
           seen.add(key);
