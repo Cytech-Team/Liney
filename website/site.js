@@ -273,15 +273,21 @@
       if (header && header.classList) header.classList.toggle('is-scrolled', window.scrollY > 12);
       ticking = false;
     }
-    window.addEventListener('scroll', function () {
-      if (ticking) return;
-      ticking = true;
-      window.requestAnimationFrame(updateScrollEffects);
-    }, { passive: true });
+    if (typeof window.addEventListener === 'function') {
+      window.addEventListener('scroll', function () {
+        if (ticking) return;
+        ticking = true;
+        if (typeof window.requestAnimationFrame === 'function') {
+          window.requestAnimationFrame(updateScrollEffects);
+        } else {
+          updateScrollEffects();
+        }
+      }, { passive: true });
+    }
     updateScrollEffects();
 
     var showcase = document.querySelector('.showcase');
-    if (showcase && !reduceMotion && window.matchMedia('(pointer: fine)').matches) {
+    if (showcase && !reduceMotion && typeof window.matchMedia === 'function' && window.matchMedia('(pointer: fine)').matches) {
       showcase.addEventListener('pointermove', function (event) {
         var rect = showcase.getBoundingClientRect();
         var x = (event.clientX - rect.left) / rect.width - .5;
