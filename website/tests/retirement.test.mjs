@@ -20,8 +20,10 @@ test("legacy Web App links redirect to the clean Desktop download URL", () => {
   for (const route of ["/app", "/app/", "/app.html", "/web", "/compatibility", "/compatibility.html"]) {
     assert.ok(redirects.includes(route + " /download 302"), route + " must redirect to /download");
   }
-  assert.match(redirects, /^\\/download\\/ \\/download 301$/m);
-  assert.doesNotMatch(redirects, /^\\/download\\/? \\/download\\.html 200$/m,
+  const redirectLines = redirects.split("\n").map((line) => line.trim());
+  assert.ok(redirectLines.includes("/download/ /download 301"), "trailing slash should normalize to /download");
+  assert.ok(!redirectLines.includes("/download /download.html 200"));
+  assert.ok(!redirectLines.includes("/download/ /download.html 200"),
     "do not rewrite /download to download.html: Pages clean URLs would redirect it back");
 });
 test("former PWA service worker is a retirement shim, not a cache or LINE client", () => {
