@@ -41,6 +41,9 @@ jobs:
           test -s dist/404.html
           node --test tests/theme.test.cjs tests/build-cache.test.mjs tests/navigation.test.mjs tests/retirement.test.mjs
 
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
