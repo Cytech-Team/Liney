@@ -231,7 +231,9 @@
     var progress = document.createElement('div');
     progress.className = 'motion-progress';
     progress.setAttribute('aria-hidden', 'true');
-    document.body.appendChild(progress);
+    if (document.body && typeof document.body.appendChild === 'function') {
+      document.body.appendChild(progress);
+    }
 
     var revealTargets = document.querySelectorAll(
       '.section-heading, .home-teaser, .technology-preview-visual, .home-roadmap-strip, ' +
@@ -262,10 +264,13 @@
 
     var ticking = false;
     function updateScrollEffects() {
-      var scrollable = document.documentElement.scrollHeight - window.innerHeight;
+      var root = document.documentElement;
+      var scrollable = root ? root.scrollHeight - window.innerHeight : 0;
       var ratio = scrollable > 0 ? window.scrollY / scrollable : 0;
-      progress.style.transform = 'scaleX(' + Math.max(0, Math.min(1, ratio)) + ')';
-      if (header) header.classList.toggle('is-scrolled', window.scrollY > 12);
+      if (progress.style) {
+        progress.style.transform = 'scaleX(' + Math.max(0, Math.min(1, ratio)) + ')';
+      }
+      if (header && header.classList) header.classList.toggle('is-scrolled', window.scrollY > 12);
       ticking = false;
     }
     window.addEventListener('scroll', function () {
