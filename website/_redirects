@@ -1,10 +1,10 @@
-# The Liney Web App has been discontinued. Keep the desktop download only.
-/app /download.html 302
-/app/ /download.html 302
-/app.html /download.html 302
-/web /download.html 302
-/compatibility /download.html 302
-/compatibility.html /download.html 302
-/liney-manifest.webmanifest /download.html 302
-/download /download.html 200
-/download/ /download.html 200
+# Legacy browser app paths now point to the desktop download guide.
+/app /download 302
+/app/ /download 302
+/app.html /download 302
+/web /download 302
+/compatibility /download 302
+/compatibility.html /download 302
+/liney-manifest.webmanifest /download 302
+# Cloudflare Pages serves download.html at its clean URL /download.
+/download/ /download 301
