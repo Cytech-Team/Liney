@@ -120,9 +120,11 @@ jobs:
               --head "$branch" \
               --title "deps(linejs): update to v${VERSION}" \
               --body-file /tmp/linejs-upstream-review.md; then
-              echo "::error::GitHub Actions cannot create PRs. Enable Actions PR creation in repository settings. The update branch was pushed."
-              echo "Open update PR manually: https://github.com/${GITHUB_REPOSITORY}/compare/${BASE_BRANCH}...deps/linejs-v${VERSION}?expand=1" >> "$GITHUB_STEP_SUMMARY"
-              exit 1
+              echo "::warning::GitHub Actions is not permitted to create pull requests. The update branch was pushed."
+              echo "## LINEJS update branch is ready" >> "$GITHUB_STEP_SUMMARY"
+              echo "GitHub Actions cannot create the PR with current repository settings." >> "$GITHUB_STEP_SUMMARY"
+              echo "Create or review it here: https://github.com/${GITHUB_REPOSITORY}/compare/${BASE_BRANCH}...deps/linejs-v${VERSION}?expand=1" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
             fi
           else
             gh pr edit "$pr" --body-file /tmp/linejs-upstream-review.md || echo "::warning::Could not refresh existing update PR."
