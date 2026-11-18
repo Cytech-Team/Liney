@@ -31,8 +31,14 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: test "${GITHUB_REF_NAME#v}" = "$(node -p 'require("./package.json").version')"
-      - name: Build engine and desktop packages
-        run: npm run electron:build
+      - name: Build engine and desktop packages (never publish during packaging)
+        env:
+          ELECTRON_BUILDER_ALLOW_UNRESOLVED_DEPENDENCIES: 'true'
+        run: |
+          set -euo pipefail
+          # Prevent electron-builder from invoking the GitHub publisher while producing
+          # local CI artifacts. The dedicated publish job uploads assets after validation.
+          npx electron-builder --linux AppImage deb rpm --publish never
       - name: Verify and smoke-test AppImage, DEB and RPM
         run: bash scripts/verify-linux-packages.sh release-electron
       - name: Upload desktop package artifacts
