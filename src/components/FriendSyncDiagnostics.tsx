@@ -32,9 +32,9 @@ const issueNames: Record<string, string> = {
 };
 
 export function FriendSyncDiagnostics() {
-  const { t, english } = useAppTranslation();
-  const fmt = (n: number) => n.toLocaleString(english ? "en-US" : "th-TH");
-  const localeDate = (ms: number) => ms ? new Date(ms).toLocaleString(english ? "en-US" : "th-TH") : "—";
+  const { t, td, locale } = useAppTranslation();
+  const fmt = (n: number) => n.toLocaleString(locale);
+  const localeDate = (ms: number) => ms ? new Date(ms).toLocaleString(locale) : "—";
   const [report, setReport] = useState<FriendSyncDiagnosticsState | null>(null);
   const [busy, setBusy] = useState<"" | "scan" | "retry">("");
   const [error, setError] = useState("");
@@ -139,7 +139,7 @@ export function FriendSyncDiagnostics() {
       <small>{t("ตัวเลขนี้นับจำนวนคำขอที่ผิดพลาด ไม่ใช่จำนวนเพื่อนที่ตกหล่น")} {report?.unresolved === 0 ? t("โปรไฟล์เพื่อนครบแล้ว") : ""}</small>
     </div>}
 
-    {error && <div className="liney-friend-diag-error" role="alert"><AlertCircle size={16}/>{error}</div>}
+    {error && <div className="liney-friend-diag-error" role="alert"><AlertCircle size={16}/>{td(error)}</div>}
 
     <div className="liney-friend-diag-actions">
       <button type="button" className="liney-friend-diag-button secondary" disabled={pending} onClick={() => void run("scan")}>

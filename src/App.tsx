@@ -67,7 +67,7 @@ import { FriendSyncDiagnostics } from "./components/FriendSyncDiagnostics";
 import { LineChatManageModal } from "./components/LineChatManageModal";
 import { ImageViewerOverlay } from "./components/ImageViewerOverlay";
 import { EngineRequestError, lineyEngine } from "./lib/engine";
-import { LanguageProvider, useAppTranslation } from "./lib/i18n";
+import { type AppLanguage, getLocaleTag, LanguageProvider, translateDisplayText, translateText, useAppTranslation } from "./lib/i18n";
 import { callMessagePreview, liveMessagePreview, notificationSenderName, officialLineMessageUrl } from "./lib/message-presentation";
 import { notificationAvatarUrl, prepareNotificationArtwork } from "./lib/notification-avatar";
 import { MarketingSite, type MarketingView } from "./marketing/MarketingSite";
@@ -248,7 +248,7 @@ function optimisticReactions(reactions: Message["reactions"], type: number): Mes
   return next.filter((item) => item.count > 0).sort((left, right) => left.type - right.type);
 }
 type AppSettings = {
-  language: "th" | "en";
+  language: AppLanguage;
   startup: boolean;
   tray: boolean;
   desktopNotifications: boolean;
@@ -304,8 +304,24 @@ const MAX_ACTIVE_MESSAGES_IN_MEMORY = 120;
 const MAX_BACKGROUND_MESSAGES_IN_MEMORY = 24;
 const MAX_IMAGE_PREVIEWS_PER_REFRESH = 4;
 
+function detectPreferredLanguage(): AppLanguage {
+  if (typeof navigator === "undefined") return "th";
+  const lang = navigator.language.toLowerCase();
+  if (lang.startsWith("zh-tw") || lang.startsWith("zh-hant") || lang.startsWith("zh-hk") || lang.startsWith("zh-mo")) {
+    return "zh-TW";
+  }
+  if (lang.startsWith("th")) {
+    return "th";
+  }
+  return "en";
+}
+
+function isSupportedLanguage(value: unknown): value is AppLanguage {
+  return value === "th" || value === "en" || value === "zh-TW";
+}
+
 function readSettings(): AppSettings {
-  const preferredLanguage: AppSettings["language"] = typeof navigator !== "undefined" && !navigator.language.toLowerCase().startsWith("th") ? "en" : "th";
+  const preferredLanguage = detectPreferredLanguage();
   try {
     const raw = localStorage.getItem("liney.settings");
     const parsed = raw ? JSON.parse(raw) as Partial<AppSettings> : {};
@@ -321,7 +337,8 @@ function readSettings(): AppSettings {
     // Migrate those installations to OFF, and require a fresh explicit opt-in.
     parsed.startup = localStorage.getItem(AUTOSTART_OPT_IN_KEY) === "1"
       && parsed.startup === true;
-    return { ...defaultSettings, ...parsed, language: parsed.language ?? preferredLanguage };
+    const savedLanguage = isSupportedLanguage(parsed.language) ? parsed.language : preferredLanguage;
+    return { ...defaultSettings, ...parsed, language: savedLanguage };
   } catch {
     return { ...defaultSettings, language: preferredLanguage };
   }
@@ -902,10 +919,10 @@ function MainApp() {
   useEffect(() => {
     if (!lineyEngine.isNative) return;
     void invoke("set_autostart", { enabled: settings.startup }).catch((error) => {
-      setAuthError(`ตั้งค่าเปิดพร้อมระบบไม่สำเร็จ: ${String(error)}`);
+      setAuthError(translateText(settingsRef.current.language, "ตั้งค่าเปิดพร้อมระบบไม่สำเร็จ: {{reason}}", { reason: String(error) }));
     });
     void invoke("set_close_to_tray", { enabled: settings.tray }).catch((error) => {
-      setAuthError(`ตั้งค่า System Tray ไม่สำเร็จ: ${String(error)}`);
+      setAuthError(translateText(settingsRef.current.language, "ตั้งค่า System Tray ไม่สำเร็จ: {{reason}}", { reason: String(error) }));
     });
   }, [settings.startup, settings.tray]);
 
@@ -1169,7 +1186,7 @@ function MainApp() {
         }
       }
       if (event.type === "sync.start") {
-        setSyncStatus("กำลังเตรียมข้อมูล LINE…");
+        setSyncStatus(translateText(settingsRef.current.language, "กำลังเตรียมข้อมูล LINE…"));
         setSyncProgress({ visible: true, phase: "metadata", done: 0, total: 0, failed: 0 });
       }
       if (event.type === "sync.progress") {
@@ -1177,10 +1194,12 @@ function MainApp() {
         const done = Number(event.done ?? 0);
         const total = Number(event.total ?? 0);
         const failed = Number(event.failed ?? 0);
+        const lang = settingsRef.current.language;
+        const locale = getLocaleTag(lang);
         setSyncProgress((current) => ({ ...current, visible: true, phase, done, total, failed }));
-        if (phase === "friends") setSyncStatus(`ซิงก์เพื่อน ${done.toLocaleString("th-TH")} คน`);
-        else if (phase === "chats") setSyncStatus(`ซิงก์รายการแชต ${done.toLocaleString("th-TH")} ห้อง`);
-        else if (phase === "history") setSyncStatus(`ซิงก์ประวัติห้อง ${done}/${total}`);
+        if (phase === "friends") setSyncStatus(translateText(lang, "ซิงก์เพื่อน {{count}} คน", { count: done.toLocaleString(locale) }));
+        else if (phase === "chats") setSyncStatus(translateText(lang, "ซิงก์รายการแชต {{count}} ห้อง", { count: done.toLocaleString(locale) }));
+        else if (phase === "history") setSyncStatus(translateText(lang, "ซิงก์ประวัติห้อง {{done}}/{{total}}", { done, total }));
       }
       if (event.type === "sync.ready") {
         const summary = event.summary && typeof event.summary === "object" ? event.summary as SyncProgressState["summary"] : undefined;
@@ -1190,12 +1209,13 @@ function MainApp() {
         void loadCallHistory();
       }
       if (event.type === "sync.error") {
-        setSyncStatus("ซิงก์บางส่วนไม่สำเร็จ");
+        const lang = settingsRef.current.language;
+        setSyncStatus(translateText(lang, "ซิงก์บางส่วนไม่สำเร็จ"));
         setSyncProgress((current) => ({
           ...current,
           visible: true,
           phase: "error",
-          error: String(event.error ?? "ไม่ทราบสาเหตุ"),
+          error: String(event.error ?? translateText(lang, "ไม่ทราบสาเหตุ")),
         }));
       }
       if (event.type === "media.progress" && typeof event.jobId === "string") {
@@ -1266,7 +1286,7 @@ function MainApp() {
         setAuthBusy(false);
         setAuthenticated(false);
         setAuthOpen(true);
-        setAuthError("Session เดิมใช้ต่อไม่ได้ กรุณาเข้าสู่ระบบด้วย QR หรือ Email/Password ใหม่");
+        setAuthError(translateText(settingsRef.current.language, "Session เดิมใช้ต่อไม่ได้ กรุณาเข้าสู่ระบบด้วย QR หรือ Email/Password ใหม่"));
       }
       if (event.type === "auth.logged_out") {
         authenticatedRef.current = false;
@@ -1478,6 +1498,7 @@ function MainApp() {
                   subtitle: preview,
                   time: formatListTime(raw.createdTime || Date.now()),
                   lastMessageTime: Math.max(chat.lastMessageTime ?? 0, raw.createdTime || Date.now()),
+                  historyState: "available",
                   unread: raw.isMine
                     ? chat.unread
                     : systemNotificationTracked
@@ -1493,6 +1514,7 @@ function MainApp() {
                   subtitle: preview,
                   time: formatListTime(raw.createdTime || Date.now()),
                   lastMessageTime: raw.createdTime || Date.now(),
+                  historyState: "available",
                   unread: raw.isMine ? undefined : 1,
                 }];
               }
@@ -1633,7 +1655,9 @@ function MainApp() {
               notificationDedupRef.current.set(notificationKey, now);
               void notifyDesktop(
                 notificationSenderName(raw, knownChat),
-                settingsRef.current.notificationPreview ? (raw.text || "มีสื่อใหม่") : "มีข้อความใหม่",
+                settingsRef.current.notificationPreview
+                  ? translateDisplayText(settingsRef.current.language, raw.text || "มีสื่อใหม่")
+                  : translateText(settingsRef.current.language, "มีข้อความใหม่"),
                 settingsRef.current.desktopNotifications,
                 settingsRef.current.notificationSound,
                 { chatId, messageId: message.id },
@@ -1683,8 +1707,8 @@ function MainApp() {
           const callerName = knownChat?.name?.trim() || "LINE User";
           if (settingsRef.current.callNotifications && lineyEngine.isNative) {
             void invoke("notify_call", {
-              title: "สายเรียกเข้าจาก " + callerName,
-              body: "แตะเพื่อเปิด Liney และรับสาย",
+              title: translateText(settingsRef.current.language, "สายเรียกเข้าจาก {{name}}", { name: callerName }),
+              body: translateText(settingsRef.current.language, "แตะเพื่อเปิด Liney และรับสาย"),
               peer,
               callId: incomingId,
             }).catch(() => undefined);
@@ -1704,7 +1728,7 @@ function MainApp() {
         if (event.reason === "video-failed") {
           setCallVideoEnabled(false);
           setCallScreenSharing(false);
-          setCallError("ส่งภาพวิดีโอไม่สำเร็จ · ตรวจกล้องหรือการแชร์หน้าจอแล้วลองอีกครั้ง");
+          setCallError(translateText(settingsRef.current.language, "ส่งภาพวิดีโอไม่สำเร็จ · ตรวจกล้องหรือการแชร์หน้าจอแล้วลองอีกครั้ง"));
         }
       }
       if (event.type === "event.call.videoFrame") {
@@ -1720,15 +1744,18 @@ function MainApp() {
         setCallOpen(true);
       }
       if (event.type === "event.call.error") {
-        const message = String(event.error ?? "สายเสียงขัดข้อง");
+        const lang = settingsRef.current.language;
+        const message = String(event.error ?? translateText(lang, "สายเสียงขัดข้อง"));
         if (message.startsWith("remote-video:")) {
-          setCallError("รับภาพวิดีโอจากอีกฝั่งไม่สำเร็จ · " + message.slice("remote-video:".length).trim());
+          const reason = translateDisplayText(lang, message.slice("remote-video:".length).trim());
+          setCallError(translateText(lang, "รับภาพวิดีโอจากอีกฝั่งไม่สำเร็จ · {{reason}}", { reason }));
         } else if (message.startsWith("media-capture:")) {
           setCallVideoEnabled(false);
           setCallScreenSharing(false);
-          setCallError("สื่อภาพหยุดทำงาน · " + message.slice("media-capture:".length).trim());
+          const reason = translateDisplayText(lang, message.slice("media-capture:".length).trim());
+          setCallError(translateText(lang, "สื่อภาพหยุดทำงาน · {{reason}}", { reason }));
         } else {
-          setCallError(message);
+          setCallError(translateDisplayText(lang, message));
         }
       }
       if (event.type === "event.call.cancel" || event.type === "event.call.ended") {
@@ -2199,6 +2226,14 @@ function MainApp() {
             target: Number(chat.lastMessageTime),
             attempts: 6,
           });
+          if ((messageMapRef.current[chat.id] ?? []).length === 0) {
+            setLiveChats((current) => {
+              if (!current) return current;
+              const next = current.map((item) => item.id === chat.id ? { ...item, historyState: "unavailable" as const } : item);
+              liveChatsRef.current = next;
+              return next;
+            });
+          }
         }
         const baseMapped = sorted.map<Message>((item) => ({
           id: item.id,
@@ -2476,12 +2511,13 @@ function MainApp() {
       ? current
       : (mapped[0]?.id ?? ""));
     if (!talkSucceeded && !squareSucceeded) {
-      const reason = talkResult.status === "rejected" ? String(talkResult.reason) : "ผลลัพธ์จาก LINE ไม่ถูกต้อง";
-      setAuthError(`โหลดรายการแชตไม่สำเร็จ: ${reason}`);
+      const lang = settingsRef.current.language;
+      const reason = talkResult.status === "rejected" ? String(talkResult.reason) : translateText(lang, "ผลลัพธ์จาก LINE ไม่ถูกต้อง");
+      setAuthError(translateText(lang, "โหลดรายการแชตไม่สำเร็จ: {{reason}}", { reason }));
     } else if (!talkSucceeded) {
-      setAuthError("แชตปกติโหลดไม่สำเร็จในรอบนี้ จึงคงรายการแชตก่อนหน้าไว้");
+      setAuthError(translateText(settingsRef.current.language, "แชตปกติโหลดไม่สำเร็จในรอบนี้ จึงคงรายการแชตก่อนหน้าไว้"));
     } else if (!squareSucceeded) {
-      setAuthError("แชตปกติใช้ได้ แต่ OpenChat โหลดไม่สำเร็จในรอบนี้");
+      setAuthError(translateText(settingsRef.current.language, "แชตปกติใช้ได้ แต่ OpenChat โหลดไม่สำเร็จในรอบนี้"));
     }
   }
 
@@ -2496,7 +2532,7 @@ function MainApp() {
       setCallHistory((current) => current ?? []);
       if (authenticatedRef.current) {
         const message = error instanceof Error ? error.message : String(error);
-        setAuthError(`โหลดประวัติการโทรไม่สำเร็จ: ${message}`);
+        setAuthError(translateText(settingsRef.current.language, "โหลดประวัติการโทรไม่สำเร็จ: {{reason}}", { reason: message }));
       }
     }
   }
@@ -2526,15 +2562,24 @@ function MainApp() {
         window.setTimeout(() => { if (liveFriendsLoadGenerationRef.current === requestGeneration) void loadLiveFriends(false); }, 1_200);
         return;
       }
-      setAuthError(`โหลดรายชื่อเพื่อนไม่สำเร็จ: ${message}`);
+      setAuthError(translateText(settingsRef.current.language, "โหลดรายชื่อเพื่อนไม่สำเร็จ: {{reason}}", { reason: message }));
     }
   }
 
   function toggleLocalPin(chatId: string) {
+    const baseList = usesEngineRuntime ? (liveChats ?? []) : seedChats;
+    const remotePinned = Boolean(baseList.find((chat) => chat.id === chatId)?.pinned);
     setLocalPins((current) => {
       const next = { ...current };
-      if (next[chatId]) delete next[chatId];
-      else next[chatId] = Date.now();
+      const override = next[chatId];
+      const currentlyPinned = override === undefined ? remotePinned : override > 0;
+      if (currentlyPinned) {
+        if (remotePinned) next[chatId] = -1;
+        else delete next[chatId];
+      } else {
+        if (remotePinned) delete next[chatId];
+        else next[chatId] = Date.now();
+      }
       return next;
     });
   }
@@ -2619,7 +2664,7 @@ function MainApp() {
 
   async function createGroupChat(name: string, memberMids: string[]): Promise<Chat> {
     const result = await lineyEngine.request<LiveChatResult>("chat.create_group", { name, memberMids }, 60_000);
-    if (!result?.id) throw new Error("LINE ไม่ส่งรหัสกลุ่มกลับมา");
+    if (!result?.id) throw new Error(translateText(settingsRef.current.language, "LINE ไม่ส่งรหัสกลุ่มกลับมา"));
     const group = mapLiveChatResult({ ...result, kind: "group" }, liveChatsRef.current?.length ?? 0);
     setLiveChats((current) => {
       const existing = current ?? [];
@@ -2639,7 +2684,7 @@ function MainApp() {
 
   async function createOpenChatRoom(name: string, description: string, searchable: boolean): Promise<Chat> {
     const result = await lineyEngine.request<LiveChatResult>("openchat.create", { name, description, searchable }, 60_000);
-    if (!result?.id) throw new Error("LINE ไม่ส่งรหัส OpenChat กลับมา");
+    if (!result?.id) throw new Error(translateText(settingsRef.current.language, "LINE ไม่ส่งรหัส OpenChat กลับมา"));
     const room = mapLiveChatResult({ ...result, kind: "openchat" }, liveChatsRef.current?.length ?? 0);
     setLiveChats((current) => {
       const existing = current ?? [];
@@ -2695,7 +2740,7 @@ function MainApp() {
     setAuthBusy(true);
     void lineyEngine.request<{ keychainImported?: boolean; generations?: number }>("auth.e2ee.qr_import", {}, 180_000)
       .then((result) => {
-        if (!result?.keychainImported) throw new Error("LINE ไม่ได้ยืนยันการนำเข้า keychain");
+        if (!result?.keychainImported) throw new Error(translateText(settingsRef.current.language, "LINE ไม่ได้ยืนยันการนำเข้า keychain"));
         setKeyImportResult({ generations: Math.max(1, Number(result.generations ?? 1)) });
         setQrUrl("");
         setPin("");
@@ -2714,7 +2759,7 @@ function MainApp() {
     const email = authEmail.trim();
     const password = authPassword;
     if (!email || !password) {
-      setAuthError("กรุณากรอก Email และ Password ให้ครบ");
+      setAuthError(translateText(settingsRef.current.language, "กรุณากรอก Email และ Password ให้ครบ"));
       return;
     }
     setAuthOpen(true);
@@ -2916,12 +2961,12 @@ function MainApp() {
       if (!["https:", "http:", "line:", "mailto:", "tel:"].includes(url.protocol)) throw new Error("unsupported link protocol");
       if (lineyEngine.isNative) {
         void invoke("open_external_url", { url: url.toString() })
-          .catch((error) => setAuthError(`เปิดลิงก์ไม่ได้: ${error instanceof Error ? error.message : String(error)}`));
+          .catch((error) => setAuthError(translateText(settingsRef.current.language, "เปิดลิงก์ไม่ได้: {{reason}}", { reason: error instanceof Error ? error.message : String(error) })));
       } else {
         window.open(url.toString(), "_blank", "noopener,noreferrer");
       }
     } catch {
-      setAuthError("ลิงก์ใน Flex Message ไม่ปลอดภัยหรือไม่ถูกต้อง");
+      setAuthError(translateText(settingsRef.current.language, "ลิงก์ใน Flex Message ไม่ปลอดภัยหรือไม่ถูกต้อง"));
     }
   }
 
@@ -2930,7 +2975,7 @@ function MainApp() {
     const url = message.officialClientUrl || officialLineMessageUrl(activeChat.id, message.id);
     if (lineyEngine.isNative) {
       void invoke("open_external_url", { url }).catch((error) => {
-        setAuthError(`เปิดข้อความใน LINE ทางการไม่ได้: ${error instanceof Error ? error.message : String(error)}`);
+        setAuthError(translateText(settingsRef.current.language, "เปิดข้อความใน LINE ทางการไม่ได้: {{reason}}", { reason: error instanceof Error ? error.message : String(error) }));
       });
       return;
     }
@@ -3002,7 +3047,7 @@ function MainApp() {
 
   async function deleteMessageForMe(message: Message) {
     if (!authenticated || activeChat.id === "__liney__") return;
-    if (!window.confirm("ลบข้อความนี้เฉพาะคุณหรือไม่\nข้อความจะยังอยู่ใน LINE ของคนอื่น")) return;
+    if (!window.confirm(translateText(settingsRef.current.language, "ลบข้อความนี้เฉพาะคุณหรือไม่\nข้อความจะยังอยู่ใน LINE ของคนอื่น"))) return;
     const chatId = activeChat.id;
     const kind = activeChat.kind === "openchat" ? "openchat" : "talk";
     try {
@@ -3018,7 +3063,7 @@ function MainApp() {
 
   async function unsendMessage(message: Message) {
     if (!authenticated || activeChat.id === "__liney__" || message.author !== "me" || message.unsent) return;
-    if (!window.confirm("ยกเลิกข้อความนี้สำหรับทุกคนหรือไม่")) return;
+    if (!window.confirm(translateText(settingsRef.current.language, "ยกเลิกข้อความนี้สำหรับทุกคนหรือไม่"))) return;
     const chatId = activeChat.id;
     const kind = activeChat.kind === "openchat" ? "openchat" : "talk";
     try {
@@ -3040,18 +3085,18 @@ function MainApp() {
     if (activeChat.kind === "openchat" && replyTarget) {
       // LINEJS documents that OpenChat media is created by OBS reqseq mode,
       // which has no relatedMessageId slot. Do not silently drop the reply.
-      setAuthError("OpenChat ยังตอบกลับด้วยรูป/วิดีโอ/ไฟล์ไม่ได้ผ่าน LINE protocol ตอนนี้ — ยกเลิกการตอบกลับก่อนส่งสื่อ");
+      setAuthError(translateText(settingsRef.current.language, "OpenChat ยังตอบกลับด้วยรูป/วิดีโอ/ไฟล์ไม่ได้ผ่าน LINE protocol ตอนนี้ — ยกเลิกการตอบกลับก่อนส่งสื่อ"));
       return;
     }
     const filePath = selectedPath || (file as (File & { path?: string }) | null)?.path;
     const filename = file?.name || selectedPath?.split(/[\\/]/).at(-1) || defaultMediaFilename(file?.type);
     const mime = file?.type || mimeFromFilename(filename);
     if (file && file.size > 25 * 1024 * 1024) {
-      setAuthError("ไฟล์ใหญ่เกิน 25 MB");
+      setAuthError(translateText(settingsRef.current.language, "ไฟล์ใหญ่เกิน 25 MB"));
       return;
     }
     if (!file && !filePath) {
-      setAuthError("ไม่พบไฟล์รูปภาพ");
+      setAuthError(translateText(settingsRef.current.language, "ไม่พบไฟล์รูปภาพ"));
       return;
     }
     const id = crypto.randomUUID();
@@ -3120,7 +3165,7 @@ function MainApp() {
     try {
       const result = await invoke<NativeClipboardImageResult>("read_clipboard_image");
       if (!result?.base64) {
-        if (showError) setAuthError("ไม่พบรูปภาพใน clipboard");
+        if (showError) setAuthError(translateText(settingsRef.current.language, "ไม่พบรูปภาพใน clipboard"));
         return;
       }
       const binary = atob(result.base64);
@@ -3193,7 +3238,7 @@ function MainApp() {
     if (!callAvailable || activeChat.kind !== "dm") {
       setCallPeer(activeChat.id);
       setCallState("failed");
-      setCallError(callReason || "สายเสียง 1:1 ยังไม่พร้อมบนระบบนี้");
+      setCallError(callReason || translateText(settingsRef.current.language, "สายเสียง 1:1 ยังไม่พร้อมบนระบบนี้"));
       setCallOpen(true);
       return;
     }
@@ -3218,7 +3263,7 @@ function MainApp() {
       setCallVideoCapable(Boolean(result?.videoCapable));
       setCallState(result?.state ?? "in-call");
       if (kind === "VIDEO" && !result?.videoCapable) {
-        setCallError("LINE ยังไม่ได้เปิดช่องวิดีโอสำหรับสายนี้ · ใช้เสียงได้ แต่เปิดกล้องหรือแชร์จอไม่ได้");
+        setCallError(translateText(settingsRef.current.language, "LINE ยังไม่ได้เปิดช่องวิดีโอสำหรับสายนี้ · ใช้เสียงได้ แต่เปิดกล้องหรือแชร์จอไม่ได้"));
       }
     } catch (error) {
       setCallState("failed");
@@ -3243,7 +3288,7 @@ function MainApp() {
       setCallScreenSharing(false);
       setCallState(result?.state ?? "in-call");
       if (mode === "VIDEO" && !result?.videoCapable) {
-        setCallError("LINE ยังไม่ได้เปิดช่องวิดีโอสำหรับสายนี้ · ใช้เสียงได้ แต่เปิดกล้องหรือแชร์จอไม่ได้");
+        setCallError(translateText(settingsRef.current.language, "LINE ยังไม่ได้เปิดช่องวิดีโอสำหรับสายนี้ · ใช้เสียงได้ แต่เปิดกล้องหรือแชร์จอไม่ได้"));
       }
     } catch (error) {
       setCallState("failed");
@@ -3253,6 +3298,7 @@ function MainApp() {
 
   async function toggleCallVideo() {
     const next = !callVideoEnabled;
+    const lang = settingsRef.current.language;
     try {
       const result = await lineyEngine.request<{
         enabled?: boolean;
@@ -3272,22 +3318,26 @@ function MainApp() {
         setCallScreenSharing(false);
         setCallError("");
       } else if (next && result?.reason === "no-camera") {
-        setCallError("ไม่พบกล้อง · วิดีโอคอลยังใช้งานได้ แต่เปิดกล้องไม่ได้");
+        setCallError(translateText(lang, "ไม่พบกล้อง · วิดีโอคอลยังใช้งานได้ แต่เปิดกล้องไม่ได้"));
       } else if (next && result?.reason === "camera-capture-failed") {
-        setCallError("เปิดกล้องไม่สำเร็จ · " + (result.message || "ตรวจสิทธิ์ใช้งานกล้องหรือปิดแอปอื่นที่กำลังใช้กล้อง"));
+        const detail = result.message
+          ? translateDisplayText(lang, result.message)
+          : translateText(lang, "ตรวจสิทธิ์ใช้งานกล้องหรือปิดแอปอื่นที่กำลังใช้กล้อง");
+        setCallError(translateText(lang, "เปิดกล้องไม่สำเร็จ · {{reason}}", { reason: detail }));
       } else if (next && result?.reason === "native-backend-missing") {
-        setCallError("ไม่พบตัวจับภาพกล้องของ Liney · ติดตั้ง build ล่าสุดแล้วเปิดใหม่");
+        setCallError(translateText(lang, "ไม่พบตัวจับภาพกล้องของ Liney · ติดตั้ง build ล่าสุดแล้วเปิดใหม่"));
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setCallError(/video was not negotiated/i.test(message)
-        ? "สายเสียงยังไม่มีช่องวิดีโอ · เปลี่ยนเป็นวิดีโอคอลก่อนแล้วลองอีกครั้ง"
-        : "เปิดกล้องไม่สำเร็จ · " + message);
+        ? translateText(lang, "สายเสียงยังไม่มีช่องวิดีโอ · เปลี่ยนเป็นวิดีโอคอลก่อนแล้วลองอีกครั้ง")
+        : translateText(lang, "เปิดกล้องไม่สำเร็จ · {{reason}}", { reason: translateDisplayText(lang, message) }));
     }
   }
 
   async function toggleScreenShare() {
     const next = !callScreenSharing;
+    const lang = settingsRef.current.language;
     try {
       const result = await lineyEngine.request<{
         enabled?: boolean;
@@ -3311,26 +3361,27 @@ function MainApp() {
         setCallVideoEnabled(false);
         setCallError("");
       } else if (next && result?.reason === "screen-share-backend") {
-        setCallError("ระบบจับภาพหน้าจอไม่พร้อม · ตรวจสิทธิ์ Screen Capture ของเดสก์ท็อปแล้วลองใหม่");
+        setCallError(translateText(lang, "ระบบจับภาพหน้าจอไม่พร้อม · ตรวจสิทธิ์ Screen Capture ของเดสก์ท็อปแล้วลองใหม่"));
       } else if (next && result?.reason === "screen-share-target") {
-        setCallError("เป้าหมายที่เลือกใช้ไม่ได้แล้ว · เลือกหน้าจอหรือหน้าต่างใหม่แล้วลองอีกครั้ง");
+        setCallError(translateText(lang, "เป้าหมายที่เลือกใช้ไม่ได้แล้ว · เลือกหน้าจอหรือหน้าต่างใหม่แล้วลองอีกครั้ง"));
       } else if (next && result?.reason === "screen-share-cancelled") {
-        setCallError("ยกเลิกการเลือกหน้าจอแล้ว");
+        setCallError(translateText(lang, "ยกเลิกการเลือกหน้าจอแล้ว"));
       } else if (next && result?.reason === "screen-share-failed") {
-        setCallError("เริ่มแชร์หน้าจอไม่สำเร็จ · อนุญาตการจับภาพในหน้าต่างระบบแล้วลองอีกครั้ง");
+        setCallError(translateText(lang, "เริ่มแชร์หน้าจอไม่สำเร็จ · อนุญาตการจับภาพในหน้าต่างระบบแล้วลองอีกครั้ง"));
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setCallError(/video was not negotiated/i.test(message)
-        ? "สายเสียงยังไม่มีช่องวิดีโอ · เปลี่ยนเป็นวิดีโอคอลก่อนแล้วลองอีกครั้ง"
-        : "แชร์หน้าจอไม่สำเร็จ · " + message);
+        ? translateText(lang, "สายเสียงยังไม่มีช่องวิดีโอ · เปลี่ยนเป็นวิดีโอคอลก่อนแล้วลองอีกครั้ง")
+        : translateText(lang, "แชร์หน้าจอไม่สำเร็จ · {{reason}}", { reason: translateDisplayText(lang, message) }));
     }
   }
 
   async function upgradeCallToVideo() {
     if (!callPeer || callState !== "in-call" || callMode === "VIDEO") return;
+    const lang = settingsRef.current.language;
     const confirmed = window.confirm(
-      "การเปิดกล้องหรือแชร์จอต้องเริ่มเป็นวิดีโอคอล สายเสียงปัจจุบันจะถูกวางและโทรหาอีกครั้ง ต้องการดำเนินการต่อไหม?",
+      translateText(lang, "การเปิดกล้องหรือแชร์จอต้องเริ่มเป็นวิดีโอคอล สายเสียงปัจจุบันจะถูกวางและโทรหาอีกครั้ง ต้องการดำเนินการต่อไหม?"),
     );
     if (!confirmed) return;
 
@@ -3351,7 +3402,7 @@ function MainApp() {
       setCallMode("AUDIO");
       setCallState("in-call");
       setCallDirection(previousDirection);
-      setCallError("วางสายเสียงเพื่อเริ่มวิดีโอคอลไม่สำเร็จ · " + (error instanceof Error ? error.message : String(error)));
+      setCallError(translateText(lang, "วางสายเสียงเพื่อเริ่มวิดีโอคอลไม่สำเร็จ · {{reason}}", { reason: error instanceof Error ? error.message : String(error) }));
       return;
     }
 
@@ -3365,7 +3416,7 @@ function MainApp() {
       setCallVideoCapable(Boolean(result?.videoCapable));
       setCallState(result?.state ?? "in-call");
       if (!result?.videoCapable) {
-        setCallError("LINE ยังไม่ได้เปิดช่องวิดีโอสำหรับสายนี้ · ใช้เสียงได้ แต่เปิดกล้องหรือแชร์จอไม่ได้");
+        setCallError(translateText(lang, "LINE ยังไม่ได้เปิดช่องวิดีโอสำหรับสายนี้ · ใช้เสียงได้ แต่เปิดกล้องหรือแชร์จอไม่ได้"));
       }
     } catch (error) {
       setCallState("failed");
@@ -3405,7 +3456,7 @@ function MainApp() {
 
   async function toggleCallMute() {
     if (!callMicrophoneAvailable) {
-      setCallError("ไม่พบไมโครโฟน · ยังอยู่ในสายและฟังอีกฝั่งได้");
+      setCallError(translateText(settingsRef.current.language, "ไม่พบไมโครโฟน · ยังอยู่ในสายและฟังอีกฝั่งได้"));
       return;
     }
     const muted = !callMuted;
@@ -3429,7 +3480,7 @@ function MainApp() {
   }
 
   async function clearLocalHistory() {
-    if (typeof window !== "undefined" && !window.confirm("ล้างประวัติข้อความและ media cache ในเครื่องนี้หรือไม่?")) return;
+    if (typeof window !== "undefined" && !window.confirm(translateText(settingsRef.current.language, "ล้างประวัติข้อความและ media cache ในเครื่องนี้หรือไม่?"))) return;
     try {
       await lineyEngine.request("history.clear", {}, 20_000);
       setMessageMap({});
@@ -3441,7 +3492,7 @@ function MainApp() {
   }
 
   async function clearStickerCache() {
-    if (typeof window !== "undefined" && !window.confirm("ล้างแคชรายการสติกเกอร์หรือไม่? ครั้งถัดไปจะดึงรายการที่คุณเป็นเจ้าของจาก LINE ใหม่")) return;
+    if (typeof window !== "undefined" && !window.confirm(translateText(settingsRef.current.language, "ล้างแคชรายการสติกเกอร์หรือไม่? ครั้งถัดไปจะดึงรายการที่คุณเป็นเจ้าของจาก LINE ใหม่"))) return;
     try {
       await lineyEngine.request("sticker.cache.clear", {}, 10_000);
       setAuthError("");
@@ -3486,7 +3537,7 @@ function MainApp() {
       ? loadedImages.slice(windowStart, windowStart + 30)
       : [{ id: `image-${Date.now()}`, src: dataUrl }];
     const payload: ImageGalleryPayload = {
-      title: activeChat.name || "รูปภาพ",
+      title: translateDisplayText(settingsRef.current.language, activeChat.name || "รูปภาพ"),
       index: Math.max(0, items.findIndex((item) => item.src === dataUrl)),
       loop: settingsRef.current.loopImageGallery,
       items,
@@ -3695,6 +3746,8 @@ function MainApp() {
 
 function DetachedImageViewer() {
   const [gallery, setGallery] = useState<ImageGalleryPayload | null>(null);
+  const viewerLanguage = useMemo(() => readSettings().language, []);
+  const t = useCallback((source: string) => translateText(viewerLanguage, source), [viewerLanguage]);
   const [index, setIndex] = useState(0);
   const [imageState, setImageState] = useState<"loading" | "ready" | "error">("loading");
 
@@ -3705,13 +3758,13 @@ function DetachedImageViewer() {
       if (!payload?.items?.length) return;
       setGallery(payload);
       setIndex(Math.min(Math.max(0, payload.index ?? 0), payload.items.length - 1));
-      document.title = `Liney · ${payload.title || "รูปภาพ"}`;
+      document.title = `Liney · ${payload.title || t("รูปภาพ")}`;
     }).then((fn) => {
       unlisten = fn;
       void emitTo("main", "liney://image-viewer-ready");
     });
     return () => unlisten?.();
-  }, []);
+  }, [t]);
 
   const move = useCallback((delta: number) => {
     if (!gallery?.items.length) return;
@@ -3734,7 +3787,7 @@ function DetachedImageViewer() {
   }, [move]);
 
   if (!gallery?.items.length) {
-    return <main className="detached-image-viewer loading"><LoaderCircle className="spin" size={24} /><span>กำลังเปิดรูปภาพ…</span></main>;
+    return <main className="detached-image-viewer loading"><LoaderCircle className="spin" size={24} /><span>{t("กำลังเปิดรูปภาพ…")}</span></main>;
   }
   const item = gallery.items[index];
   const hasPrevious = gallery.loop || index > 0;
@@ -3743,22 +3796,22 @@ function DetachedImageViewer() {
     <main className="detached-image-viewer">
       <header className="detached-image-header">
         <div><strong>{gallery.title}</strong><span>{index + 1} / {gallery.items.length}{item.time ? ` · ${item.time}` : ""}</span></div>
-        <button className="icon-button" type="button" title="ปิด" onClick={() => void getCurrentWindow().close()}><X size={19} /></button>
+        <button className="icon-button" type="button" title={t("ปิด")} onClick={() => void getCurrentWindow().close()}><X size={19} /></button>
       </header>
       <section className="detached-image-stage">
-        <button className="gallery-nav previous" type="button" aria-label="รูปก่อนหน้า" disabled={!hasPrevious} onClick={() => move(-1)}><ArrowLeft size={24} /></button>
+        <button className="gallery-nav previous" type="button" aria-label={t("รูปก่อนหน้า")} disabled={!hasPrevious} onClick={() => move(-1)}><ArrowLeft size={24} /></button>
         <img
           key={item.id}
           className="detached-image-main"
           src={item.src}
-          alt="รูปภาพ"
+          alt={t("รูปภาพ")}
           draggable={false}
           onLoad={() => setImageState("ready")}
           onError={() => setImageState("error")}
         />
-        {imageState === "loading" ? <span className="detached-image-status">กำลังโหลดรูปภาพ…</span> : null}
-        {imageState === "error" ? <span className="detached-image-status error">โหลดรูปภาพหลักไม่สำเร็จ</span> : null}
-        <button className="gallery-nav next" type="button" aria-label="รูปถัดไป" disabled={!hasNext} onClick={() => move(1)}><ArrowLeft size={24} /></button>
+        {imageState === "loading" ? <span className="detached-image-status">{t("กำลังโหลดรูปภาพ…")}</span> : null}
+        {imageState === "error" ? <span className="detached-image-status error">{t("โหลดรูปภาพหลักไม่สำเร็จ")}</span> : null}
+        <button className="gallery-nav next" type="button" aria-label={t("รูปถัดไป")} disabled={!hasNext} onClick={() => move(1)}><ArrowLeft size={24} /></button>
       </section>
       <footer className="detached-image-strip">
         {gallery.items.map((thumb, thumbIndex) => (
@@ -3848,7 +3901,7 @@ function ChatList({
   markAllReadProgress: { done: number; total: number } | null;
   onMarkAllRead: () => Promise<{ total: number; marked: number; failed: number }>;
 }) {
-  const { t } = useAppTranslation();
+  const { t, td } = useAppTranslation();
   const [contextMenu, setContextMenu] = useState<{ chat: Chat; x: number; y: number } | null>(null);
   const [mergeDialogChat, setMergeDialogChat] = useState<Chat | null>(null);
   const [mergeTargetId, setMergeTargetId] = useState("");
@@ -3903,7 +3956,7 @@ function ChatList({
       window.removeEventListener("blur", close);
     };
   }, [contextMenu]);
-  const title = section === "openchat" ? "OpenChat" : section === "friends" ? t("เพื่อน") : section === "calls" ? t("ประวัติการโทร") : t("แชต");
+  const title = section === "openchat" ? t("OpenChat") : section === "friends" ? t("เพื่อน") : section === "calls" ? t("ประวัติการโทร") : t("แชต");
   // Virtualize the full list instead of silently dropping contacts past 120.
   // Rows are measured in the same scroll container that owns the sidebar.
   const chatItemsRef = useRef<HTMLDivElement>(null);
@@ -4012,7 +4065,7 @@ function ChatList({
             <Avatar chat={chat} />
             <span className="chat-copy">
               <span className="chat-title-line">
-                <strong>{chat.id === "__liney__" ? t(chat.name) : chat.name}</strong>
+                <strong>{td(chat.name)}</strong>
                 <span className="chat-title-flags">
                   {chat.isFavorite ? <Star size={12} className="favorite-icon" fill="currentColor" aria-label={t("รายการโปรด")} /> : null}
                   {chat.pinned ? <PinIcon size={12} className="pin-icon" fill="currentColor" aria-label={t("ปักหมุด")} /> : null}
@@ -4020,7 +4073,7 @@ function ChatList({
                 </span>
               </span>
               <span className="chat-preview-line">
-                <span className="chat-preview">{chat.id === "__liney__" ? t(chat.subtitle) : chat.subtitle}</span>
+                <span className="chat-preview">{td(chat.subtitle)}</span>
                 {chat.unread ? <span className="unread-badge">{chat.unread > 99 ? "99+" : chat.unread}</span> : null}
               </span>
             </span>
@@ -4084,13 +4137,13 @@ function ChatList({
             >
               <option value="">{t("เลือกแชตปลายทาง")}</option>
               {mergeCandidates.filter((chat) => chat.id !== mergeDialogChat.id).map((chat) => (
-                <option key={chat.id} value={chat.id}>{chat.name}</option>
+                <option key={chat.id} value={chat.id}>{td(chat.name)}</option>
               ))}
             </select>
             <p className="identity-merge-note">
               {t("Liney จะจำการเชื่อมนี้ในเครื่องนี้ เก็บชื่อและรูปของแชตปลายทาง รวมประวัติที่มีในเครื่อง และส่งข้อความครั้งต่อไปไปยังแชตปลายทางที่คุณเลือก")}
             </p>
-            {mergeError ? <p className="identity-merge-error" role="alert">{mergeError}</p> : null}
+            {mergeError ? <p className="identity-merge-error" role="alert">{td(mergeError)}</p> : null}
             <div className="identity-merge-actions">
               <button type="button" className="secondary-button" disabled={mergeBusy} onClick={() => setMergeDialogChat(null)}>{t("ยกเลิก")}</button>
               <button
@@ -4168,32 +4221,35 @@ function MessageAvatar({ message, chat }: { message: Message; chat: Chat }) {
 }
 
 function MessageSenderLabel({ message, chat, onOpenOfficialMessage }: { message: Message; chat: Chat; onOpenOfficialMessage: (message: Message) => void }) {
+  const { t } = useAppTranslation();
   if (message.author !== "them" || chat.kind === "dm") return null;
   const name = String(message.senderName ?? "").trim() || "LINE User";
   return (
     <div className="message-sender-name">
       {message.isOfficialAccount ? (
-        <button className="message-sender-link" type="button" title="เปิดข้อความนี้ใน LINE ทางการ" onClick={() => onOpenOfficialMessage(message)}>{name}</button>
+        <button className="message-sender-link" type="button" title={t("เปิดข้อความนี้ใน LINE ทางการ")} onClick={() => onOpenOfficialMessage(message)}>{name}</button>
       ) : name}
     </div>
   );
 }
 
 function CallHistoryCard({ data }: { data: NonNullable<Message["call"]> }) {
+  const { t, td } = useAppTranslation();
   return (
     <div className={`call-history-card call-history-${data.status}`} role="status">
       <span className="call-history-icon"><Phone size={17} /></span>
       <span className="call-history-copy">
-        <strong>{callMessagePreview(data)}</strong>
-        <span>โทรด้วยเสียงผ่าน LINE</span>
+        <strong>{td(callMessagePreview(data))}</strong>
+        <span>{t("โทรด้วยเสียงผ่าน LINE")}</span>
       </span>
     </div>
   );
 }
 
 function OfficialMessageFallback({ message, chat, onOpenOfficialMessage }: { message: Message; chat: Chat; onOpenOfficialMessage: (message: Message) => void }) {
+  const { t } = useAppTranslation();
   if (message.author === "me" || chat.kind === "openchat" || !message.isOfficialAccount) return null;
-  return <button className="official-message-link" type="button" title="เปิดข้อความนี้ใน LINE ทางการ" onClick={() => onOpenOfficialMessage(message)}>เปิดข้อความใน LINE ทางการ</button>;
+  return <button className="official-message-link" type="button" title={t("เปิดข้อความนี้ใน LINE ทางการ")} onClick={() => onOpenOfficialMessage(message)}>{t("เปิดข้อความใน LINE ทางการ")}</button>;
 }
 
 function stickerCandidateUrls(src: string): string[] {
@@ -4239,6 +4295,7 @@ function StickerImage({
   className?: string;
   fallback?: React.ReactNode;
 }) {
+  const { t } = useAppTranslation();
   const candidates = useMemo(() => stickerCandidateUrls(src), [src]);
   const [candidateIndex, setCandidateIndex] = useState(0);
   const [failed, setFailed] = useState(false);
@@ -4246,22 +4303,22 @@ function StickerImage({
 
   if (isArrangedStickerUrl(src)) {
     return (
-      <div className="sticker-unavailable" role="img" aria-label="สติกเกอร์จัดวางจาก LINE">
+      <div className="sticker-unavailable" role="img" aria-label={t("สติกเกอร์จัดวางจาก LINE")}>
         <TriangleAlert size={18} />
         <div>
-          <strong>สติกเกอร์จัดวางจาก LINE</strong>
-          <span>LINE ไม่ได้ส่งภาพที่ประกอบจริงมาให้ไคลเอนต์นี้</span>
+          <strong>{t("สติกเกอร์จัดวางจาก LINE")}</strong>
+          <span>{t("LINE ไม่ได้ส่งภาพที่ประกอบจริงมาให้ไคลเอนต์นี้")}</span>
         </div>
       </div>
     );
   }
 
-  if (failed) return fallback ?? <div className="bubble">สติกเกอร์</div>;
+  if (failed) return fallback ?? <div className="bubble">{t("สติกเกอร์")}</div>;
   return (
     <img
       className={className}
       src={imageSrc}
-      alt="สติกเกอร์"
+      alt={t("สติกเกอร์")}
       loading="lazy"
       decoding="async"
       referrerPolicy="no-referrer"
@@ -4277,6 +4334,7 @@ function StickerImage({
 }
 
 function StickerPackCover({ packageId, fallback }: { packageId: string; fallback: React.ReactNode }) {
+  const { t } = useAppTranslation();
   const candidates = useMemo(() => stickerPackCoverCandidates(packageId), [packageId]);
   const [candidateIndex, setCandidateIndex] = useState(0);
   const [failed, setFailed] = useState(false);
@@ -4285,7 +4343,7 @@ function StickerPackCover({ packageId, fallback }: { packageId: string; fallback
     <img
       className="sticker-pack-cover"
       src={candidates[candidateIndex]}
-      alt="ปกแพ็กสติกเกอร์"
+      alt={t("ปกแพ็กสติกเกอร์")}
       loading="lazy"
       decoding="async"
       referrerPolicy="no-referrer"
@@ -4390,7 +4448,7 @@ function Conversation({
   jumpToMessageId?: string;
   jumpNonce: number;
 }) {
-  const { t } = useAppTranslation();
+  const { language, t, td } = useAppTranslation();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imeComposingRef = useRef(false);
   const messageStageRef = useRef<HTMLDivElement>(null);
@@ -4865,10 +4923,10 @@ function Conversation({
           <Avatar chat={chat} />
           <div>
             <div className="conversation-title-row">
-              <h2>{chat.id === "__liney__" ? t(chat.name) : chat.name}</h2>
-              {chat.kind === "openchat" && <span className="openchat-chip">OpenChat</span>}
+              <h2>{td(chat.name)}</h2>
+              {chat.kind === "openchat" && <span className="openchat-chip">{t("OpenChat")}</span>}
             </div>
-            <span>{chat.detail ?? chat.subtitle}</span>
+            <span>{td(chat.detail ?? chat.subtitle)}</span>
           </div>
         </div>
         <div className="header-actions" ref={headerActionsRef}>
@@ -4922,8 +4980,8 @@ function Conversation({
         {empty ? (
           <div className="conversation-empty-state">
             <div className="empty-logo"><img src="/liney-logo.png" alt="" /></div>
-            <h3>{chat.id === "__liney__" ? t(chat.name) : chat.name}</h3>
-            <p>{chat.subtitle}</p>
+            <h3>{td(chat.name)}</h3>
+            <p>{td(chat.subtitle)}</p>
           </div>
         ) : messages === undefined ? (
           <div className="message-loading-state"><LoaderCircle size={22} className="spin" /><span>{t("กำลังโหลดข้อความ…")}</span></div>
@@ -5071,7 +5129,7 @@ function Conversation({
                         <Reply size={14} />
                         <div>
                           <strong>{message.replyTo.author === "me" ? t("คุณ") : message.replyTo.senderName || t("ข้อความที่ตอบกลับ")}</strong>
-                          <span>{message.replyTo.text || t("ข้อความ")}</span>
+                          <span>{td(message.replyTo.text || "ข้อความ")}</span>
                         </div>
                       </div>
                     ) : null}
@@ -5110,7 +5168,7 @@ function Conversation({
                           ) : !message.rich && message.postNotification ? (
                             <PostNotificationCard data={message.postNotification} />
                          ) : !message.rich && showMessageText ? (
-                           <div className={`bubble ${message.status === "error" ? "bubble-error" : ""}`}><MessageTextWithLinks text={message.text!} /></div>
+                           <div className={`bubble ${message.status === "error" ? "bubble-error" : ""}`}><MessageTextWithLinks text={td(message.text!)} /></div>
                          ) : null}
                           {showMessageText && message.status !== "sending" ? <LinkPreviewFor text={message.text!} /> : null}
                           {!message.rich && !message.flex && !message.stickerUrl && !message.emojiUrl
@@ -5120,9 +5178,9 @@ function Conversation({
                               || (message.author === "me" && (message.status === "error" || message.status === "unknown"))) ? (
                               <div className="bubble bubble-media-fallback">
                                 {message.filename
-                                  ? mediaLabel(Number(message.contentType || 14), message.filename)
+                                  ? td(mediaLabel(Number(message.contentType || 14), message.filename))
                                   : [1, 2, 3, 14].includes(Number(message.contentType ?? 0))
-                                    ? mediaLabel(Number(message.contentType), "")
+                                    ? td(mediaLabel(Number(message.contentType), ""))
                                     : Number(message.contentType) === 7
                                       ? t("สติกเกอร์")
                                       : t("ไม่มีรายละเอียดข้อความที่บันทึกไว้")}
@@ -5187,7 +5245,7 @@ function Conversation({
                     {message.status === "error" || message.status === "unknown" ? (
                       <>
                         <span className="send-state send-error">{message.status === "unknown" ? t("ตรวจสอบสถานะการส่ง") : t("ส่งไม่สำเร็จ")}</span>
-                        {message.sendError ? <span className="send-error-detail" title={message.sendError}>{message.sendError}</span> : null}
+                        {message.sendError ? <span className="send-error-detail" title={td(message.sendError)}>{td(message.sendError)}</span> : null}
                         {message.sendError?.includes("ต้องเชื่อมบัญชี LINE ใหม่")
                           ? <span className="send-error-detail">{t("เชื่อมบัญชีใหม่ก่อน แล้วค่อยลองส่งอีกครั้ง")}</span>
                           : <button className="message-retry" type="button" onClick={() => onRetry(message.id)}>{t("ลองใหม่")}</button>}
@@ -5279,7 +5337,7 @@ function Conversation({
             <Reply size={15} />
             <div>
               <strong>{t("ตอบกลับ {{name}}", { name: replyTarget.author === "me" ? t("คุณ") : replyTarget.senderName || t("ข้อความ") })}</strong>
-              <span>{replyTarget.text || t("ข้อความ")}</span>
+              <span>{td(replyTarget.text || "ข้อความ")}</span>
             </div>
             <button type="button" title={t("ยกเลิกการตอบกลับ")} aria-label={t("ยกเลิกการตอบกลับ")} onClick={onCancelReply}><X size={15} /></button>
           </div>
@@ -5314,7 +5372,7 @@ function Conversation({
         <textarea
           value={composer}
           onChange={(e) => onComposer(e.target.value)}
-          lang="th"
+          lang={language}
           onCompositionStart={() => { imeComposingRef.current = true; }}
           onCompositionEnd={() => {
             // Keep a synchronous ref for the keydown that may immediately
@@ -5370,8 +5428,8 @@ function Conversation({
             {stickerPickerLoading ? <div className="sticker-picker-empty">{t("กำลังโหลดคลัง…")}</div> : null}
             {!stickerPickerLoading && pickerTab === "sticker" && stickerPacks.length === 0 ? <div className="sticker-picker-empty">{t("ไม่พบสติกเกอร์ที่บัญชีนี้เป็นเจ้าของ")}</div> : null}
             {!stickerPickerLoading && pickerTab === "emoji" && emojiPacks.length === 0 ? <div className="sticker-picker-empty">{t("ยังไม่มี LINE Emoji ในประวัติแชต")}</div> : null}
-            {!stickerPickerLoading && pickerTab === "sticker" && selectedStickerPack ? <div className="sticker-chooser"><section className="sticker-pack-page"><div className="sticker-pack-label"><span>{t("แพ็ก #{{id}}", { id: selectedStickerPack[0] })}</span><small>{t("{{count}} ตัว · ของคุณ", { count: selectedStickerPack[1].length })}</small></div><div className="sticker-picker-grid">{selectedStickerPack[1].map((sticker) => { const src = `https://stickershop.line-scdn.net/stickershop/v1/sticker/${encodeURIComponent(sticker.stickerId)}/android/${sticker.option === "A" ? "sticker_animation.png" : "sticker.png"}`; return <button key={`${sticker.packageId}:${sticker.stickerId}`} type="button" title={t("ส่งสติกเกอร์ของคุณ")} onClick={() => { setStickerPickerOpen(false); void onSendSticker(sticker); }}><StickerImage src={src} className="sticker-picker-image" fallback={<span className="sticker-picker-unavailable">{t("ไม่พร้อม")}</span>} /></button>; })}</div></section><div className="sticker-pack-tabs" role="tablist" aria-label={t("แพ็กสติกเกอร์")}>{stickerPacks.map(([packageId, stickers]) => { const first = stickers[0]; const fallback = first ? <StickerImage src={`https://stickershop.line-scdn.net/stickershop/v1/sticker/${encodeURIComponent(first.stickerId)}/android/${first.option === "A" ? "sticker_animation.png" : "sticker.png"}`} className="sticker-pack-tab-image" fallback={<span className="sticker-picker-unavailable">{t("ไม่พร้อม")}</span>} /> : <span className="sticker-picker-unavailable">{t("ไม่พร้อม")}</span>; return <button key={packageId} className={packageId === selectedStickerPack[0] ? "active" : ""} role="tab" aria-selected={packageId === selectedStickerPack[0]} type="button" title={`แพ็ก #${packageId}`} onClick={() => setSelectedStickerPackId(packageId)}><StickerPackCover packageId={packageId} fallback={fallback} /></button>; })}</div></div> : null}
-            {!stickerPickerLoading && pickerTab === "emoji" && selectedEmojiPack ? <div className="sticker-chooser"><section className="sticker-pack-page"><div className="sticker-pack-label"><span>LINE Emoji #{selectedEmojiPack[0]}</span><small>{selectedEmojiPack[1].some((item) => item.owned) ? t("ของคุณ") : t("พบในแชต")}</small></div><div className="sticker-picker-grid emoji-picker-grid">{selectedEmojiPack[1].map((item) => { const src = lineEmojiUrl(item); return <button key={`${item.productId}:${item.sticonId}`} type="button" title={`ส่ง LINE Emoji · ${item.owned ? t("ของคุณ") : t("พบในแชต")}`} onClick={() => { setStickerPickerOpen(false); void onSendEmoji(item); }}><img src={src} alt="LINE Emoji" loading="lazy" referrerPolicy="no-referrer" /></button>; })}</div></section><div className="sticker-pack-tabs" role="tablist" aria-label={t("แพ็ก LINE Emoji")}>{emojiPacks.map(([productId, items]) => { const first = items[0]; const src = first ? lineEmojiUrl(first) : ""; return <button key={productId} className={productId === selectedEmojiPack[0] ? "active" : ""} role="tab" aria-selected={productId === selectedEmojiPack[0]} type="button" title={`LINE Emoji #${productId}`} onClick={() => setSelectedEmojiPackId(productId)}>{src ? <img src={src} alt="LINE Emoji" loading="lazy" referrerPolicy="no-referrer" /> : null}</button>; })}</div></div> : null}
+            {!stickerPickerLoading && pickerTab === "sticker" && selectedStickerPack ? <div className="sticker-chooser"><section className="sticker-pack-page"><div className="sticker-pack-label"><span>{t("แพ็ก #{{id}}", { id: selectedStickerPack[0] })}</span><small>{t("{{count}} ตัว · ของคุณ", { count: selectedStickerPack[1].length })}</small></div><div className="sticker-picker-grid">{selectedStickerPack[1].map((sticker) => { const src = `https://stickershop.line-scdn.net/stickershop/v1/sticker/${encodeURIComponent(sticker.stickerId)}/android/${sticker.option === "A" ? "sticker_animation.png" : "sticker.png"}`; return <button key={`${sticker.packageId}:${sticker.stickerId}`} type="button" title={t("ส่งสติกเกอร์ของคุณ")} onClick={() => { setStickerPickerOpen(false); void onSendSticker(sticker); }}><StickerImage src={src} className="sticker-picker-image" fallback={<span className="sticker-picker-unavailable">{t("ไม่พร้อม")}</span>} /></button>; })}</div></section><div className="sticker-pack-tabs" role="tablist" aria-label={t("แพ็กสติกเกอร์")}>{stickerPacks.map(([packageId, stickers]) => { const first = stickers[0]; const fallback = first ? <StickerImage src={`https://stickershop.line-scdn.net/stickershop/v1/sticker/${encodeURIComponent(first.stickerId)}/android/${first.option === "A" ? "sticker_animation.png" : "sticker.png"}`} className="sticker-pack-tab-image" fallback={<span className="sticker-picker-unavailable">{t("ไม่พร้อม")}</span>} /> : <span className="sticker-picker-unavailable">{t("ไม่พร้อม")}</span>; return <button key={packageId} className={packageId === selectedStickerPack[0] ? "active" : ""} role="tab" aria-selected={packageId === selectedStickerPack[0]} type="button" title={t("แพ็ก #{{id}}", { id: packageId })} onClick={() => setSelectedStickerPackId(packageId)}><StickerPackCover packageId={packageId} fallback={fallback} /></button>; })}</div></div> : null}
+            {!stickerPickerLoading && pickerTab === "emoji" && selectedEmojiPack ? <div className="sticker-chooser"><section className="sticker-pack-page"><div className="sticker-pack-label"><span>LINE Emoji #{selectedEmojiPack[0]}</span><small>{selectedEmojiPack[1].some((item) => item.owned) ? t("ของคุณ") : t("พบในแชต")}</small></div><div className="sticker-picker-grid emoji-picker-grid">{selectedEmojiPack[1].map((item) => { const src = lineEmojiUrl(item); return <button key={`${item.productId}:${item.sticonId}`} type="button" title={t("ส่ง LINE Emoji · {{source}}", { source: item.owned ? t("ของคุณ") : t("พบในแชต") })} onClick={() => { setStickerPickerOpen(false); void onSendEmoji(item); }}><img src={src} alt="LINE Emoji" loading="lazy" referrerPolicy="no-referrer" /></button>; })}</div></section><div className="sticker-pack-tabs" role="tablist" aria-label={t("แพ็ก LINE Emoji")}>{emojiPacks.map(([productId, items]) => { const first = items[0]; const src = first ? lineEmojiUrl(first) : ""; return <button key={productId} className={productId === selectedEmojiPack[0] ? "active" : ""} role="tab" aria-selected={productId === selectedEmojiPack[0]} type="button" title={`LINE Emoji #${productId}`} onClick={() => setSelectedEmojiPackId(productId)}>{src ? <img src={src} alt="LINE Emoji" loading="lazy" referrerPolicy="no-referrer" /> : null}</button>; })}</div></div> : null}
           </div>
         ) : null}
       </div>
@@ -5392,11 +5450,16 @@ function TimelineConversation({
 }
 
 function PostNotificationCard({ data }: { data: NonNullable<Message["postNotification"]> }) {
+  const { t, td } = useAppTranslation();
   const isAlbum = data.kind === "album";
-  const label = isAlbum ? "อัลบั้ม" : "โน้ต";
+  const label = isAlbum ? t("อัลบั้ม") : t("โน้ต");
   const action = isAlbum
-    ? data.action === "created" ? "สร้างอัลบั้ม" : data.action === "added" ? "เพิ่มรูปภาพในอัลบั้ม" : "อัปเดตอัลบั้ม"
-    : "โพสต์ในโน้ต";
+    ? data.action === "created" ? t("สร้างอัลบั้ม") : data.action === "added" ? t("เพิ่มรูปภาพในอัลบั้ม") : t("อัปเดตอัลบั้ม")
+    : t("โพสต์ในโน้ต");
+  const rawTitle = (data.title ?? "").trim();
+  const translatedTitle = rawTitle ? td(rawTitle) : "";
+  const rawBody = (data.body ?? "").trim();
+  const bodyText = rawBody ? td(rawBody) : "";
   return (
     <div className={`post-notification-card ${isAlbum ? "album-card" : "note-card"}`}>
       <div className="post-notification-thumb">
@@ -5404,8 +5467,8 @@ function PostNotificationCard({ data }: { data: NonNullable<Message["postNotific
       </div>
       <div className="post-notification-copy">
         <div className="post-notification-topline"><span>{label}</span><small>{action}</small></div>
-        <strong>{data.title}</strong>
-        {!isAlbum && data.body ? <p>{data.body}</p> : null}
+        <strong>{translatedTitle}</strong>
+        {!isAlbum && bodyText ? <p>{bodyText}</p> : null}
       </div>
       <span className="post-notification-arrow">›</span>
     </div>
@@ -5588,8 +5651,8 @@ function FullSyncPopup({
   onRetry: () => void;
   onClose: () => void;
 }) {
-  const { t, english } = useAppTranslation();
-  const formatCount = (value: number) => value.toLocaleString(english ? "en-US" : "th-TH");
+  const { t, locale } = useAppTranslation();
+  const formatCount = (value: number) => value.toLocaleString(locale);
   const copy = progress.phase === "metadata"
     ? { title: t("กำลังเตรียม Full Sync"), detail: t("กำลังเชื่อมข้อมูลบัญชี LINE") }
     : progress.phase === "friends"
@@ -5673,16 +5736,17 @@ function FullSyncPopup({
   );
 }
 
-function describeAuthError(raw: string): { title: string; message: string; code?: string } {
+function describeAuthError(raw: string, language: AppLanguage = "th"): { title: string; message: string; code?: string } {
   const value = raw.toUpperCase();
-  if (value.includes("INVALID_IDENTITY_CREDENTIAL")) return { title: "เข้าสู่ระบบไม่สำเร็จ", message: "LINE ไม่ยอมรับอีเมลหรือรหัสผ่าน กรุณาตรวจสอบข้อมูลบัญชีแล้วลองอีกครั้ง", code: "INVALID_IDENTITY_CREDENTIAL" };
-  if (/TOO_MANY|RATE_LIMIT|429|FLOOD/.test(value)) return { title: "ลองเข้าสู่ระบบบ่อยเกินไป", message: "กรุณารอสักครู่ก่อนลองใหม่ เพื่อหลีกเลี่ยงการจำกัดบัญชี" };
-  if (/TIMEOUT|TIMED OUT|ETIMEDOUT/.test(value)) return { title: "การเชื่อมต่อหมดเวลา", message: "LINE ไม่ตอบกลับทันเวลา กรุณาลองอีกครั้ง" };
-  if (/ECONN|NETWORK|FETCH FAILED|ENOTFOUND|OFFLINE/.test(value)) return { title: "เชื่อมต่อ LINE ไม่ได้", message: "ตรวจสอบอินเทอร์เน็ตแล้วลองอีกครั้ง" };
-  if (/VERIF|PIN_REQUIRED|TWO_FACTOR|CHALLENGE/.test(value)) return { title: "ต้องยืนยันตัวตนเพิ่มเติม", message: "ตรวจสอบคำขอยืนยันการเข้าสู่ระบบบนมือถือ" };
-  if (/SESSION|TOKEN_EXPIRED|UNAUTHORIZED/.test(value)) return { title: "เซสชันหมดอายุ", message: "กรุณาเข้าสู่ระบบใหม่อีกครั้ง" };
-  if (/REQUEST INTERNAL FAILED|\{.*\}|STACK|AT .*\(/i.test(raw)) return { title: "ดำเนินการไม่สำเร็จ", message: "Liney พบข้อผิดพลาดระหว่างเชื่อมต่อ กรุณาลองใหม่อีกครั้ง" };
-  return { title: "เกิดข้อผิดพลาด", message: raw };
+  const tr = (text: string) => translateText(language, text);
+  if (value.includes("INVALID_IDENTITY_CREDENTIAL")) return { title: tr("เข้าสู่ระบบไม่สำเร็จ"), message: tr("LINE ไม่ยอมรับอีเมลหรือรหัสผ่าน กรุณาตรวจสอบข้อมูลบัญชีแล้วลองอีกครั้ง"), code: "INVALID_IDENTITY_CREDENTIAL" };
+  if (/TOO_MANY|RATE_LIMIT|429|FLOOD/.test(value)) return { title: tr("ลองเข้าสู่ระบบบ่อยเกินไป"), message: tr("กรุณารอสักครู่ก่อนลองใหม่ เพื่อหลีกเลี่ยงการจำกัดบัญชี") };
+  if (/TIMEOUT|TIMED OUT|ETIMEDOUT/.test(value)) return { title: tr("การเชื่อมต่อหมดเวลา"), message: tr("LINE ไม่ตอบกลับทันเวลา กรุณาลองอีกครั้ง") };
+  if (/ECONN|NETWORK|FETCH FAILED|ENOTFOUND|OFFLINE/.test(value)) return { title: tr("เชื่อมต่อ LINE ไม่ได้"), message: tr("ตรวจสอบอินเทอร์เน็ตแล้วลองอีกครั้ง") };
+  if (/VERIF|PIN_REQUIRED|TWO_FACTOR|CHALLENGE/.test(value)) return { title: tr("ต้องยืนยันตัวตนเพิ่มเติม"), message: tr("ตรวจสอบคำขอยืนยันการเข้าสู่ระบบบนมือถือ") };
+  if (/SESSION|TOKEN_EXPIRED|UNAUTHORIZED/.test(value)) return { title: tr("เซสชันหมดอายุ"), message: tr("กรุณาเข้าสู่ระบบใหม่อีกครั้ง") };
+  if (/REQUEST INTERNAL FAILED|\{.*\}|STACK|AT .*\(/i.test(raw)) return { title: tr("ดำเนินการไม่สำเร็จ"), message: tr("Liney พบข้อผิดพลาดระหว่างเชื่อมต่อ กรุณาลองใหม่อีกครั้ง") };
+  return { title: tr("เกิดข้อผิดพลาด"), message: translateDisplayText(language, raw) };
 }
 
 function AuthModal({
@@ -5712,7 +5776,7 @@ function AuthModal({
   onLogout,
   onClose,
 }: {
-  language: "th" | "en";
+  language: AppLanguage;
   engineState: EngineState;
   authenticated: boolean;
   authMode: AuthMode;
@@ -5738,20 +5802,20 @@ function AuthModal({
   onLogout: () => void | Promise<void>;
   onClose: () => void;
 }) {
-  const english = language === "en";
+  const t = (source: string, values?: Record<string, string | number>) => translateText(language, source, values);
   const [riskAcknowledged, setRiskAcknowledged] = useState(false);
   const canLogin = engineState === "ready" && !authBusy && riskAcknowledged;
 
   return (
     <motion.div className="modal-backdrop auth-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
       <motion.section className={`auth-modal ${required ? "auth-modal-required" : ""}`} initial={{ opacity: 0, scale: .96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: .97, y: 8 }} aria-modal="true" role="dialog">
-        {!required ? <button className="auth-close icon-button" onClick={onClose} aria-label={english ? "Close" : "ปิด"}><X size={18}/> </button> : null}
+        {!required ? <button className="auth-close icon-button" onClick={onClose} aria-label={t("ปิด")}><X size={18}/> </button> : null}
         <div className="auth-brand"><img src="/liney-logo.png" alt="" /></div>
         <p className="eyebrow">LINEJS · {clientIdentity?.displayName || clientIdentity?.device || "DESKTOPWIN"}</p>
-        <h2>{keyImportMode ? (english ? "Import E2EE keys from your phone" : "รับคีย์ E2EE จากมือถือ") : authenticated ? (profileName || (english ? "LINE connected" : "เชื่อม LINE แล้ว")) : (english ? "Connect your LINE account" : "เชื่อมบัญชี LINE")}</h2>
+        <h2>{keyImportMode ? t("รับคีย์ E2EE จากมือถือ") : authenticated ? (profileName || t("เชื่อม LINE แล้ว")) : t("เชื่อมบัญชี LINE")}</h2>
         <p className="auth-copy">{keyImportMode
-          ? english ? "Scan with the phone that holds your existing keys, using the same account as this desktop." : "สแกนด้วยมือถือที่มีคีย์เดิม โดยใช้บัญชีเดียวกับ Desktop"
-          : authenticated ? (english ? "This account is connected to Liney." : "บัญชีนี้เชื่อมต่อกับ Liney แล้ว") : (english ? "Sign in to use chats and Liney features." : "ต้องเข้าสู่ระบบก่อนจึงจะใช้แชตและฟีเจอร์ของ Liney ได้")}</p>
+          ? t("สแกนด้วยมือถือที่มีคีย์เดิม โดยใช้บัญชีเดียวกับ Desktop")
+          : authenticated ? t("บัญชีนี้เชื่อมต่อกับ Liney แล้ว") : t("ต้องเข้าสู่ระบบก่อนจึงจะใช้แชตและฟีเจอร์ของ Liney ได้")}</p>
 
         {authenticated ? (
           keyImportMode ? (
@@ -5759,25 +5823,25 @@ function AuthModal({
               {keyImportResult ? (
                 <div className="auth-success">
                   <ShieldCheck size={34}/>
-                  <strong>นำเข้า keychain สำเร็จ</strong>
-                  <span>เปิดใช้คีย์ที่มือถือเลือกแล้ว และเก็บคีย์เดิมไว้ {keyImportResult.generations} รุ่น</span>
-                  <button className="auth-primary" onClick={onClose}>เรียบร้อย</button>
+                  <strong>{t("นำเข้า keychain สำเร็จ")}</strong>
+                  <span>{t("เปิดใช้คีย์ที่มือถือเลือกแล้ว และเก็บคีย์เดิมไว้ {{count}} รุ่น", { count: keyImportResult.generations })}</span>
+                  <button className="auth-primary" onClick={onClose}>{t("เรียบร้อย")}</button>
                 </div>
               ) : qrUrl ? (
                 <div className="qr-zone">
                   <div className="qr-card"><QRCodeSVG value={qrUrl} size={188} level="M" /></div>
-                  <div className="qr-instruction"><QrCode size={18}/><div><strong>สแกนด้วย LINE บนมือถือเครื่องเดิม</strong><span>เปิด LINE → สแกน QR Code → อนุญาตการเข้าสู่ระบบบัญชีเดียวกัน</span></div></div>
-                  {pin ? <div className="pin-card"><span>รหัสยืนยัน</span><strong>{pin}</strong></div> : null}
+                  <div className="qr-instruction"><QrCode size={18}/><div><strong>{t("สแกนด้วย LINE บนมือถือเครื่องเดิม")}</strong><span>{t("เปิด LINE → สแกน QR Code → อนุญาตการเข้าสู่ระบบบัญชีเดียวกัน")}</span></div></div>
+                  {pin ? <div className="pin-card"><span>{t("รหัสยืนยัน")}</span><strong>{pin}</strong></div> : null}
                 </div>
               ) : (
                 <>
                   <div className="auth-idle">
                     <div className="auth-engine-icon">{authBusy ? <LoaderCircle className="spin" size={26}/> : <QrCode size={27}/>}</div>
-                    <strong>{authBusy ? "กำลังสร้าง QR Code" : "พร้อมนำเข้าคีย์จากมือถือ"}</strong>
-                    <span>{authBusy ? english ? "Waiting for LINE approval…" : "รอการยืนยันจาก LINE…" : "คีย์จะถูกเก็บในเครื่องนี้โดยไม่ล้างประวัติแชต"}</span>
+                    <strong>{authBusy ? t("กำลังสร้าง QR Code") : t("พร้อมนำเข้าคีย์จากมือถือ")}</strong>
+                    <span>{authBusy ? t("รอการยืนยันจาก LINE…") : t("คีย์จะถูกเก็บในเครื่องนี้โดยไม่ล้างประวัติแชต")}</span>
                   </div>
                   <button className="auth-primary" disabled={engineState !== "ready" || authBusy} onClick={onImportKeys}>
-                    {authBusy ? <LoaderCircle className="spin" size={17}/> : <QrCode size={17}/>} {authBusy ? "กำลังรอมือถือ…" : "สร้าง QR สำหรับนำเข้าคีย์"}
+                    {authBusy ? <LoaderCircle className="spin" size={17}/> : <QrCode size={17}/>} {authBusy ? t("กำลังรอมือถือ…") : t("สร้าง QR สำหรับนำเข้าคีย์")}
                   </button>
                 </>
               )}
@@ -5786,17 +5850,17 @@ function AuthModal({
             <>
               <div className="auth-success">
                 <ShieldCheck size={34}/>
-                <strong>พร้อมใช้งานจริง</strong>
-                <span>แชตปกติ, OpenChat และการส่งข้อความเชื่อมผ่าน {clientIdentity?.displayName || "Liney"}</span>
+                <strong>{t("พร้อมใช้งานจริง")}</strong>
+                <span>{t("แชตปกติ, OpenChat และการส่งข้อความเชื่อมผ่าน {{name}}", { name: clientIdentity?.displayName || "Liney" })}</span>
               </div>
               <button className="auth-primary" disabled={engineState !== "ready" || authBusy} onClick={onBeginKeyImport}>
-                <QrCode size={17}/> รับคีย์เข้ารหัสจาก LINE มือถือ
+                <QrCode size={17}/> {t("รับคีย์เข้ารหัสจาก LINE มือถือ")}
               </button>
             </>
           )
         ) : (
           <>
-            <div className="auth-mode-switch" role="tablist" aria-label="วิธีเข้าสู่ระบบ">
+            <div className="auth-mode-switch" role="tablist" aria-label={t("วิธีเข้าสู่ระบบ")}>
               <button type="button" role="tab" aria-selected={authMode === "qr"} className={authMode === "qr" ? "active" : ""} disabled={authBusy} onClick={() => onModeChange("qr")}>
                 <QrCode size={15}/> QR Code
               </button>
@@ -5809,56 +5873,56 @@ function AuthModal({
               qrUrl ? (
                 <div className="qr-zone">
                   <div className="qr-card"><QRCodeSVG value={qrUrl} size={188} level="M" /></div>
-                  <div className="qr-instruction"><QrCode size={18}/><div><strong>สแกนด้วย LINE บนมือถือ</strong><span>เปิด LINE → สแกน QR Code → อนุญาตการเข้าสู่ระบบ</span></div></div>
-                  {pin ? <div className="pin-card"><span>รหัสยืนยัน</span><strong>{pin}</strong></div> : null}
+                  <div className="qr-instruction"><QrCode size={18}/><div><strong>{t("สแกนด้วย LINE บนมือถือ")}</strong><span>{t("เปิด LINE → สแกน QR Code → อนุญาตการเข้าสู่ระบบ")}</span></div></div>
+                  {pin ? <div className="pin-card"><span>{t("รหัสยืนยัน")}</span><strong>{pin}</strong></div> : null}
                 </div>
               ) : (
                 <div className="auth-idle">
                   <div className="auth-engine-icon">{engineState === "starting" || authBusy ? <LoaderCircle className="spin" size={26}/> : <QrCode size={27}/>}</div>
-                  <strong>{authBusy ? english ? "Preparing sign-in" : "กำลังสร้างการเชื่อมต่อ" : engineState === "ready" ? english ? "LINE engine is ready" : "LINE engine พร้อม" : engineState === "error" ? english ? "LINE engine failed to start" : "LINE engine เริ่มทำงานไม่สำเร็จ" : english ? "Starting LINE engine" : "กำลังเตรียม LINE engine"}</strong>
-                  <span>{authBusy ? english ? "Waiting for LINE approval…" : "รอการยืนยันจาก LINE…" : engineState === "error" ? "ไม่สามารถเข้าสู่ระบบได้ ตรวจสอบ liney-engine และ sidecar ในแพ็กเกจ แล้วเปิด Diagnostics/Logs" : "สร้าง QR Code แล้วสแกนจากมือถือเพียงครั้งแรก"}</span>
+                  <strong>{authBusy ? t("กำลังสร้างการเชื่อมต่อ") : engineState === "ready" ? t("LINE engine พร้อม") : engineState === "error" ? t("LINE engine เริ่มทำงานไม่สำเร็จ") : t("กำลังเตรียม LINE engine")}</strong>
+                  <span>{authBusy ? t("รอการยืนยันจาก LINE…") : engineState === "error" ? t("ไม่สามารถเข้าสู่ระบบได้ ตรวจสอบ liney-engine และ sidecar ในแพ็กเกจ แล้วเปิด Diagnostics/Logs") : t("สร้าง QR Code แล้วสแกนจากมือถือเพียงครั้งแรก")}</span>
                 </div>
               )
             ) : (
               <form className="auth-password-form" onSubmit={(event) => { event.preventDefault(); if (canLogin) onPasswordLogin(); }}>
                 <label className="auth-field">
-                  <span>Email ของบัญชี LINE</span>
+                  <span>{t("Email ของบัญชี LINE")}</span>
                   <div className="auth-input-wrap"><Mail size={16}/><input type="email" autoComplete="username" spellCheck={false} value={email} onChange={(event) => onEmailChange(event.currentTarget.value)} placeholder="name@example.com" required /></div>
                 </label>
                 <label className="auth-field">
-                  <span>Password ของบัญชี LINE</span>
-                  <div className="auth-input-wrap"><KeyRound size={16}/><input type="password" autoComplete="current-password" value={password} onChange={(event) => onPasswordChange(event.currentTarget.value)} placeholder={english ? "Enter your password" : "กรอกรหัสผ่าน"} required /></div>
+                  <span>{t("Password ของบัญชี LINE")}</span>
+                  <div className="auth-input-wrap"><KeyRound size={16}/><input type="password" autoComplete="current-password" value={password} onChange={(event) => onPasswordChange(event.currentTarget.value)} placeholder={t("กรอกรหัสผ่าน")} required /></div>
                 </label>
-                {pin ? <div className="pin-card"><span>รหัสยืนยันจาก LINE</span><strong>{pin}</strong></div> : null}
+                {pin ? <div className="pin-card"><span>{t("รหัสยืนยันจาก LINE")}</span><strong>{pin}</strong></div> : null}
                 <button className="auth-primary" type="submit" disabled={!canLogin || !email.trim() || !password}>
-                  {authBusy ? <LoaderCircle className="spin" size={17}/> : <LogIn size={17}/>} {authBusy ? english ? "Signing in…" : "กำลังตรวจสอบบัญชี…" : english ? "Sign in with email" : "เข้าสู่ระบบด้วย Email"}
+                  {authBusy ? <LoaderCircle className="spin" size={17}/> : <LogIn size={17}/>} {authBusy ? t("กำลังตรวจสอบบัญชี…") : t("เข้าสู่ระบบด้วย Email")}
                 </button>
-                <p className="auth-password-note">บางบัญชีอาจต้องยืนยันรหัสบนโทรศัพท์ หรืออาจไม่รองรับการล็อกอินแบบนี้</p>
+                <p className="auth-password-note">{t("บางบัญชีอาจต้องยืนยันรหัสบนโทรศัพท์ หรืออาจไม่รองรับการล็อกอินแบบนี้")}</p>
               </form>
             )}
 
-            <details className="auth-disclaimer" role="note"><summary><TriangleAlert size={18}/> Usage warning / ข้อควรระวังการใช้งาน <span>Read details / อ่านรายละเอียด</span></summary><div className="auth-disclaimer-body">
+            <details className="auth-disclaimer" role="note"><summary><TriangleAlert size={18}/> {t("ข้อควรระวังการใช้งาน")} <span>{t("อ่านรายละเอียด")}</span></summary><div className="auth-disclaimer-body">
               <div>
-                <strong>การใช้งานแอปที่ไม่เป็นทางการ</strong>
-                <p>Liney ไม่ใช่แอป Official ของ LINE และไม่ได้รับการรับรองจาก LY Corporation การใช้ LINEJS อาจไม่สอดคล้องหรืออาจขัดกับ TOS ของ LINE บัญชีอาจถูกจำกัดหรือระงับ ใช้งานด้วยความระมัดระวังและความเสี่ยงของคุณเอง</p>
+                <strong>{t("การใช้งานแอปที่ไม่เป็นทางการ")}</strong>
+                <p>{t("Liney ไม่ใช่แอป Official ของ LINE และไม่ได้รับการรับรองจาก LY Corporation การใช้ LINEJS อาจไม่สอดคล้องหรืออาจขัดกับ TOS ของ LINE บัญชีอาจถูกจำกัดหรือระงับ ใช้งานด้วยความระมัดระวังและความเสี่ยงของคุณเอง")}</p>
               </div></div>
             </details>
-            <label className="auth-consent"><input type="checkbox" checked={riskAcknowledged} onChange={(event) => setRiskAcknowledged(event.currentTarget.checked)} /><span>I understand that Liney is unofficial, may violate LINE's Terms, and may put my account at risk. / ฉันเข้าใจว่า Liney ไม่ใช่แอปทางการและอาจมีความเสี่ยงต่อบัญชี</span></label>
+            <label className="auth-consent"><input type="checkbox" checked={riskAcknowledged} onChange={(event) => setRiskAcknowledged(event.currentTarget.checked)} /><span>{t("ฉันเข้าใจว่า Liney ไม่ใช่แอปทางการและอาจมีความเสี่ยงต่อบัญชี")}</span></label>
 
             {authMode === "qr" && !qrUrl ? (
               <button className="auth-primary" disabled={!canLogin} onClick={onStart}>
-                {authBusy ? <LoaderCircle className="spin" size={17}/> : <QrCode size={17}/>} {authBusy ? english ? "Generating QR code…" : "กำลังสร้าง QR Code…" : english ? "Generate QR code" : "สร้าง QR Code"}
+                {authBusy ? <LoaderCircle className="spin" size={17}/> : <QrCode size={17}/>} {authBusy ? t("กำลังสร้าง QR Code…") : t("สร้าง QR Code")}
               </button>
             ) : null}
           </>
         )}
 
-        {error && !(engineState === "ready" && !authBusy && !qrUrl && /SESSION|TOKEN_EXPIRED|UNAUTHORIZED/i.test(error)) ? <div className="auth-error" role="alert"><strong>{describeAuthError(error).title}</strong><span>{describeAuthError(error).message}</span>{describeAuthError(error).code ? <small>รหัสข้อผิดพลาด: {describeAuthError(error).code}</small> : null}</div> : null}
+        {error && !(engineState === "ready" && !authBusy && !qrUrl && /SESSION|TOKEN_EXPIRED|UNAUTHORIZED/i.test(error)) ? (() => { const authError = describeAuthError(error, language); return <div className="auth-error" role="alert"><strong>{authError.title}</strong><span>{authError.message}</span>{authError.code ? <small>{t("รหัสข้อผิดพลาด: {{code}}", { code: authError.code })}</small> : null}</div>; })() : null}
         {authenticated && !keyImportMode ? (
-          <button className="auth-secondary-danger" onClick={() => void onLogout()}>ออกจากระบบบนเครื่องนี้</button>
+          <button className="auth-secondary-danger" onClick={() => void onLogout()}>{t("ออกจากระบบบนเครื่องนี้")}</button>
         ) : null}
         <div className="auth-footnote">
-          <>Client: {clientIdentity?.displayName || "Liney-Linux"} · Credential: {storageMode === "wallet" ? "Wallet / Secret Service" : storageMode === "encrypted-file" ? "Encrypted local fallback (AES-256-GCM · ย้ายเข้า Wallet อัตโนมัติเมื่อพร้อม)" : "session-only (ไม่ persist credential)"} · E2EE storage อยู่ที่ ~/.local/share/liney · ไม่มี Liney server กลาง</>
+          <>Client: {clientIdentity?.displayName || "Liney-Linux"} · Credential: {storageMode === "wallet" ? "Wallet / Secret Service" : storageMode === "encrypted-file" ? t("Encrypted local fallback (AES-256-GCM · ย้ายเข้า Wallet อัตโนมัติเมื่อพร้อม)") : t("session-only (ไม่ persist credential)")} · {t("E2EE storage อยู่ที่ ~/.local/share/liney · ไม่มี Liney server กลาง")}</>
         </div>
       </motion.section>
     </motion.div>
@@ -5882,7 +5946,7 @@ function NewChatModal({
   onCreateOpenChat: (name: string, description: string, searchable: boolean) => Promise<Chat>;
   onClose: () => void;
 }) {
-  const { t } = useAppTranslation();
+  const { t, td } = useAppTranslation();
   const [tab, setTab] = useState<NewChatTab>("chat");
   const [search, setSearch] = useState("");
   const [lineId, setLineId] = useState("");
@@ -5979,10 +6043,10 @@ function NewChatModal({
           <button type="button" className={tab === "chat" ? "active" : ""} onClick={() => switchTab("chat")}><MessageCircle size={15}/> {t("แชตใหม่")}</button>
           <button type="button" className={tab === "friend" ? "active" : ""} onClick={() => switchTab("friend")}><UserPlus size={15}/> {t("เพิ่มเพื่อน")}</button>
           <button type="button" className={tab === "group" ? "active" : ""} onClick={() => switchTab("group")}><Users size={15}/> {t("สร้างกลุ่ม")}</button>
-          <button type="button" className={tab === "openchat" ? "active" : ""} onClick={() => switchTab("openchat")}><Sparkles size={15}/> OpenChat</button>
+          <button type="button" className={tab === "openchat" ? "active" : ""} onClick={() => switchTab("openchat")}><Sparkles size={15}/> {t("OpenChat")}</button>
         </div>
 
-        {error ? <div className="new-chat-error"><TriangleAlert size={15}/><span>{error}</span></div> : null}
+        {error ? <div className="new-chat-error"><TriangleAlert size={15}/><span>{td(error)}</span></div> : null}
 
         {tab === "friend" ? (
           <div className="new-chat-pane add-friend-pane">
@@ -6052,7 +6116,7 @@ function NewChatModal({
                     }}
                   >
                     <Avatar chat={friend} />
-                    <span className="new-chat-friend-copy"><strong>{friend.name}</strong><span>{friend.subtitle || t("เพื่อน · LINE")}</span></span>
+                    <span className="new-chat-friend-copy"><strong>{friend.name}</strong><span>{td(friend.subtitle || "เพื่อน · LINE")}</span></span>
                     {tab === "group" ? <span className={`new-chat-check ${checked ? "checked" : ""}`}>{checked ? "✓" : ""}</span> : <MessageCircle size={17}/>}
                   </button>
                 );
@@ -6079,7 +6143,7 @@ function SettingsModal({ initialTab, themeMode, dark, settings, callAvailable, o
   dark: boolean;
   settings: AppSettings;
   callAvailable: boolean;
-  onLanguageChange: (value: "th" | "en") => void;
+  onLanguageChange: (value: AppLanguage) => void;
   onThemeMode: (value: ThemeMode) => void;
   onSetting: (key: keyof AppSettings, value: boolean) => void;
   onDensity: (value: AppSettings["density"]) => void;
@@ -6092,7 +6156,6 @@ function SettingsModal({ initialTab, themeMode, dark, settings, callAvailable, o
 }) {
   const { t } = useAppTranslation();
   const [tab, setTab] = useState(initialTab);
-  const english = settings.language === "en";
   const groups = [
     { title: "บัญชีและหน้าตา", pages: [
       { id: "ทั่วไป", name: "ทั่วไป", icon: Settings, description: "ภาษา ฟอนต์ และการเริ่มต้นแอป" },
@@ -6115,18 +6178,7 @@ function SettingsModal({ initialTab, themeMode, dark, settings, callAvailable, o
   ];
   const currentGroup = groups.find((group) => group.pages.some((page) => page.id === tab));
   const currentPage = currentGroup?.pages.find((page) => page.id === tab);
-  const labels: Record<string, string> = english ? {
-    "บัญชีและหน้าตา": "Account & Appearance", "ทั่วไป": "General", "โปรไฟล์": "Profile", "หน้าตาแอป": "Appearance",
-    "การสื่อสาร": "Communication", "แชต": "Chats", "การแจ้งเตือน": "Notifications", "รูปภาพและสื่อ": "Images & Media",
-    "การโทร": "Calls", "เพื่อน": "Friends", "ระบบ": "System", "ขั้นสูง": "Advanced", "นักพัฒนา": "Developer", "เกี่ยวกับ Liney": "About Liney",
-    "ภาษา ฟอนต์ และการเริ่มต้นแอป": "Language, fonts and startup", "ดูและแก้ไขข้อมูลบัญชี LINE": "View and edit your LINE profile",
-    "ธีม ขนาดรายการ และรูปแบบการแสดงผล": "Theme, density and display preferences", "วิธีอ่าน ส่งข้อความ และจัดการประวัติ": "Reading, messaging and history",
-    "เลือกข้อความและสายที่ต้องการแจ้งเตือน": "Choose message and call notifications", "การดูรูป ดาวน์โหลดสื่อ และการจัดเก็บแคช": "Image viewing, media downloads and cache",
-    "สถานะการโทรและความสามารถที่รองรับ": "Call status and supported features", "ตรวจสอบรายชื่อเพื่อนและการซิงก์": "Friend list and synchronization",
-    "จัดการการแสดงผลและข้อมูลห้อง OpenChat": "OpenChat display and room data", "ข้อมูลในเครื่องและเครื่องมือการซิงก์": "Local data and sync tools",
-    "เครื่องมือสำหรับตรวจสอบและแก้ปัญหา": "Diagnostics and troubleshooting", "รายละเอียดแอปและเวอร์ชัน": "App details and version"
-  } : {};
-  const label = (value: string) => english ? (labels[value] ?? t(value)) : value;
+  const label = (value: string) => t(value);
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -6137,12 +6189,12 @@ function SettingsModal({ initialTab, themeMode, dark, settings, callAvailable, o
   return (
     <motion.div className="modal-backdrop settings-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <motion.section className="settings-modal settings-modal-refresh" role="dialog" aria-modal="true" aria-labelledby="liney-settings-heading" initial={{ opacity: 0, scale: 0.97, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98, y: 8 }} transition={{ duration: 0.18 }}>
-        <aside className="settings-nav" aria-label={english ? "Settings categories" : "หมวดหมู่การตั้งค่า"}>
+        <aside className="settings-nav" aria-label={t("หมวดหมู่การตั้งค่า")}>
           <div className="settings-nav-brand">
             <img src="/liney-logo.png" alt="" />
-            <span><strong>Liney</strong><small>{english ? "Application settings" : "ตั้งค่าแอปพลิเคชัน"}</small></span>
+            <span><strong>Liney</strong><small>{t("ตั้งค่าแอปพลิเคชัน")}</small></span>
           </div>
-          <nav className="settings-nav-list" aria-label={english ? "Settings pages" : "หน้าในการตั้งค่า"}>
+          <nav className="settings-nav-list" aria-label={t("หน้าในการตั้งค่า")}>
             {groups.map((group) => (
               <div className="settings-nav-group" key={group.title}>
                 <p className="settings-nav-group-label">{label(group.title)}</p>
@@ -6159,18 +6211,18 @@ function SettingsModal({ initialTab, themeMode, dark, settings, callAvailable, o
               </div>
             ))}
           </nav>
-          <div className="settings-nav-footer"><ShieldCheck size={14} />{english ? "Managed by Liney" : "จัดการข้อมูลจากแอป Liney"}</div>
+          <div className="settings-nav-footer"><ShieldCheck size={14} />{t("จัดการข้อมูลจากแอป Liney")}</div>
         </aside>
         <div className="settings-content">
           <header className="settings-header">
             <div className="settings-header-meta">
-              <span className="settings-header-breadcrumb">{english ? "Settings" : "ตั้งค่า"} / {label(currentGroup?.title ?? "ทั่วไป")}</span>
+              <span className="settings-header-breadcrumb">{t("ตั้งค่า")} / {label(currentGroup?.title ?? "ทั่วไป")}</span>
               <h2 id="liney-settings-heading">{label(currentPage?.name ?? tab)}</h2>
               <p className="settings-header-description">{label(currentPage?.description ?? "การตั้งค่า Liney")}</p>
             </div>
-            <button type="button" className="icon-button settings-close" onClick={onClose} title={english ? "Close settings" : "ปิดหน้าตั้งค่า"} aria-label={english ? "Close settings" : "ปิดหน้าตั้งค่า"}><X size={19} /></button>
+            <button type="button" className="icon-button settings-close" onClick={onClose} title={t("ปิดหน้าตั้งค่า")} aria-label={t("ปิดหน้าตั้งค่า")}><X size={19} /></button>
           </header>
-          {tab === "ทั่วไป" && <GeneralSettings settings={settings} themeMode={themeMode} dark={dark} english={english} onLanguageChange={onLanguageChange} onThemeMode={onThemeMode} onSetting={onSetting} />}
+          {tab === "ทั่วไป" && <GeneralSettings settings={settings} themeMode={themeMode} dark={dark} onLanguageChange={onLanguageChange} onThemeMode={onThemeMode} onSetting={onSetting} />}
           {tab === "โปรไฟล์" && (lineyEngine.isNative ? <LineProfileSettings onUpdated={onProfileChange} /> : <FeatureSettings title={t("โปรไฟล์")} body={t("เปิด LINE จากแอป Liney บน Linux เพื่อแก้โปรไฟล์")} />)}
           {tab === "Appearance" && <AppearanceSettings settings={settings} themeMode={themeMode} dark={dark} onThemeMode={onThemeMode} onDensity={onDensity} onRadius={onRadius} />}
           {tab === "OpenChat" && <OpenChatSettings settings={settings} onSetting={onSetting} />}
@@ -6188,23 +6240,25 @@ function SettingsModal({ initialTab, themeMode, dark, settings, callAvailable, o
   );
 }
 
-function GeneralSettings({ settings, themeMode, dark, english, onLanguageChange, onThemeMode, onSetting }: { settings: AppSettings; themeMode: ThemeMode; dark: boolean; english: boolean; onLanguageChange: (value: "th" | "en") => void; onThemeMode: (v: ThemeMode) => void; onSetting: (key: keyof AppSettings, value: boolean) => void }) {
+function GeneralSettings({ settings, themeMode, dark, onLanguageChange, onThemeMode, onSetting }: { settings: AppSettings; themeMode: ThemeMode; dark: boolean; onLanguageChange: (value: AppLanguage) => void; onThemeMode: (v: ThemeMode) => void; onSetting: (key: keyof AppSettings, value: boolean) => void }) {
+  const { t } = useAppTranslation();
   return <div className="settings-scroll">
-    <SettingsGroup title={english ? "Language & Fonts" : "ภาษาและฟอนต์"}>
-      <SettingRow title={english ? "Display language" : "ภาษา"} subtitle={english ? "Choose the language used across the interface" : "ภาษาที่ใช้แสดงในแอป"}>
-        <div className="settings-segment" role="group" aria-label="Display language">
+    <SettingsGroup title={t("ภาษาและฟอนต์")}>
+      <SettingRow title={t("ภาษา")} subtitle={t("ภาษาที่ใช้แสดงในแอป")}>
+        <div className="settings-segment" role="group" aria-label={t("ภาษา")}>
           <button type="button" className={settings.language === "th" ? "active" : ""} aria-pressed={settings.language === "th"} onClick={() => onLanguageChange("th")}>ไทย</button>
           <button type="button" className={settings.language === "en" ? "active" : ""} aria-pressed={settings.language === "en"} onClick={() => onLanguageChange("en")}>English</button>
+          <button type="button" className={settings.language === "zh-TW" ? "active" : ""} aria-pressed={settings.language === "zh-TW"} onClick={() => onLanguageChange("zh-TW")}>中文（台灣）</button>
         </div>
       </SettingRow>
-      <SettingRow title={english ? "Font" : "ฟอนต์"} subtitle={english ? "Use the system font by default" : "ใช้ฟอนต์ของระบบเป็นค่าเริ่มต้น"}><SelectLike value="System UI" /></SettingRow>
+      <SettingRow title={t("ฟอนต์")} subtitle={t("ใช้ฟอนต์ของระบบเป็นค่าเริ่มต้น")}><SelectLike value="System UI" /></SettingRow>
     </SettingsGroup>
-    <SettingsGroup title={english ? "Startup" : "เริ่มต้นระบบ"}>
-      <SettingRow title={english ? "Launch at startup" : "เปิดแอปพร้อมระบบ"} subtitle={english ? "Start Liney when you sign in to your desktop" : "เริ่ม Liney เมื่อเข้าสู่เดสก์ท็อป"}><Toggle checked={settings.startup} onChange={(checked) => onSetting("startup", checked)} /></SettingRow>
-      <SettingRow title={english ? "Minimize to system tray" : "ย่อไว้ใน System Tray"} subtitle={english ? "Close the window without quitting Liney" : "ปิดหน้าต่างโดยไม่ออกจากระบบ"}><Toggle checked={settings.tray} onChange={(checked) => onSetting("tray", checked)} /></SettingRow>
+    <SettingsGroup title={t("เริ่มต้นระบบ")}>
+      <SettingRow title={t("เปิดแอปพร้อมระบบ")} subtitle={t("เริ่ม Liney เมื่อเข้าสู่เดสก์ท็อป")}><Toggle checked={settings.startup} onChange={(checked) => onSetting("startup", checked)} /></SettingRow>
+      <SettingRow title={t("ย่อไว้ใน System Tray")} subtitle={t("ปิดหน้าต่างโดยไม่ออกจากระบบ")}><Toggle checked={settings.tray} onChange={(checked) => onSetting("tray", checked)} /></SettingRow>
     </SettingsGroup>
-    <SettingsGroup title="Appearance">
-      <SettingRow title={english ? "Follow system theme" : "ปรับตามธีมระบบ"} subtitle={english ? "Automatically follow your desktop Light / Dark mode" : "ติดตาม Light / Dark ของเดสก์ท็อประบบแบบอัตโนมัติ"}><Toggle checked={themeMode === "system"} onChange={(checked) => onThemeMode(checked ? "system" : (dark ? "dark" : "light"))} /></SettingRow>
+    <SettingsGroup title={t("หน้าตาแอป")}>
+      <SettingRow title={t("ปรับตามธีมระบบ")} subtitle={t("ติดตาม Light / Dark ของเดสก์ท็อประบบแบบอัตโนมัติ")}><Toggle checked={themeMode === "system"} onChange={(checked) => onThemeMode(checked ? "system" : (dark ? "dark" : "light"))} /></SettingRow>
       <ThemeCards themeMode={themeMode} dark={dark} onThemeMode={onThemeMode} />
     </SettingsGroup>
   </div>;
@@ -6242,10 +6296,10 @@ function OpenChatSettings({ settings, onSetting }: { settings: AppSettings; onSe
   return <div className="settings-scroll">
     <div className="feature-banner">
       <div className="feature-icon"><Sparkles size={21}/></div>
-      <div><strong>OpenChat powered by LINEJS Square</strong><p>{t("รายการและ event โหลดจาก LINEJS โดยตรงเมื่อเปิดใช้งาน")}</p></div>
+      <div><strong>{t("OpenChat powered by LINEJS Square")}</strong><p>{t("รายการและ event โหลดจาก LINEJS โดยตรงเมื่อเปิดใช้งาน")}</p></div>
       <span className="beta-chip">ENGINE READY</span>
     </div>
-    <SettingsGroup title="OpenChat">
+    <SettingsGroup title={t("OpenChat")}>
       <SettingRow title={t("แสดง OpenChat แยกจากแชตปกติ")} subtitle={t("เพิ่มแท็บ OpenChat บนแถบซ้าย")}><Toggle checked={settings.openchat} onChange={(checked) => onSetting("openchat", checked)} /></SettingRow>
       <SettingRow title="LiveTalk" subtitle={t("จะเปิดเมื่อมี implementation และ live test ครบ")}><span className="settings-status">{t("ยังไม่รองรับ")}</span></SettingRow>
       <SettingRow title={t("อัปเดตแบบ Realtime")} subtitle={t("ใช้ push event และ polling fallback เมื่อ stream ของ Square เงียบ")}><Toggle checked={settings.openchatRealtimeRefresh} onChange={(checked) => onSetting("openchatRealtimeRefresh", checked)} /></SettingRow>
@@ -6288,10 +6342,10 @@ function MediaSettings({ settings, onSetting }: { settings: AppSettings; onSetti
 function CallSettings({ available }: { available: boolean }) {
   const { t } = useAppTranslation();
   return <div className="settings-scroll">
-    <div className="feature-banner"><div className="feature-icon"><Phone size={21}/></div><div><strong>{t("เสียง 1:1")}</strong><p>{available ? "PipeWire + Opus พร้อม · ขาออกใช้ PLANET และขาเข้าใช้ Andromeda answer flow" : t("ยังไม่รองรับบนระบบนี้")}</p></div><span className={`beta-chip ${available ? "status-good" : ""}`}>{available ? "CALL READY" : "DISABLED"}</span></div>
+    <div className="feature-banner"><div className="feature-icon"><Phone size={21}/></div><div><strong>{t("เสียง 1:1")}</strong><p>{available ? t("PipeWire + Opus พร้อม · ขาออกใช้ PLANET และขาเข้าใช้ Andromeda answer flow") : t("ยังไม่รองรับบนระบบนี้")}</p></div><span className={`beta-chip ${available ? "status-good" : ""}`}>{available ? "CALL READY" : "DISABLED"}</span></div>
     <SettingsGroup title={t("ขอบเขตการโทร")}>
       <SettingRow title={t("เสียง 1:1 ขาออก")} subtitle={t("PLANET/Cassini · โทรออก mute เลือกลำโพง และวางสาย")}><span className={`settings-status ${available ? "status-good" : ""}`}>{available ? t("เปิดใช้งาน") : t("ยังไม่พร้อม")}</span></SettingRow>
-      <SettingRow title={t("สายเรียกเข้า")} subtitle="Andromeda INVITE → 100/180/200 → ACK + SRTP/Opus"><span className={`settings-status ${available ? "status-good" : ""}`}>{available ? t("Experimental · เปิดรับสาย") : "ยังไม่พร้อม"}</span></SettingRow>
+      <SettingRow title={t("สายเรียกเข้า")} subtitle="Andromeda INVITE → 100/180/200 → ACK + SRTP/Opus"><span className={`settings-status ${available ? "status-good" : ""}`}>{available ? t("Experimental · เปิดรับสาย") : t("ยังไม่พร้อม")}</span></SettingRow>
       <SettingRow title={t("ปฏิเสธสาย")} subtitle={t("ปิดหน้ารับสายในเครื่อง; LINEJS 3.4.2 ยังไม่มี reject RPC ระดับสูง")}><span className="settings-status">Local dismiss</span></SettingRow>
       <SettingRow title={t("วิดีโอ / group call / LiveTalk")} subtitle={t("ยังไม่เปิดจนกว่า media lifecycle และ live test จะครบ")}><span className="settings-status">{t("ปิดไว้")}</span></SettingRow>
     </SettingsGroup>
@@ -6305,7 +6359,7 @@ function FeatureSettings({ title, body }: { title: string; body: string }) {
 
 function AdvancedSettings({ onClearHistory, onFullSync }: { onClearHistory: () => void; onFullSync: () => void }) {
   const { t } = useAppTranslation();
-  return <div className="settings-scroll"><SettingsGroup title={t("การดูแลข้อมูล")}><SettingRow title={t("ล้างข้อมูลในเครื่อง")} subtitle={t("ใช้เมื่อจะส่งต่อเครื่องหรือแก้ปัญหา database")}><button className="secondary-button danger-outline" type="button" onClick={onClearHistory}>ล้างประวัติ</button></SettingRow></SettingsGroup><SettingsGroup title={t("การเชื่อมต่อ")}><SettingRow title="Full sync" subtitle={t("ซิงก์ friends, Talk, OpenChat และประวัติล่าสุดเมื่อสั่งแบบเต็ม")}><button className="secondary-button" type="button" onClick={onFullSync}>{t("เริ่ม Full sync")}</button></SettingRow></SettingsGroup></div>;
+  return <div className="settings-scroll"><SettingsGroup title={t("การดูแลข้อมูล")}><SettingRow title={t("ล้างข้อมูลในเครื่อง")} subtitle={t("ใช้เมื่อจะส่งต่อเครื่องหรือแก้ปัญหา database")}><button className="secondary-button danger-outline" type="button" onClick={onClearHistory}>{t("ล้างประวัติ")}</button></SettingRow></SettingsGroup><SettingsGroup title={t("การเชื่อมต่อ")}><SettingRow title="Full sync" subtitle={t("ซิงก์ friends, Talk, OpenChat และประวัติล่าสุดเมื่อสั่งแบบเต็ม")}><button className="secondary-button" type="button" onClick={onFullSync}>{t("เริ่ม Full sync")}</button></SettingRow></SettingsGroup></div>;
 }
 
 function DeveloperSettings({ settings, onSetting }: { settings: AppSettings; onSetting: (key: keyof AppSettings, value: boolean) => void }) {
@@ -6346,7 +6400,7 @@ function AboutSettings() {
   };
   const statusText:Record<string,string> = {idle:t("ยังไม่ได้ตรวจสอบ"),checking:t("กำลังตรวจสอบเวอร์ชัน…"),available:t("มีเวอร์ชันใหม่"),downloading:t("กำลังดาวน์โหลด {{percent}}%", { percent: update.percent ?? 0 }),downloaded:t("ดาวน์โหลดและตรวจสอบไฟล์แล้ว"),current:t("ใช้เวอร์ชันล่าสุดแล้ว"),unconfigured:t("ยังไม่ได้ตั้งค่า Update Feed"),error:t("ตรวจสอบการอัปเดตไม่สำเร็จ")};
   return <div className="settings-scroll">
-    <div className="settings-placeholder"><div className="placeholder-orb"><Info size={25}/></div><h3>Liney — LINE, made for Linux.</h3><p>Unofficial LINE client สำหรับ Linux · React + Electron · LINEJS Worker · SQLite history</p><span className="settings-status">Version {update.version} · {update.channel.toUpperCase()} channel</span></div>
+    <div className="settings-placeholder"><div className="placeholder-orb"><Info size={25}/></div><h3>Liney — LINE, made for Linux.</h3><p>{t("Unofficial LINE client สำหรับ Linux · React + Electron · LINEJS Worker · SQLite history")}</p><span className="settings-status">Version {update.version} · {update.channel.toUpperCase()} channel</span></div>
     <SettingsGroup title="Software Updates">
       <div className="setting-row"><div><strong>{statusText[update.status] || t("สถานะการอัปเดต")}</strong><span>{update.status === "current" ? t("ไม่พบเวอร์ชันใหม่") : update.availableVersion ? t("เวอร์ชันใหม่ {{version}}", { version: update.availableVersion }) : t("ตรวจสอบเวอร์ชันใหม่จาก Cytech Team")}</span></div><div className="setting-control"><button type="button" className="settings-action-button" disabled={busy || update.status === "checking" || update.status === "downloading"} onClick={() => void run("check_for_updates")}><RefreshCw size={14}/> {t("ตรวจสอบ")}</button></div></div>
       {update.status === "available" && update.availableVersion !== deferredVersion && <div className="setting-row"><div><strong>{t("พร้อมอัปเดต")}</strong><span>{t("ดาวน์โหลดได้โดยไม่ปิดแอป และจะติดตั้งเมื่อยืนยัน")}</span></div><div className="setting-control"><button type="button" className="settings-action-button" onClick={() => setDeferredVersion(update.availableVersion || null)}>{t("ไว้ภายหลัง")}</button><button type="button" className="settings-action-button primary" disabled={busy} onClick={() => void run("download_update")}>{t("ดาวน์โหลด")}</button></div></div>}
@@ -6391,7 +6445,7 @@ function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result ?? ""));
-    reader.onerror = () => reject(reader.error ?? new Error("อ่านไฟล์ไม่สำเร็จ"));
+    reader.onerror = () => reject(reader.error ?? new Error(translateText(activeLocaleLanguage(), "อ่านไฟล์ไม่สำเร็จ")));
     reader.readAsDataURL(file);
   });
 }
@@ -6494,24 +6548,34 @@ function hasUserVisibleMessageText(message: Message): boolean {
   return !(placeholders[Number(message.contentType ?? 0)] ?? []).includes(text.toLowerCase());
 }
 
+function activeLocaleLanguage(): AppLanguage {
+  if (typeof document !== "undefined") {
+    const lang = document.documentElement.lang;
+    if (isSupportedLanguage(lang)) return lang;
+  }
+  return "th";
+}
+
 function formatListTime(value: number) {
   const date = new Date(Number(value));
   if (!value || Number.isNaN(date.getTime())) return "";
+  const locale = getLocaleTag(activeLocaleLanguage());
   const now = new Date();
   if (date.toDateString() === now.toDateString()) {
-    return new Intl.DateTimeFormat("th-TH", { hour: "2-digit", minute: "2-digit" }).format(date);
+    return new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(date);
   }
   const delta = now.getTime() - date.getTime();
   if (delta < 7 * 24 * 60 * 60 * 1000) {
-    return new Intl.DateTimeFormat("th-TH", { weekday: "short" }).format(date);
+    return new Intl.DateTimeFormat(locale, { weekday: "short" }).format(date);
   }
-  return new Intl.DateTimeFormat("th-TH", { day: "numeric", month: "short" }).format(date);
+  return new Intl.DateTimeFormat(locale, { day: "numeric", month: "short" }).format(date);
 }
 
 function formatTime(value: number) {
+  const lang = activeLocaleLanguage();
   const date = new Date(Number(value));
-  if (Number.isNaN(date.getTime())) return "ตอนนี้";
-  return new Intl.DateTimeFormat("th-TH", { hour: "2-digit", minute: "2-digit" }).format(date);
+  if (Number.isNaN(date.getTime())) return translateText(lang, "ตอนนี้");
+  return new Intl.DateTimeFormat(getLocaleTag(lang), { hour: "2-digit", minute: "2-digit" }).format(date);
 }
 
 function initials(name: string) {
@@ -6587,108 +6651,110 @@ function CallModal({
   onOutput: (target: string) => void;
   onClose: () => void;
 }) {
+  const { t, td } = useAppTranslation();
   const status = state === "incoming"
-    ? "สายเรียกเข้า"
+    ? t("สายเรียกเข้า")
     : state === "acquiring"
-      ? "กำลังเตรียมการโทร…"
+      ? t("กำลังเตรียมการโทร…")
       : state === "connecting"
-        ? "กำลังเชื่อมต่อ…"
+        ? t("กำลังเชื่อมต่อ…")
         : state === "ringing"
-          ? "กำลังเรียก…"
+          ? t("กำลังเรียก…")
           : state === "in-call"
-            ? "กำลังสนทนา"
+            ? t("กำลังสนทนา")
             : state === "failed"
-              ? "สายเสียงไม่พร้อม"
+              ? t("สายเสียงไม่พร้อม")
               : state === "ended"
-                ? "สิ้นสุดการโทร"
-                : "สายเสียง";
+                ? t("สิ้นสุดการโทร")
+                : t("สายเสียง");
+  const peerLabel = td(chat.name) || peer;
   return <motion.div className="call-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
     <motion.div className={"call-card" + (remoteVideoFrame ? " has-video" : "")} initial={{ scale: .94, y: 16 }} animate={{ scale: 1, y: 0 }} exit={{ scale: .96, y: 10 }}>
-      <button className="call-expand" type="button" aria-label="ปิดหน้าต่าง" onClick={onClose}><Maximize2 size={16}/></button>
+      <button className="call-expand" type="button" aria-label={t("ปิดหน้าต่าง")} onClick={onClose}><Maximize2 size={16}/></button>
       {remoteVideoFrame
-        ? <img className="call-remote-video" src={remoteVideoFrame} alt={"วิดีโอจาก " + (chat.name || peer)} />
+        ? <img className="call-remote-video" src={remoteVideoFrame} alt={t("วิดีโอจาก {{name}}", { name: peerLabel })} />
         : <Avatar chat={chat} size="large" />}
-      <h2>{chat.name || peer}</h2>
+      <h2>{peerLabel}</h2>
       <p>{status}</p>
-      {error ? <div className="call-note call-error" role="status" aria-live="polite">{error}</div> : null}
-      {state === "in-call" ? <div className="call-wave" aria-label={muted ? "ปิดไมโครโฟน" : "กำลังสนทนา"}><i/><i/><i/><i/><i/></div> : null}
+      {error ? <div className="call-note call-error" role="status" aria-live="polite">{td(error)}</div> : null}
+      {state === "in-call" ? <div className="call-wave" aria-label={muted ? t("ปิดไมโครโฟน") : t("กำลังสนทนา")}><i/><i/><i/><i/><i/></div> : null}
       {state === "in-call" && videoCapable && !remoteVideoFrame
-        ? <div className="call-remote-wait">รอภาพจากอีกฝั่ง · ภาพจะแสดงเมื่อเขาเปิดกล้อง</div>
+        ? <div className="call-remote-wait">{t("รอภาพจากอีกฝั่ง · ภาพจะแสดงเมื่อเขาเปิดกล้อง")}</div>
         : null}
       {state === "incoming" ? (
         <div className="call-actions">
-          <button className="hangup" type="button" onClick={onReject}><Phone size={20}/><span>ปฏิเสธ</span></button>
-          <button type="button" disabled={!incomingSupported} title={incomingSupported ? "รับเป็นสายเสียง" : "ระบบรับสายยังไม่พร้อมบนเครื่องนี้"} onClick={onAccept}><Phone size={20}/><span>{incomingSupported ? "รับเสียง" : "รับสายยังไม่พร้อม"}</span></button>
-          <button type="button" disabled={!incomingSupported} title={incomingSupported ? "รับเป็นวิดีโอคอล" : "ระบบรับสายยังไม่พร้อมบนเครื่องนี้"} onClick={onAcceptVideo}><Video size={20}/><span>รับวิดีโอ</span></button>
+          <button className="hangup" type="button" onClick={onReject}><Phone size={20}/><span>{t("ปฏิเสธ")}</span></button>
+          <button type="button" disabled={!incomingSupported} title={incomingSupported ? t("รับเป็นสายเสียง") : t("ระบบรับสายยังไม่พร้อมบนเครื่องนี้")} onClick={onAccept}><Phone size={20}/><span>{incomingSupported ? t("รับเสียง") : t("รับสายยังไม่พร้อม")}</span></button>
+          <button type="button" disabled={!incomingSupported} title={incomingSupported ? t("รับเป็นวิดีโอคอล") : t("ระบบรับสายยังไม่พร้อมบนเครื่องนี้")} onClick={onAcceptVideo}><Video size={20}/><span>{t("รับวิดีโอ")}</span></button>
         </div>
       ) : state === "failed" || state === "ended" ? (
-        <button className="secondary-button" type="button" onClick={onClose}>ปิด</button>
+        <button className="secondary-button" type="button" onClick={onClose}>{t("ปิด")}</button>
       ) : (
         <div className="call-actions">
           <button
             type="button"
             className={muted ? "active" : ""}
             disabled={!microphoneAvailable}
-            title={microphoneAvailable ? (muted ? "เปิดไมค์" : "ปิดไมค์") : "ไม่พบไมโครโฟน · สายยังทำงานและฟังอีกฝั่งได้"}
+            title={microphoneAvailable ? (muted ? t("เปิดไมค์") : t("ปิดไมค์")) : t("ไม่พบไมโครโฟน · สายยังทำงานและฟังอีกฝั่งได้")}
             onClick={onMute}
-          ><Mic size={19}/><span>{microphoneAvailable ? (muted ? "เปิดไมค์" : "ปิดไมค์") : "ไม่มีไมค์"}</span></button>
+          ><Mic size={19}/><span>{microphoneAvailable ? (muted ? t("เปิดไมค์") : t("ปิดไมค์")) : t("ไม่มีไมค์")}</span></button>
           <button
             type="button"
             className={videoEnabled ? "active" : ""}
             aria-pressed={videoEnabled}
             disabled={!videoCapable || !cameraAvailable}
-            title={!videoCapable ? (mode === "AUDIO" ? "สายเสียงต้องเปลี่ยนเป็นวิดีโอคอลก่อน" : "LINE ยังไม่ได้เจรจาช่องวิดีโอ") : !cameraAvailable ? "ไม่พบกล้อง · แชร์หน้าจอยังใช้ได้" : videoEnabled ? "ปิดกล้อง" : "เปิดกล้อง"}
+            title={!videoCapable ? (mode === "AUDIO" ? t("สายเสียงต้องเปลี่ยนเป็นวิดีโอคอลก่อน") : t("LINE ยังไม่ได้เจรจาช่องวิดีโอ")) : !cameraAvailable ? t("ไม่พบกล้อง · แชร์หน้าจอยังใช้ได้") : videoEnabled ? t("ปิดกล้อง") : t("เปิดกล้อง")}
             onClick={onVideo}
-          ><Video size={20}/><span>{videoEnabled ? "ปิดกล้อง" : cameraAvailable ? "กล้อง" : "ไม่มีกล้อง"}</span></button>
+          ><Video size={20}/><span>{videoEnabled ? t("ปิดกล้อง") : cameraAvailable ? t("กล้อง") : t("ไม่มีกล้อง")}</span></button>
           <button
             type="button"
             className={screenSharing ? "active" : ""}
             aria-pressed={screenSharing}
             disabled={!videoCapable || !screenShareAvailable}
-            title={!videoCapable ? (mode === "AUDIO" ? "สายเสียงต้องเปลี่ยนเป็นวิดีโอคอลก่อน" : "LINE ยังไม่ได้เจรจาช่องวิดีโอ") : !screenShareAvailable ? "ระบบจับภาพหน้าจอยังไม่พร้อม" : screenSharing ? "หยุดแชร์หน้าจอ" : "แชร์หน้าจอ"}
+            title={!videoCapable ? (mode === "AUDIO" ? t("สายเสียงต้องเปลี่ยนเป็นวิดีโอคอลก่อน") : t("LINE ยังไม่ได้เจรจาช่องวิดีโอ")) : !screenShareAvailable ? t("ระบบจับภาพหน้าจอยังไม่พร้อม") : screenSharing ? t("หยุดแชร์หน้าจอ") : t("แชร์หน้าจอ")}
             onClick={onScreenShare}
-          ><Monitor size={20}/><span>{screenSharing ? "หยุดแชร์" : "แชร์จอ"}</span></button>
-          {!screenManagedBySystem && screenTargets.length ? <label className="call-device-picker" title={screenSharing ? "หยุดแชร์ก่อนเปลี่ยนเป้าหมาย" : "เลือกจอ หน้าต่าง หรือพื้นที่ที่ต้องการแชร์"}>
+          ><Monitor size={20}/><span>{screenSharing ? t("หยุดแชร์") : t("แชร์จอ")}</span></button>
+          {!screenManagedBySystem && screenTargets.length ? <label className="call-device-picker" title={screenSharing ? t("หยุดแชร์ก่อนเปลี่ยนเป้าหมาย") : t("เลือกจอ หน้าต่าง หรือพื้นที่ที่ต้องการแชร์")}>
             <Monitor size={19}/>
-            <span>เป้าหมาย</span>
+            <span>{t("เป้าหมาย")}</span>
             <select
-              aria-label="เป้าหมายแชร์หน้าจอ"
+              aria-label={t("เป้าหมายแชร์หน้าจอ")}
               value={screenTarget}
               onChange={(event) => onScreenTarget(event.target.value)}
               disabled={screenSharing}
             >
               {screenTargets.map((target) => <option key={target.id} value={target.id}>
-                {target.kind === "desktop" ? "ทั้งเดสก์ท็อป" : target.kind === "monitor" ? "จอ · " + target.name : target.kind === "window" ? "หน้าต่าง · " + target.name : "เลือกพื้นที่ด้วยเมาส์"}
+                {target.kind === "desktop" ? t("ทั้งเดสก์ท็อป") : target.kind === "monitor" ? t("จอ · {{name}}", { name: target.name }) : target.kind === "window" ? t("หน้าต่าง · {{name}}", { name: target.name }) : t("เลือกพื้นที่ด้วยเมาส์")}
               </option>)}
             </select>
           </label> : null}
-          <label className="call-device-picker" title={speakerAvailable && outputDevices.length ? "เลือกอุปกรณ์เสียงออก" : "ไม่พบลำโพง · สายยังเชื่อมต่อได้"}>
+          <label className="call-device-picker" title={speakerAvailable && outputDevices.length ? t("เลือกอุปกรณ์เสียงออก") : t("ไม่พบลำโพง · สายยังเชื่อมต่อได้")}>
             <Volume2 size={19}/>
-            <span>{speakerAvailable ? "ลำโพง" : "ไม่มีลำโพง"}</span>
-            <select aria-label="อุปกรณ์เสียงออก" value={outputTarget} onChange={(event) => onOutput(event.target.value)} disabled={!speakerAvailable || !outputDevices.length}>
-              <option value="">ค่าเริ่มต้น</option>
+            <span>{speakerAvailable ? t("ลำโพง") : t("ไม่มีลำโพง")}</span>
+            <select aria-label={t("อุปกรณ์เสียงออก")} value={outputTarget} onChange={(event) => onOutput(event.target.value)} disabled={!speakerAvailable || !outputDevices.length}>
+              <option value="">{t("ค่าเริ่มต้น")}</option>
               {outputDevices.map((device) => <option key={device.id} value={device.id}>{device.description || device.name}</option>)}
             </select>
           </label>
-          <button className="hangup" type="button" onClick={onClose}><Phone size={20}/><span>วางสาย</span></button>
+          <button className="hangup" type="button" onClick={onClose}><Phone size={20}/><span>{t("วางสาย")}</span></button>
         </div>
       )}
       {state === "in-call" && !videoCapable && mode === "AUDIO" ? (
         <div className="call-video-upgrade">
-          <span>กล้องและแชร์จอต้องเริ่มผ่านวิดีโอคอล</span>
-          <button type="button" onClick={onUpgradeVideo}>เริ่มวิดีโอคอลใหม่</button>
+          <span>{t("กล้องและแชร์จอต้องเริ่มผ่านวิดีโอคอล")}</span>
+          <button type="button" onClick={onUpgradeVideo}>{t("เริ่มวิดีโอคอลใหม่")}</button>
         </div>
       ) : null}
       {state === "in-call" && !videoCapable && mode === "VIDEO" ? (
-        <div className="call-capability-note" role="status">LINE ยังไม่ได้เปิดช่องวิดีโอสำหรับสายนี้</div>
+        <div className="call-capability-note" role="status">{t("LINE ยังไม่ได้เปิดช่องวิดีโอสำหรับสายนี้")}</div>
       ) : null}
       <div className="call-note">
         {state === "incoming"
-          ? "LINE 1:1 · สายเรียกเข้า"
+          ? t("LINE 1:1 · สายเรียกเข้า")
           : state === "in-call"
             ? videoCapable
-              ? screenSharing ? "กำลังแชร์หน้าจอ" : videoEnabled ? "กำลังส่งวิดีโอ" : remoteVideoFrame ? "กำลังรับวิดีโอจากอีกฝั่ง" : "วิดีโอพร้อม · รออีกฝั่งเปิดกล้อง"
-              : mode === "AUDIO" ? "สายเสียง 1:1" : "สายวิดีโอ 1:1"
+              ? screenSharing ? t("กำลังแชร์หน้าจอ") : videoEnabled ? t("กำลังส่งวิดีโอ") : remoteVideoFrame ? t("กำลังรับวิดีโอจากอีกฝั่ง") : t("วิดีโอพร้อม · รออีกฝั่งเปิดกล้อง")
+              : mode === "AUDIO" ? t("สายเสียง 1:1") : t("สายวิดีโอ 1:1")
             : "LINE 1:1"}
       </div>
     </motion.div>

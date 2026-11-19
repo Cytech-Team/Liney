@@ -16,7 +16,7 @@ export function LineChatManageModal({
   onClose: () => void;
   onUpdated?: () => void | Promise<void>;
 }) {
-  const { t } = useAppTranslation();
+  const { t, td } = useAppTranslation();
   const [name, setName] = useState(room.name);
   const [invitees, setInvitees] = useState<string[]>([]);
   const [query, setQuery] = useState("");
@@ -78,7 +78,7 @@ export function LineChatManageModal({
         <button className="icon-button" type="button" disabled={busy} aria-label={t("ปิด")} onClick={onClose}><X size={20}/></button>
       </header>
       <div className="liney-manage-scroll">
-        {error && <div className="liney-inline-message liney-inline-error" role="alert"><CircleAlert size={17}/><span>{error}</span></div>}
+        {error && <div className="liney-inline-message liney-inline-error" role="alert"><CircleAlert size={17}/><span>{td(error)}</span></div>}
         {notice && <div className="liney-inline-message liney-inline-success" role="status"><Check size={17}/><span>{notice}</span></div>}
 
         <section className="liney-manage-section">

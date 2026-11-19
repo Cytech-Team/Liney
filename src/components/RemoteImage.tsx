@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode, SyntheticEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import { lineyEngine } from "../lib/engine";
+import { useAppTranslation } from "../lib/i18n";
 
 export type RemoteImageStatus = "loading" | "loaded" | "failed";
 
@@ -59,6 +60,7 @@ export function RemoteImage({
   preferProxy = false,
   lineMessage,
 }: RemoteImageProps) {
+  const { t } = useAppTranslation();
   const statusRef = useRef(onStatus);
   const [state, setState] = useState<ImageState>(() => initialImageState(src, preferProxy));
   const currentState = state.requestUrl === src ? state : initialImageState(src, preferProxy);
@@ -146,7 +148,7 @@ export function RemoteImage({
   };
 
   if (proxyLoading || failed) {
-    return <>{fallback ?? <span className="remote-image-fallback">{alt || "รูปภาพโหลดไม่ได้"}</span>}</>;
+    return <>{fallback ?? <span className="remote-image-fallback">{alt || t("รูปภาพโหลดไม่ได้")}</span>}</>;
   }
 
   return (
