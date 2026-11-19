@@ -404,6 +404,26 @@ function isUnresolvedGroupResult(chat: LiveChatResult): boolean {
     && ["", "LINE Chat", "LINE User"].includes(chat.name.trim());
 }
 
+const PLACEHOLDER_CHAT_SUBTITLES = new Set([
+  "",
+  "ยังไม่เคยแชท",
+  "ประวัติเก่าอ่านไม่ได้ · Live mode",
+  "เพื่อน · LINE",
+  "กลุ่ม · LINE",
+  "OpenChat",
+  "LINE ไม่ส่งข้อมูลกลุ่มและประวัติเก่ากลับมา",
+  "บัญชีระบบ LINE · อ่าน payload ผ่าน Talk API ไม่ได้",
+]);
+
+function hasReadableChatHistory(chat: Pick<Chat, "id" | "historyState" | "lastMessageTime" | "subtitle" | "unread">): boolean {
+  if (chat.id === LINE_SYSTEM_ACCOUNT_MID) return false;
+  if (chat.historyState === "unavailable" || chat.historyState === "new") return false;
+  const hasTimestamp = Number(chat.lastMessageTime ?? 0) > 0;
+  const hasRealPreview = !PLACEHOLDER_CHAT_SUBTITLES.has(String(chat.subtitle ?? "").trim());
+  if (!hasTimestamp && !hasRealPreview && !chat.unread) return false;
+  return true;
+}
+
 function mapLiveChatResult(item: LiveChatResult, index: number): Chat {
   const lineSystemAccount = item.id === LINE_SYSTEM_ACCOUNT_MID;
   const profile = liveProfileMetadata(item);
@@ -1162,10 +1182,10 @@ function MainApp() {
           ]);
           liveChatsRef.current = next;
           setLiveChats(next);
-          setActiveChatId((current) => next.some((chat) => chat.id === current)
+          setActiveChatId((current) => next.some((chat) => chat.id === current && hasReadableChatHistory(chat))
             || Boolean(liveFriendsRef.current?.some((chat) => chat.id === current))
             ? current
-            : (next[0]?.id ?? ""));
+            : (next.find(hasReadableChatHistory)?.id ?? ""));
         }
       }
       if (event.type === "sync.start") {
@@ -1820,6 +1840,7 @@ function MainApp() {
       ? (settings.openchat ? (liveChats ?? []) : (liveChats ?? []).filter((chat) => chat.kind !== "openchat"))
       : seedChats;
     return mergeFriendProfilesIntoChats(base, allFriends)
+      .filter(hasReadableChatHistory)
       .map((chat) => {
         const localPinTimestamp = localPins[chat.id] ?? 0;
         const remotePinTimestamp = chat.favoriteTimestamp ?? 0;
@@ -2471,10 +2492,10 @@ function MainApp() {
     const mapped = sortLiveChats([...mappedById.values()]);
     liveChatsRef.current = mapped;
     setLiveChats(mapped);
-    setActiveChatId((current) => mapped.some((chat) => chat.id === current)
+    setActiveChatId((current) => mapped.some((chat) => chat.id === current && hasReadableChatHistory(chat))
       || Boolean(liveFriendsRef.current?.some((chat) => chat.id === current))
       ? current
-      : (mapped[0]?.id ?? ""));
+      : (mapped.find(hasReadableChatHistory)?.id ?? ""));
     if (!talkSucceeded && !squareSucceeded) {
       const reason = talkResult.status === "rejected" ? String(talkResult.reason) : "ผลลัพธ์จาก LINE ไม่ถูกต้อง";
       setAuthError(`โหลดรายการแชตไม่สำเร็จ: ${reason}`);
