@@ -201,6 +201,9 @@ button { border: 0; background: none; cursor: pointer; }
 .reaction-choice:hover { color: var(--text) !important; border-color: var(--green) !important; }
 .message-action-back { justify-content: center; margin-top: 3px; color: var(--muted) !important; border-top: 1px solid var(--border); border-radius: 0 !important; }
 .reply-reference { width: min(100%, 340px); margin-bottom: 5px; padding: 7px 9px; display: flex; align-items: flex-start; gap: 7px; border-left: 2px solid var(--green); border-radius: 8px; color: var(--muted); background: var(--panel-3); font-size: 10px; }
+.reply-reference.is-clickable { cursor: pointer; transition: background-color .15s ease; }
+.reply-reference.is-clickable:hover { background: color-mix(in srgb, var(--green) 12%, var(--panel-3)); }
+.reply-reference.is-clickable:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 .reply-reference > svg { flex: 0 0 auto; margin-top: 1px; color: var(--green); }
 .reply-reference > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .reply-reference strong, .reply-reference span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
