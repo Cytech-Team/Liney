@@ -4338,9 +4338,18 @@ function pushSyncResponseWaitMs(): number {
   return Math.min(Math.max(value, PUSH_SYNC_RESPONSE_TIMEOUT_MS), 10 * 60_000);
 }
 
+// LINE silently ignores Talk sync requests from a cursor that REST polling has
+// advanced (and from some restored cursors), so repeated retries cannot fix a
+// failed handshake on their own. After a few attempts hand the session to REST
+// polling and retry PUSH on a long cooldown instead of reconnecting forever.
+const PUSH_HANDSHAKE_FAILURE_LIMIT = 3;
+const PUSH_RETRY_COOLDOWN_MS = 15 * 60_000;
+
 async function supervisePush(next: LineClient, signal: AbortSignal, push: any): Promise<void> {
   let backoff = 1_000;
+  let consecutiveFailures = 0;
   let stage: "connect" | "handshake" | "listening" = "connect";
+  const pollingEnabled = eventTransportPolicy(process.env).pollingEnabled;
   const initServices = pushInitServices();
   const syncResponseWaitMs = pushSyncResponseWaitMs();
   authDiagnostics.record("push.supervisor.start", {
@@ -4365,6 +4374,9 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
         stage = "connect";
         LineJsAdapter.setPushListening(push, true);
         await LineJsAdapter.initializePushConnection(push, 1, initServices);
+        if (!(await LineJsAdapter.waitForPushTransport(push))) {
+          throw new Error("PUSH transport did not open in time");
+        }
 
         // Opening HTTP/2 only proves that the socket exists. Do not disable
         // REST fallback until LINE has answered the initial Talk sync request.
@@ -4380,6 +4392,7 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
           if (signal.aborted || client !== next || pushHealthy) return;
           pushHealthy = true;
           pushConnectedSince = Date.now();
+          consecutiveFailures = 0;
           authDiagnostics.record("push.connected", { revision: talkSyncCursor(next).revision });
           emit({ type: "event.transport", transport: "line", state: "connected" });
           resolveTalkSync();
@@ -4443,7 +4456,8 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
             emit({
               type: "event.transport",
               transport: "line",
-              state: "reconnecting",
+              state: pollingEnabled ? "connected" : "reconnecting",
+              ...(pollingEnabled ? { fallback: "polling" } : {}),
               error: startupResult === "timeout"
                 ? `Talk Sync did not respond within ${PUSH_SYNC_RESPONSE_TIMEOUT_MS}ms`
                 : "PUSH connection closed before Talk Sync became ready",
@@ -4452,7 +4466,17 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
           await LineJsAdapter.closePushConnections(push);
           await readPromise.catch(() => undefined);
           pushFallbackNotBefore = Date.now();
+          consecutiveFailures += 1;
           backoff = Math.min(backoff * 2, 30_000);
+          if (pollingEnabled && consecutiveFailures >= PUSH_HANDSHAKE_FAILURE_LIMIT) {
+            consecutiveFailures = 0;
+            authDiagnostics.record("push.fallback.hold", {
+              stage: "handshake",
+              failures: PUSH_HANDSHAKE_FAILURE_LIMIT,
+              cooldownMs: PUSH_RETRY_COOLDOWN_MS,
+            });
+            await waitForSignal(PUSH_RETRY_COOLDOWN_MS, signal);
+          }
         } else {
           stage = "listening";
           // LINEJS already receives protocol heartbeat frames every 30s.
@@ -4506,11 +4530,27 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
           clearStoredTalkSyncCursor();
         }
         if (!signal.aborted) {
-          emit({ type: "event.transport", transport: "line", state: "reconnecting", error: errorInfo(error).message });
+          emit({
+            type: "event.transport",
+            transport: "line",
+            state: pollingEnabled ? "connected" : "reconnecting",
+            ...(pollingEnabled ? { fallback: "polling" } : {}),
+            error: info.message,
+          });
         }
         await LineJsAdapter.closePushConnections(push);
         pushFallbackNotBefore = Date.now();
+        consecutiveFailures += 1;
         backoff = Math.min(backoff * 2, 30_000);
+        if (pollingEnabled && consecutiveFailures >= PUSH_HANDSHAKE_FAILURE_LIMIT) {
+          consecutiveFailures = 0;
+          authDiagnostics.record("push.fallback.hold", {
+            stage,
+            failures: PUSH_HANDSHAKE_FAILURE_LIMIT,
+            cooldownMs: PUSH_RETRY_COOLDOWN_MS,
+          });
+          await waitForSignal(PUSH_RETRY_COOLDOWN_MS, signal);
+        }
       }
       if (signal.aborted || client !== next) break;
       await waitForSignal(backoff, signal);

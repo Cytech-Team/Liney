@@ -113,6 +113,7 @@ export const LineJsAdapter = {
   setPushListening,
   initializePushConnection,
   readPush,
+  waitForPushTransport,
   observePushTalkSyncResponse,
   observePushHeartbeat,
   talkSyncCursor,
@@ -979,6 +980,26 @@ export function initializePushConnection(pushClient: any, revision: number, oper
 
 export function readPush(pushClient: any, operations: number[]) {
   return pushClient.InitAndRead(operations);
+}
+
+/**
+ * LINEJS resolves `Conn.new()` after 300ms even when the HTTP/2 response has
+ * not arrived yet, and `read()` gives it only another 500ms before throwing.
+ * A cold start routinely needs longer than that, which used to burn the first
+ * handshake attempt and hand the session to REST polling.
+ */
+export function waitForPushTransport(pushClient: any, timeoutMs = 10_000): Promise<boolean> {
+  const ready = () => Boolean(pushClient?.conns?.[0]?.resStream);
+  if (ready()) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const tick = () => {
+      if (ready()) return resolve(true);
+      if (Date.now() - startedAt >= timeoutMs) return resolve(false);
+      setTimeout(tick, 100);
+    };
+    tick();
+  });
 }
 
 /**
