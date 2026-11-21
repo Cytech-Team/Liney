@@ -278,6 +278,8 @@ button { border: 0; background: none; cursor: pointer; }
 .sticker-pack-cover { width: 100%; height: 100%; object-fit: contain; }
 .emoji-picker-grid button { aspect-ratio: 1; }
 .emoji-picker-grid img { width: 72%; height: 72%; }
+.basic-emoji-glyph { font-size: 24px; line-height: 1; }
+.basic-emoji-tab { font-size: 21px; line-height: 1; }
 .sticker-picker-empty { min-height: 78px; display: grid; place-items: center; color: var(--muted); font-size: 11px; text-align: center; }
 .composer-area textarea { flex: 1; min-height: 34px; max-height: 116px; resize: none; border: 0; outline: 0; color: var(--text); background: transparent; line-height: 1.5; padding: 7px 3px 5px; font-size: 13px; }
 .composer-area textarea::placeholder { color: var(--subtle); }
