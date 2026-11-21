@@ -166,6 +166,21 @@
 }
 .settings-modal-refresh .settings-card { border-radius: 15px; border-color: var(--border-strong); background: var(--panel); }
 .settings-modal-refresh .setting-row { min-height: 72px; padding: 16px 19px; gap: 16px; }
+.settings-select {
+  min-width: 158px;
+  min-height: 34px;
+  padding: 5px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  color-scheme: light;
+}
+:root[data-theme="dark"] .settings-select { color-scheme: dark; }
+.settings-select:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
 .settings-modal-refresh .setting-row > div:first-child { flex: 1 1 auto; }
 .settings-modal-refresh .setting-row strong { color: var(--text); font-size: 13px; line-height: 1.4; font-weight: 730; }
 .settings-modal-refresh .setting-row span { font-size: 11.5px; line-height: 1.55; }

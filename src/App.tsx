@@ -6425,11 +6425,16 @@ function GeneralSettings({ settings, themeMode, dark, onLanguageChange, onThemeM
   return <div className="settings-scroll">
     <SettingsGroup title={t("ภาษาและฟอนต์")}>
       <SettingRow title={t("ภาษา")} subtitle={t("ภาษาที่ใช้แสดงในแอป")}>
-        <div className="settings-segment" role="group" aria-label={t("ภาษา")}>
-          <button type="button" className={settings.language === "th" ? "active" : ""} aria-pressed={settings.language === "th"} onClick={() => onLanguageChange("th")}>ไทย</button>
-          <button type="button" className={settings.language === "en" ? "active" : ""} aria-pressed={settings.language === "en"} onClick={() => onLanguageChange("en")}>English</button>
-          <button type="button" className={settings.language === "zh-TW" ? "active" : ""} aria-pressed={settings.language === "zh-TW"} onClick={() => onLanguageChange("zh-TW")}>中文（台灣）</button>
-        </div>
+        <select
+          className="settings-select"
+          aria-label={t("ภาษา")}
+          value={settings.language}
+          onChange={(event) => onLanguageChange(event.target.value as AppLanguage)}
+        >
+          <option value="th">ไทย</option>
+          <option value="en">English</option>
+          <option value="zh-TW">中文（台灣）</option>
+        </select>
       </SettingRow>
       <SettingRow title={t("ฟอนต์")} subtitle={t("ใช้ฟอนต์ของระบบเป็นค่าเริ่มต้น")}><SelectLike value="System UI" /></SettingRow>
     </SettingsGroup>
