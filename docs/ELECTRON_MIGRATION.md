@@ -28,3 +28,18 @@ and host rather than by URL prefix. The smoke run fails on any CSP violation.
 credential namespace so dev, preview and stable can never rotate the same LINE
 refresh token. See `docs/LINEJS_UPSTREAM_AUTOMATION.md` for the channel table,
 the release gate and the stable auto-update policy.
+
+## Push and notifications
+
+- The Talk sync cursor is persisted per account in SQLite (`sync_state` key
+  `talk-sync-cursor`), restored before PUSH/polling attach, and sampled every
+  five seconds. Without it every launch requested a full account sync, which
+  could outlive the PUSH handshake window and delay notifications.
+- The first Talk Sync handshake waits 8 seconds, then keeps the same PUSH
+  connection open for up to 60 more seconds instead of reconnecting from
+  revision zero. REST polling stays held back during that window because PUSH
+  and polling share one Talk revision cursor.
+- An HTTP 410 on either transport resets the cursor so the next attempt does a
+  full sync.
+- `auth-diagnostics.jsonl` records `push.handshake` and `push.connected` lines,
+  so a "no notification" report can be checked against real transport state.

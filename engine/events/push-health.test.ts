@@ -1,7 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { PUSH_STARTUP_GRACE_MS, shouldUsePollingFallback } from "./push-health";
+import {
+  PUSH_STARTUP_GRACE_MS,
+  PUSH_SYNC_RESPONSE_EXTENDED_TIMEOUT_MS,
+  PUSH_SYNC_RESPONSE_TIMEOUT_MS,
+  shouldUsePollingFallback,
+} from "./push-health";
 
 describe("push transport health", () => {
+  test("keeps the extended handshake window longer than the first window", () => {
+    expect(PUSH_STARTUP_GRACE_MS).toBe(PUSH_SYNC_RESPONSE_TIMEOUT_MS);
+    expect(PUSH_SYNC_RESPONSE_EXTENDED_TIMEOUT_MS).toBeGreaterThan(PUSH_SYNC_RESPONSE_TIMEOUT_MS);
+  });
   test("keeps polling off for a healthy idle push connection", () => {
     const now = 100_000;
     expect(shouldUsePollingFallback({

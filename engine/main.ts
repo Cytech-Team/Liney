@@ -1,4 +1,4 @@
-import { bindClientStorage, createTemporaryQrStorage, getTargetProfiles, LineJsAdapter, parseE2EEKeyData, type LineClient, type LineyPollingSession } from "./linejs/adapter";
+import { bindClientStorage, createTemporaryQrStorage, getTargetProfiles, LineJsAdapter, parseE2EEKeyData, type LineClient, type LineyPollingSession, type TalkSyncCursor } from "./linejs/adapter";
 import { AuthDiagnostics } from "./auth-diagnostics";
 import { attachAuthEvents } from "./auth-events";
 import { authErrorCode, isDefinitiveAuthFailure } from "./auth-errors";
@@ -19,6 +19,10 @@ const {
   fromRawTalk,
   parseCancelCall,
   parseIncomingCallForClient,
+  talkSyncCursor,
+  restoreTalkSyncCursor,
+  resetTalkSyncCursor,
+  isExpiredTalkSyncCursorError,
 } = LineJsAdapter;
 import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
@@ -31,7 +35,7 @@ import { createInterface, type Interface } from "node:readline";
 import { parentPort } from "node:worker_threads";
 import { runFallbackPolling } from "./events/fallback-polling";
 import { OrderedOperationDispatcher, talkOperationIdentity, squareOperationIdentity } from "./events/ordered-operation-dispatcher";
-import { PUSH_STARTUP_GRACE_MS, PUSH_SYNC_RESPONSE_TIMEOUT_MS, shouldUsePollingFallback } from "./events/push-health";
+import { PUSH_STARTUP_GRACE_MS, PUSH_SYNC_RESPONSE_EXTENDED_TIMEOUT_MS, PUSH_SYNC_RESPONSE_TIMEOUT_MS, shouldUsePollingFallback } from "./events/push-health";
 import {
   SYSTEM_ACCOUNT_EVENT_THROTTLE_MS,
   SYSTEM_ACCOUNT_MISSING_BASELINE_CURSOR,
@@ -665,6 +669,7 @@ function readCredential(): AuthCredential | null {
 async function resetSessionState(reason: string): Promise<void> {
   authGeneration += 1;
   cancelCredentialRetry();
+  stopTalkSyncCursorTracking();
   listenerAbort?.abort();
   listenerAbort = null;
   // Full sync is cancellable and must not continue writing the previous
@@ -3991,6 +3996,93 @@ function needsPollingFallback(): boolean {
   });
 }
 
+// LINEJS keeps the Talk sync cursor only in memory. Persist it so the next
+// launch subscribes to a delta instead of replaying a full account sync, which
+// is what made PUSH miss the handshake window and delayed notifications.
+const TALK_SYNC_CURSOR_KEY = "talk-sync-cursor";
+const TALK_SYNC_CURSOR_HEARTBEAT_MS = 5_000;
+let talkSyncCursorTimer: ReturnType<typeof setInterval> | undefined;
+let talkSyncCursorOwner: LineClient | null = null;
+let talkSyncCursorWritten = "";
+
+function restoreTalkSyncCursorForClient(next: LineClient): void {
+  let cursor: TalkSyncCursor | null = null;
+  try {
+    const stored = database.getSyncState(ACCOUNT_ID, TALK_SYNC_CURSOR_KEY)?.cursor;
+    cursor = stored ? (JSON.parse(stored) as TalkSyncCursor) : null;
+  } catch {
+    cursor = null;
+  }
+  try {
+    restoreTalkSyncCursor(next, cursor);
+  } catch {
+    return;
+  }
+  talkSyncCursorWritten = cursor ? JSON.stringify({
+    revision: Number(cursor.revision) || 0,
+    globalRev: Number(cursor.globalRev) || 0,
+    individualRev: Number(cursor.individualRev) || 0,
+  }) : "";
+}
+
+function writeTalkSyncCursor(next: LineClient): void {
+  if (client !== next) return;
+  let cursor: TalkSyncCursor;
+  try {
+    cursor = talkSyncCursor(next);
+  } catch {
+    return;
+  }
+  const signature = JSON.stringify(cursor);
+  if (!cursor.revision || signature === talkSyncCursorWritten) return;
+  talkSyncCursorWritten = signature;
+  try {
+    database.setSyncState(ACCOUNT_ID, {
+      key: TALK_SYNC_CURSOR_KEY,
+      cursor: signature,
+      generation: 0,
+      status: "ready",
+    });
+  } catch {
+    // Cursor persistence is best effort; never break live delivery.
+  }
+}
+
+function clearStoredTalkSyncCursor(): void {
+  talkSyncCursorWritten = "";
+  try {
+    database.setSyncState(ACCOUNT_ID, {
+      key: TALK_SYNC_CURSOR_KEY,
+      cursor: JSON.stringify({ revision: 0, globalRev: 0, individualRev: 0 }),
+      generation: 0,
+      status: "idle",
+    });
+  } catch {
+    // Best effort.
+  }
+}
+
+/**
+ * LINEJS advances the cursor inside sync responses that do not always surface
+ * an event, so sample it on a light heartbeat instead of waiting for
+ * `update:syncdata`.
+ */
+function startTalkSyncCursorTracking(next: LineClient): void {
+  stopTalkSyncCursorTracking();
+  talkSyncCursorOwner = next;
+  writeTalkSyncCursor(next);
+  talkSyncCursorTimer = setInterval(() => {
+    if (talkSyncCursorOwner) writeTalkSyncCursor(talkSyncCursorOwner);
+  }, TALK_SYNC_CURSOR_HEARTBEAT_MS);
+  (talkSyncCursorTimer as { unref?: () => void }).unref?.();
+}
+
+function stopTalkSyncCursorTracking(): void {
+  if (talkSyncCursorTimer) clearInterval(talkSyncCursorTimer);
+  talkSyncCursorTimer = undefined;
+  talkSyncCursorOwner = null;
+}
+
 async function consumeTalkPolling(next: LineClient, signal: AbortSignal, polling: LineyPollingSession, dispatcher: OrderedOperationDispatcher<any>): Promise<void> {
   await runFallbackPolling({
     signal,
@@ -4015,6 +4107,12 @@ async function consumeTalkPolling(next: LineClient, signal: AbortSignal, polling
       }
     },
     onError: (error) => {
+      // `410 Gone` means LINE no longer accepts this Talk cursor. Retrying the
+      // same revision can never succeed, so fall back to a fresh full sync.
+      if (isExpiredTalkSyncCursorError(error) && client === next) {
+        resetTalkSyncCursor(next);
+        clearStoredTalkSyncCursor();
+      }
       if (!signal.aborted) emit({ type: "event.transport.error", transport: "talk-poll", error: errorInfo(error).message });
     },
   });
@@ -4068,6 +4166,7 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
           if (signal.aborted || client !== next || pushHealthy) return;
           pushHealthy = true;
           pushConnectedSince = Date.now();
+          authDiagnostics.record("push.connected", { revision: talkSyncCursor(next).revision });
           emit({ type: "event.transport", transport: "line", state: "connected" });
           resolveTalkSync();
         });
@@ -4080,10 +4179,36 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
             readPromise.then(() => "closed" as const),
             waitForSignal(PUSH_SYNC_RESPONSE_TIMEOUT_MS, handshakeTimeout.signal).then(() => "timeout" as const),
           ]);
+
+          // A launch without a stored cursor has to wait for a full account
+          // sync. Keep this PUSH connection open instead of closing it: a
+          // reconnect starts the same full sync over from revision zero.
+          // REST polling stays held back during this window because PUSH and
+          // polling share one Talk revision cursor.
+          if (startupResult === "timeout") {
+            pushFallbackNotBefore = Date.now() + PUSH_SYNC_RESPONSE_EXTENDED_TIMEOUT_MS;
+            if (!signal.aborted) {
+              emit({
+                type: "event.transport",
+                transport: "line",
+                state: "reconnecting",
+                error: `Talk Sync is still starting after ${PUSH_SYNC_RESPONSE_TIMEOUT_MS}ms; waiting up to ${PUSH_SYNC_RESPONSE_EXTENDED_TIMEOUT_MS}ms`,
+              });
+            }
+            startupResult = await Promise.race([
+              talkSyncReady.then(() => "ready" as const),
+              readPromise.then(() => "closed" as const),
+              waitForSignal(PUSH_SYNC_RESPONSE_EXTENDED_TIMEOUT_MS, handshakeTimeout.signal).then(() => "timeout" as const),
+            ]);
+          }
         } finally {
           handshakeTimeout.abort();
           stopObserving();
         }
+        authDiagnostics.record("push.handshake", {
+          result: startupResult,
+          revision: talkSyncCursor(next).revision,
+        });
 
         if (startupResult !== "ready") {
           pushHealthy = false;
@@ -4120,6 +4245,10 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
         pushHealthy = false;
         pushConnectedSince = 0;
         pushFallbackNotBefore = Date.now();
+        if (isExpiredTalkSyncCursorError(error) && client === next) {
+          resetTalkSyncCursor(next);
+          clearStoredTalkSyncCursor();
+        }
         if (!signal.aborted) {
           emit({ type: "event.transport", transport: "line", state: "reconnecting", error: errorInfo(error).message });
         }
@@ -4141,6 +4270,7 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
 function attachEvents(next: LineClient) {
   listenerAbort?.abort();
   listenerAbort = new AbortController();
+  startTalkSyncCursorTracking(next);
   const signal = listenerAbort.signal;
   const push = LineJsAdapter.push(next) as any;
   // One serial lane per LINE transport family, shared between PUSH and REST
@@ -4209,6 +4339,7 @@ async function finishAuthentication(next: LineClient, restored: boolean) {
   });
   prunePersistentCache(true);
   callManager.attach(next);
+  restoreTalkSyncCursorForClient(next);
   attachEvents(next);
   const credentialStorage = await persistCredential(next);
   authDiagnostics.record("auth.ready", {
