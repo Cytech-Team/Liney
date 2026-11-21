@@ -72,6 +72,7 @@ import { EngineRequestError, lineyEngine } from "./lib/engine";
 import { LanguageProvider, useAppTranslation } from "./lib/i18n";
 import { callMessagePreview, liveMessagePreview, notificationSenderName, officialLineMessageUrl } from "./lib/message-presentation";
 import { notificationAvatarUrl, prepareNotificationArtwork } from "./lib/notification-avatar";
+import { shouldNotifyMessage } from "./lib/notification-policy";
 import { MarketingSite, type MarketingView } from "./marketing/MarketingSite";
 import {
   compactTimelineRooms,
@@ -836,6 +837,7 @@ function MainApp() {
   const sessionReadReadersRef = useRef(new Map<string, Map<string, Set<string>>>());
   const imageGalleryPayloadRef = useRef<ImageGalleryPayload | null>(null);
   const notificationDedupRef = useRef(new Map<string, number>());
+  const notificationsArmedAtRef = useRef(0);
   const callNotificationDedupRef = useRef(new Set<string>());
   const nativeCallToneModeRef = useRef<CallToneMode | null>(null);
   const liveEventDedupRef = useRef(new Map<string, number>());
@@ -1255,6 +1257,7 @@ function MainApp() {
         setAuthError(typeof error?.message === "string" ? error.message : "เข้าสู่ระบบ LINE ไม่สำเร็จ กรุณาลองใหม่");
       }
       if (event.type === "auth.ready") {
+        notificationsArmedAtRef.current = Date.now();
         authenticatedRef.current = true;
         setAuthBusy(false);
         setAuthenticated(true);
@@ -1647,7 +1650,14 @@ function MainApp() {
             if (existing.some((item) => item.id === serverMessageId)) return current;
             return { ...current, [chatId]: [...existing, message] };
           });
-          if (!raw.isMine && !isChatActuallyVisible(chatId)) {
+          const notificationFresh = shouldNotifyMessage({
+            isMine: Boolean(raw.isMine),
+            visible: isChatActuallyVisible(chatId),
+            createdTime: Number(raw.createdTime ?? 0),
+            armedAt: notificationsArmedAtRef.current,
+            now: Date.now(),
+          });
+          if (!raw.isMine && !isChatActuallyVisible(chatId) && notificationFresh) {
             // A Flex/Rich message may arrive twice with different text previews.
             // The server message ID, not the rendered body, owns the notification.
             const now = Date.now();
