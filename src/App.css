@@ -1471,6 +1471,11 @@ button.post-notification-card { font: inherit; color: inherit; text-align: left;
   cursor: pointer;
 }
 .message-text-link:hover { text-decoration: underline; }
+.message-mention { color: #1687f8; font-weight: 650; }
+:root[data-theme="dark"] .message-mention { color: #6fb2ff; }
+button.message-mention { display: inline; padding: 0; border: 0; background: none; font: inherit; font-weight: 650; cursor: pointer; }
+button.message-mention:hover { text-decoration: underline; text-underline-offset: 2px; }
+button.message-mention:focus-visible { outline: 2px solid color-mix(in srgb, #1687f8 55%, transparent); outline-offset: 2px; border-radius: 4px; }
 .message-text-link:focus-visible {
   outline: 2px solid color-mix(in srgb, #1687f8 55%, transparent);
   outline-offset: 2px;

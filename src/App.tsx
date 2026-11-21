@@ -75,6 +75,7 @@ import { type AppLanguage, getLocaleTag, LanguageProvider, translateDisplayText,
 import { callMessagePreview, liveMessagePreview, notificationSenderName, officialLineMessageUrl } from "./lib/message-presentation";
 import { notificationAvatarUrl, prepareNotificationArtwork } from "./lib/notification-avatar";
 import { shouldNotifyMessage } from "./lib/notification-policy";
+import { parseMessageMentions, type MessageMention } from "./lib/mentions";
 import { MarketingSite, type MarketingView } from "./marketing/MarketingSite";
 import {
   compactTimelineRooms,
@@ -5404,6 +5405,7 @@ function Conversation({
               const showMessageText = hasUserVisibleMessageText(message);
               const fileState = fileOpenState[message.id];
               const attachmentExpired = attachmentExpiresAt(message) > 0 && Date.now() > attachmentExpiresAt(message);
+              const mentions = messageMentions(message);
               return (
               <div
                 key={`message-wrap-${message.id}`}
@@ -5495,7 +5497,7 @@ function Conversation({
                           ) : !message.rich && message.postNotification ? (
                             <PostNotificationCard data={message.postNotification} onOpenAlbum={onOpenAlbum} />
                          ) : !message.rich && showMessageText ? (
-                           <div className={`bubble ${message.status === "error" ? "bubble-error" : ""}`}><MessageTextWithLinks text={td(message.text!)} /></div>
+                           <div className={`bubble ${message.status === "error" ? "bubble-error" : ""}`}><MessageTextWithLinks text={mentions.length ? message.text! : td(message.text!)} mentions={mentions} onMentionClick={(mid, name) => onOpenProfile(mid, name)} /></div>
                          ) : null}
                           {showMessageText && message.status !== "sending" ? <LinkPreviewFor text={message.text!} /> : null}
                           {message.contentType === 14 && message.filename && !message.rich ? (
@@ -5971,33 +5973,66 @@ function openMessageLink(event: React.MouseEvent<HTMLAnchorElement>, href: strin
   }
 }
 
-function MessageTextWithLinks({ text }: { text: string }) {
+function MessageTextWithLinks({
+  text,
+  mentions = [],
+  onMentionClick,
+}: {
+  text: string;
+  mentions?: MessageMention[];
+  onMentionClick?: (mid: string, name: string) => void;
+}) {
   const source = String(text || "");
   const nodes: React.ReactNode[] = [];
-  let lastIndex = 0;
-  for (const match of source.matchAll(MESSAGE_LINK_RE)) {
-    if (match.index > lastIndex) nodes.push(source.slice(lastIndex, match.index));
-    const raw = match[0];
-    const { link, trailing } = splitTrailingLinkPunctuation(raw);
-    const href = normalizedMessageHref(link);
-    if (link) {
-      nodes.push(
-        <a
-          key={`${match.index}:${link}`}
-          className="message-text-link"
-          href={href}
-          target="_blank"
-          rel="noreferrer noopener"
-          onClick={(event) => openMessageLink(event, href)}
-        >
-          {link}
-        </a>,
-      );
+
+  const pushLinks = (value: string, keyPrefix: string) => {
+    let lastIndex = 0;
+    for (const match of value.matchAll(MESSAGE_LINK_RE)) {
+      if (match.index > lastIndex) nodes.push(value.slice(lastIndex, match.index));
+      const raw = match[0];
+      const { link, trailing } = splitTrailingLinkPunctuation(raw);
+      const href = normalizedMessageHref(link);
+      if (link) {
+        nodes.push(
+          <a
+            key={`${keyPrefix}:${match.index}:${link}`}
+            className="message-text-link"
+            href={href}
+            target="_blank"
+            rel="noreferrer noopener"
+            onClick={(event) => openMessageLink(event, href)}
+          >
+            {link}
+          </a>,
+        );
+      }
+      if (trailing) nodes.push(trailing);
+      lastIndex = match.index + raw.length;
     }
-    if (trailing) nodes.push(trailing);
-    lastIndex = match.index + raw.length;
+    if (lastIndex < value.length) nodes.push(value.slice(lastIndex));
+  };
+
+  let cursor = 0;
+  for (const mention of mentions) {
+    if (mention.start < cursor || mention.end > source.length) continue;
+    if (mention.start > cursor) pushLinks(source.slice(cursor, mention.start), `t${cursor}`);
+    const label = source.slice(mention.start, mention.end);
+    const clickable = Boolean(mention.mid && onMentionClick);
+    nodes.push(
+      clickable
+        ? <button
+            key={`m${mention.start}`}
+            type="button"
+            className="message-mention is-clickable"
+            onClick={() => onMentionClick!(mention.mid!, label.replace(/^@/, ""))}
+          >
+            {label}
+          </button>
+        : <span key={`m${mention.start}`} className="message-mention">{label}</span>,
+    );
+    cursor = mention.end;
   }
-  if (lastIndex < source.length) nodes.push(source.slice(lastIndex));
+  if (cursor < source.length) pushLinks(source.slice(cursor), `t${cursor}`);
   return <>{nodes.length ? nodes : source}</>;
 }
 
@@ -7012,6 +7047,11 @@ function formatSendError(value: unknown): string {
 function mediaLabel(contentType: number, filename: string): string {
   const label = contentType === 2 ? "วิดีโอ" : contentType === 3 ? "เสียง" : contentType === 14 ? "ไฟล์" : "รูปภาพ";
   return filename ? `${label}: ${filename}` : label;
+}
+
+/** LINE stores mentions as S/E offsets in contentMetadata.MENTION. */
+function messageMentions(message: Message): MessageMention[] {
+  return parseMessageMentions(message.text, message.raw);
 }
 
 /** LINE returns a millisecond expiry (about a week) for uploaded attachments. */
