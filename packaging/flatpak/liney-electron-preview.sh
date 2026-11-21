@@ -2,4 +2,4 @@
 set -eu
 # Flatpak already provides the outer application sandbox; Chromium's setuid
 # sandbox cannot be used inside it.
-exec "/app/opt/Liney/liney" --no-sandbox "$@"
+exec "/app/opt/LineyPreview/liney-preview" --no-sandbox "$@"

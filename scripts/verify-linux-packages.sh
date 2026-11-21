@@ -7,10 +7,18 @@ CHANNEL="${LINEY_RELEASE_CHANNEL:-preview}"
 if [[ "$CHANNEL" == "stable" ]]; then
   ARTIFACT_PREFIX="Liney"
   DESKTOP_ID="dev.cytechteam.liney"
+  PACKAGE_NAME="liney"
+  INSTALL_DIR="Liney"
+  EXECUTABLE="liney"
 else
   ARTIFACT_PREFIX="Liney-Electron-Preview"
   DESKTOP_ID="dev.cytechteam.liney.electron-preview"
+  PACKAGE_NAME="liney-preview"
+  INSTALL_DIR="LineyPreview"
+  EXECUTABLE="liney-preview"
 fi
+APP_ROOT="/opt/${INSTALL_DIR}"
+DESKTOP_EXEC="Exec=${APP_ROOT}/${EXECUTABLE} %U"
 APPIMAGE="$OUTPUT_DIR/${ARTIFACT_PREFIX}-${VERSION}-x86_64.AppImage"
 DEB="$OUTPUT_DIR/${ARTIFACT_PREFIX}-${VERSION}-amd64.deb"
 RPM="$OUTPUT_DIR/${ARTIFACT_PREFIX}-${VERSION}-x86_64.rpm"
@@ -40,7 +48,7 @@ grep -Fq "version: $VERSION" "$YML"
 grep -Fq "sha512" "$YML"
 
 # Validate package metadata without relying on a host RPM database.
-[[ "$(dpkg-deb --field "$DEB" Package)" == "liney" ]]
+[[ "$(dpkg-deb --field "$DEB" Package)" == "$PACKAGE_NAME" ]]
 [[ "$(dpkg-deb --field "$DEB" Version)" == "$VERSION" ]]
 [[ "$(dpkg-deb --field "$DEB" Architecture)" == "amd64" ]]
 mkdir -p "$PACKAGE_ROOT/rpmdb"
@@ -48,23 +56,24 @@ rpm --dbpath "$PACKAGE_ROOT/rpmdb" --initdb
 RPM_ID="$(rpm --dbpath "$PACKAGE_ROOT/rpmdb" -qp --queryformat '%{VERSION} %{ARCH}' "$RPM")"
 [[ "$RPM_ID" == "${VERSION} x86_64" ]]
 rpm --dbpath "$PACKAGE_ROOT/rpmdb" -qpl "$RPM" > "$PACKAGE_ROOT/rpm-files.txt"
-grep -Fqx '/opt/Liney/liney' "$PACKAGE_ROOT/rpm-files.txt"
+grep -Fqx "${APP_ROOT}/${EXECUTABLE}" "$PACKAGE_ROOT/rpm-files.txt"
 dpkg-deb --extract "$DEB" "$PACKAGE_ROOT/deb"
-DEB_APP="$PACKAGE_ROOT/deb/opt/Liney/liney"
+DEB_APP="$PACKAGE_ROOT/deb${APP_ROOT}/${EXECUTABLE}"
 test -x "$DEB_APP"
-test -s "$PACKAGE_ROOT/deb/opt/Liney/resources/app.asar"
-test -x "$PACKAGE_ROOT/deb/opt/Liney/resources/app.asar.unpacked/electron/native/liney-media"
-grep -Fqx 'Exec="/opt/Liney/liney" %U' \
-  "$PACKAGE_ROOT/deb/usr/share/applications/${DESKTOP_ID}.desktop"
+test -s "$PACKAGE_ROOT/deb${APP_ROOT}/resources/app.asar"
+test -x "$PACKAGE_ROOT/deb${APP_ROOT}/resources/app.asar.unpacked/electron/native/liney-media"
+DESKTOP_FILE="$PACKAGE_ROOT/deb/usr/share/applications/${DESKTOP_ID}.desktop"
+grep -Fqx "$DESKTOP_EXEC" "$DESKTOP_FILE" \
+  || grep -Fqx "Exec=\"${APP_ROOT}/${EXECUTABLE}\" %U" "$DESKTOP_FILE"
 
 mkdir -p "$PACKAGE_ROOT/rpm"
 rpm2cpio "$RPM" | (cd "$PACKAGE_ROOT/rpm" && cpio -idm --quiet)
-RPM_APP="$PACKAGE_ROOT/rpm/opt/Liney/liney"
+RPM_APP="$PACKAGE_ROOT/rpm${APP_ROOT}/${EXECUTABLE}"
 test -x "$RPM_APP"
-test -s "$PACKAGE_ROOT/rpm/opt/Liney/resources/app.asar"
+test -s "$PACKAGE_ROOT/rpm${APP_ROOT}/resources/app.asar"
 
 for payload in deb rpm; do
-  NATIVE="$PACKAGE_ROOT/$payload/opt/Liney/resources/app.asar.unpacked/electron/native"
+  NATIVE="$PACKAGE_ROOT/$payload${APP_ROOT}/resources/app.asar.unpacked/electron/native"
   for helper in liney-media liney-audio liney-screen liney-screen-wayland liney-screen-x11; do
     test -x "$NATIVE/$helper"
     ldd "$NATIVE/$helper" > "$PACKAGE_ROOT/${payload}-${helper}.ldd" 2>&1
@@ -121,7 +130,7 @@ mkdir -p "$PACKAGE_ROOT/appimage"
   cd "$PACKAGE_ROOT/appimage"
   "$APPIMAGE" --appimage-extract >/dev/null
 )
-run_smoke appimage "$PACKAGE_ROOT/appimage/squashfs-root/liney"
+run_smoke appimage "$PACKAGE_ROOT/appimage/squashfs-root/${EXECUTABLE}"
 
 # Exercise the executable and resources from the actual DEB archive without
 # installing anything into the CI runner.
@@ -130,4 +139,4 @@ run_smoke deb "$DEB_APP"
 # Extract the RPM payload without installing it into the CI runner.
 run_smoke rpm "$RPM_APP"
 
-echo "All AppImage, DEB and RPM package checks passed for ${VERSION}."
+echo "All AppImage, DEB and RPM package checks passed for ${VERSION} (${CHANNEL})."

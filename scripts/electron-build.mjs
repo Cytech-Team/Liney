@@ -21,7 +21,17 @@ export function buildArgs(channel) {
       "--config.linux.desktop.entry.StartupWMClass=dev.cytechteam.liney",
     );
   } else {
-    args.push("--config.extraMetadata.lineyChannel=preview");
+    args.push(
+      // Preview is a separate operating-system application so it can be
+      // installed next to stable without replacing /opt/Liney.
+      "--config.productName=LineyPreview",
+      "--config.extraMetadata.name=liney-preview",
+      "--config.extraMetadata.lineyChannel=preview",
+      "--config.extraMetadata.desktopName=dev.cytechteam.liney.electron-preview",
+      "--config.linux.executableName=liney-preview",
+      "--config.deb.packageName=liney-preview",
+      "--config.rpm.packageName=liney-preview",
+    );
   }
   return args;
 }

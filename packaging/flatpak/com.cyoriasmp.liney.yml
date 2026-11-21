@@ -22,8 +22,8 @@ modules:
       - mkdir -p deb-extract
       - ar x Liney-Electron-Preview.deb
       - tar -xJf data.tar.xz -C deb-extract
-      - install -d "/app/opt/Liney"
-      - cp -a "deb-extract/opt/Liney/." "/app/opt/Liney/"
+      - install -d "/app/opt/LineyPreview"
+      - cp -a "deb-extract/opt/LineyPreview/." "/app/opt/LineyPreview/"
       - install -Dm755 liney-electron-preview.sh /app/bin/liney-electron-preview
       - install -Dm644 com.cyoriasmp.liney.desktop /app/share/applications/com.cyoriasmp.liney.desktop
       - install -Dm644 icon.png /app/share/icons/hicolor/512x512/apps/com.cyoriasmp.liney.png
