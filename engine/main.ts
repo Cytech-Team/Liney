@@ -4333,6 +4333,11 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
         // REST fallback until LINE has answered the initial Talk sync request.
         let resolveTalkSync!: () => void;
         const talkSyncReady = new Promise<void>((resolve) => { resolveTalkSync = resolve; });
+        const handshakeStartedAt = Date.now();
+        let signOnFrames = 0;
+        let handshakePings = 0;
+        let firstSignOnFrame: { requestId: number; isFin: boolean; service: number | null; method: string | null; bytes: number; afterMs: number } | null = null;
+        const stopHeartbeatProbe = LineJsAdapter.observePushHeartbeat(push, () => { handshakePings += 1; });
         const stopObserving = LineJsAdapter.observePushTalkSyncResponse(push, () => {
           if (signal.aborted || client !== next || pushHealthy) return;
           pushHealthy = true;
@@ -4340,6 +4345,9 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
           authDiagnostics.record("push.connected", { revision: talkSyncCursor(next).revision });
           emit({ type: "event.transport", transport: "line", state: "connected" });
           resolveTalkSync();
+        }, (frame) => {
+          signOnFrames += 1;
+          if (!firstSignOnFrame) firstSignOnFrame = { ...frame, afterMs: Date.now() - handshakeStartedAt };
         });
         const handshakeTimeout = new AbortController();
         const readPromise = LineJsAdapter.readPush(push, [3, 8]);
@@ -4375,10 +4383,15 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
         } finally {
           handshakeTimeout.abort();
           stopObserving();
+          stopHeartbeatProbe();
         }
         authDiagnostics.record("push.handshake", {
           result: startupResult,
           revision: talkSyncCursor(next).revision,
+          elapsedMs: Date.now() - handshakeStartedAt,
+          signOnFrames,
+          handshakePings,
+          firstSignOnFrame,
         });
 
         if (startupResult !== "ready") {

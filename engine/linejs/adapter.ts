@@ -985,7 +985,11 @@ export function readPush(pushClient: any, operations: number[]) {
  * A successful HTTP/2 connection alone does not prove that Talk events are
  * subscribed and syncing. Keep this LINEJS-internal hook inside the adapter.
  */
-export function observePushTalkSyncResponse(pushClient: any, onResponse: () => void): () => void {
+export function observePushTalkSyncResponse(
+  pushClient: any,
+  onResponse: () => void,
+  onFrame?: (frame: { requestId: number; isFin: boolean; service: number | null; method: string | null; bytes: number }) => void,
+): () => void {
   const original = pushClient?.onSignOnResponse;
   if (typeof original !== "function") throw new Error("LINEJS PUSH sign-on response handler is unavailable");
 
@@ -995,6 +999,17 @@ export function observePushTalkSyncResponse(pushClient: any, onResponse: () => v
       && Array.isArray(request)
       && Number(request[0]) === 8
       && request[1] === "sync";
+    if (onFrame) {
+      try {
+        onFrame({
+          requestId,
+          isFin,
+          service: Array.isArray(request) ? Number(request[0]) : null,
+          method: Array.isArray(request) ? String(request[1]) : null,
+          bytes: data?.length ?? 0,
+        });
+      } catch { /* frame observers must not break LINEJS frame handling */ }
+    }
     const result = await original.call(pushClient, requestId, isFin, data);
     // LINEJS returns false when it cannot parse or accept a sign-on response.
     // Do not promote a rejected Talk sync handshake to a healthy transport.
