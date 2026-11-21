@@ -45,6 +45,33 @@ describe("resolveRuntimePaths", () => {
     expect(paths.userDataDir).toBeNull();
   });
 
+  test("reads the stable channel from packaged build metadata", () => {
+    const paths = resolveRuntimePaths({
+      isPackaged: true,
+      buildChannel: "stable",
+      env: {},
+      home: "/home/liney",
+      xdgDataHome: undefined,
+    });
+
+    expect(paths.channel).toBe("stable");
+    expect(paths.stateDir).toBe("/home/liney/.local/share/liney");
+    expect(paths.credentialNamespace).toBe("stable");
+  });
+
+  test("never trusts build metadata in an unpackaged build", () => {
+    const paths = resolveRuntimePaths({
+      isPackaged: false,
+      buildChannel: "stable",
+      env: {},
+      home: "/home/liney",
+      xdgDataHome: undefined,
+    });
+
+    expect(paths.channel).toBe("dev");
+    expect(paths.credentialNamespace).toBe("dev");
+  });
+
   test("ignores the stable flag in unpackaged builds", () => {
     const paths = resolveRuntimePaths({
       isPackaged: false,

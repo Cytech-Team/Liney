@@ -3,9 +3,17 @@ set -euo pipefail
 
 OUTPUT_DIR="$(realpath "${1:-release-electron}")"
 VERSION="$(node -p 'require("./package.json").version')"
-APPIMAGE="$OUTPUT_DIR/Liney-Electron-Preview-${VERSION}-x86_64.AppImage"
-DEB="$OUTPUT_DIR/Liney-Electron-Preview-${VERSION}-amd64.deb"
-RPM="$OUTPUT_DIR/Liney-Electron-Preview-${VERSION}-x86_64.rpm"
+CHANNEL="${LINEY_RELEASE_CHANNEL:-preview}"
+if [[ "$CHANNEL" == "stable" ]]; then
+  ARTIFACT_PREFIX="Liney"
+  DESKTOP_ID="dev.cytechteam.liney"
+else
+  ARTIFACT_PREFIX="Liney-Electron-Preview"
+  DESKTOP_ID="dev.cytechteam.liney.electron-preview"
+fi
+APPIMAGE="$OUTPUT_DIR/${ARTIFACT_PREFIX}-${VERSION}-x86_64.AppImage"
+DEB="$OUTPUT_DIR/${ARTIFACT_PREFIX}-${VERSION}-amd64.deb"
+RPM="$OUTPUT_DIR/${ARTIFACT_PREFIX}-${VERSION}-x86_64.rpm"
 
 for tool in file dpkg-deb rpm rpm2cpio cpio xvfb-run xdotool timeout ldd; do
   command -v "$tool" >/dev/null || {
@@ -47,7 +55,7 @@ test -x "$DEB_APP"
 test -s "$PACKAGE_ROOT/deb/opt/Liney/resources/app.asar"
 test -x "$PACKAGE_ROOT/deb/opt/Liney/resources/app.asar.unpacked/electron/native/liney-media"
 grep -Fqx 'Exec="/opt/Liney/liney" %U' \
-  "$PACKAGE_ROOT/deb/usr/share/applications/dev.cytechteam.liney.electron-preview.desktop"
+  "$PACKAGE_ROOT/deb/usr/share/applications/${DESKTOP_ID}.desktop"
 
 mkdir -p "$PACKAGE_ROOT/rpm"
 rpm2cpio "$RPM" | (cd "$PACKAGE_ROOT/rpm" && cpio -idm --quiet)

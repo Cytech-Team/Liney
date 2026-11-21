@@ -18,9 +18,9 @@ function customNamespace(explicitDataDir) {
  * installs keep their session. Dev and stable are isolated so two Liney
  * processes can never rotate the same refresh token at the same time.
  */
-export function resolveRuntimePaths({ isPackaged, env = {}, home, xdgDataHome }) {
+export function resolveRuntimePaths({ isPackaged, env = {}, home, xdgDataHome, buildChannel }) {
   const explicitDataDir = String(env.LINEY_DATA_DIR || "").trim();
-  const stable = env.LINEY_ELECTRON_STABLE === "1";
+  const stable = env.LINEY_ELECTRON_STABLE === "1" || buildChannel === "stable";
   const channel = !isPackaged ? "dev" : stable ? "stable" : "preview";
   const dataRoot = xdgDataHome || join(home, ".local/share");
   const stateDir = explicitDataDir || join(dataRoot, CHANNEL_DIRS[channel]);

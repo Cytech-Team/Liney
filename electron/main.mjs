@@ -8,7 +8,7 @@ const { autoUpdater } = updater;
 import { Worker } from "node:worker_threads";
 import { randomUUID } from "node:crypto";
 import { writeFile, mkdir, stat } from "node:fs/promises";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
@@ -22,8 +22,20 @@ protocol.registerSchemesAsPrivileged([
 const base = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(base, "..");
 const bundled = app.isPackaged;
+// electron-builder writes `lineyChannel` into the packaged manifest, so a
+// stable build does not depend on an environment variable the user must set.
+function packagedBuildChannel() {
+  if (!bundled) return "preview";
+  try {
+    const manifest = JSON.parse(readFileSync(path.join(app.getAppPath(), "package.json"), "utf8"));
+    return manifest.lineyChannel === "stable" ? "stable" : "preview";
+  } catch {
+    return "preview";
+  }
+}
 const runtime = resolveRuntimePaths({
   isPackaged: bundled,
+  buildChannel: packagedBuildChannel(),
   env: process.env,
   home: app.getPath("home"),
   xdgDataHome: process.env.XDG_DATA_HOME,

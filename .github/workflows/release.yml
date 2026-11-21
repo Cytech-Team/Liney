@@ -2,20 +2,92 @@ name: Electron Linux Release
 
 on:
   workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel to build
+        type: choice
+        options:
+          - preview
+          - stable
+        default: preview
   push:
     tags:
       - 'v*'
+  workflow_call:
+    inputs:
+      channel:
+        description: Release channel
+        required: false
+        type: string
+        default: preview
+      ref:
+        description: Git ref to build
+        required: false
+        type: string
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  verify:
+    name: Release gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    outputs:
+      channel: ${{ steps.channel.outputs.channel }}
+    steps:
+      - name: Resolve release channel
+        id: channel
+        shell: bash
+        env:
+          INPUT_CHANNEL: ${{ inputs.channel }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          channel=preview
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$EVENT_NAME" = "workflow_call" ]; then
+            channel="${INPUT_CHANNEL:-preview}"
+          elif [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            channel=stable
+          fi
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.4'
+      - name: Install release gate dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends file patchelf
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Verify tag version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: test "${GITHUB_REF_NAME#v}" = "$(node -p 'require("./package.json").version')"
+      # A release must never publish artifacts that skipped tests, lint, the
+      # Electron engine bundle or the React production build.
+      - name: Release gate (tests, lint, builds, diff check)
+        run: npm run verify:release
+
   release-linux:
     name: Build AppImage, DEB and RPM
+    needs: verify
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -32,8 +104,12 @@ jobs:
         shell: bash
         run: test "${GITHUB_REF_NAME#v}" = "$(node -p 'require("./package.json").version')"
       - name: Build engine and desktop packages
-        run: npm run electron:build
+        env:
+          CHANNEL: ${{ needs.verify.outputs.channel }}
+        run: node scripts/electron-build.mjs "$CHANNEL"
       - name: Verify and smoke-test AppImage, DEB and RPM
+        env:
+          LINEY_RELEASE_CHANNEL: ${{ needs.verify.outputs.channel }}
         run: bash scripts/verify-linux-packages.sh release-electron
       - name: Upload desktop package artifacts
         uses: actions/upload-artifact@v4
@@ -50,11 +126,16 @@ jobs:
 
   flatpak:
     name: Build Electron Flatpak
-    needs: release-linux
+    needs: [verify, release-linux]
+    # Flathub needs its own stable app id and branch; a stable tag must not ship
+    # a preview-branded Flatpak.
+    if: needs.verify.outputs.channel != 'stable'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -119,8 +200,9 @@ jobs:
 
   publish-release:
     name: Publish GitHub Release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() }}
     needs:
+      - verify
       - release-linux
       - flatpak
     runs-on: ubuntu-24.04
@@ -131,24 +213,27 @@ jobs:
           name: liney-electron-packages-${{ github.sha }}
           path: release-electron
       - name: Download Flatpak bundle
+        if: needs.verify.outputs.channel != 'stable'
         uses: actions/download-artifact@v4
         with:
           name: liney-electron-flatpak-${{ github.sha }}
           path: release-electron
-      - name: Verify release assets
+      - name: Collect release assets
         shell: bash
+        env:
+          CHANNEL: ${{ needs.verify.outputs.channel }}
         run: |
           set -euo pipefail
-          ls -lh release-electron/*.AppImage release-electron/*.deb release-electron/*.rpm release-electron/*.flatpak release-electron/*.yml
-          ls -lh release-electron/*.blockmap || echo "No blockmap (differential update disabled)"
+          mkdir -p release-assets
+          cp release-electron/*.AppImage release-electron/*.deb release-electron/*.rpm release-electron/*.yml release-assets/
+          cp release-electron/*.blockmap release-assets/ 2>/dev/null || echo "No blockmap (differential update disabled)"
+          if [ "$CHANNEL" != "stable" ]; then
+            cp release-electron/*.flatpak release-assets/
+          fi
+          ls -lh release-assets
       - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: |
-            release-electron/*.AppImage
-            release-electron/*.deb
-            release-electron/*.rpm
-            release-electron/*.flatpak
-            release-electron/*.yml
-            release-electron/*.blockmap
+          prerelease: ${{ needs.verify.outputs.channel != 'stable' }}
+          files: release-assets/*
