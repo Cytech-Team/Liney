@@ -4479,6 +4479,7 @@ function Conversation({
   const messageRowRefs = useRef(new Map<string, HTMLDivElement>());
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const messageMenuRef = useRef<HTMLDivElement>(null);
+  const openedChatRef = useRef("");
   const [messageMenuPosition, setMessageMenuPosition] = useState({ left: 8, top: 8, ready: false });
   const [stickerPickerOpen, setStickerPickerOpen] = useState(false);
   const [pickerTab, setPickerTab] = useState<"sticker" | "emoji">("sticker");
@@ -4904,6 +4905,20 @@ function Conversation({
     });
     return () => cancelAnimationFrame(frame);
   }, [chat.id, chat.unread, lastMessageId, lastMessageTime, markReadOnBottom, windowActive]);
+
+  // Opening a conversation acknowledges it even if the timeline did not need
+  // to scroll (for example when the newest message already fits the viewport).
+  // Mark read once per opened room, after the newest message id is known.
+  useEffect(() => {
+    if (openedChatRef.current === chat.id) return;
+    if (!windowActive || (chat.unread ?? 0) <= 0) return;
+    if (!lastMessageId || !/^\d+$/.test(lastMessageId)) return;
+    openedChatRef.current = chat.id;
+    const timer = window.setTimeout(() => {
+      onReadLatestRef.current(lastMessageId, lastMessageTime);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [chat.id, chat.unread, lastMessageId, lastMessageTime, windowActive]);
 
   const stopFollowingBottom = () => {
     stickToBottomRef.current = false;
