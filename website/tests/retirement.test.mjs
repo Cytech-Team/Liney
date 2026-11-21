@@ -15,11 +15,16 @@ test("public site has no browser LINE login or cloud API", () => {
     assert.doesNotMatch(content, /href="app\.html"|data-web-app-link|Web App<\/a>/, name);
   }
 });
-test("legacy Web App links redirect to the Desktop download page", () => {
+test("legacy Web App links redirect to the clean Desktop download URL", () => {
   const redirects = fs.readFileSync(path.join(output, "_redirects"), "utf8");
-  for (const route of ["/app", "/app.html", "/compatibility.html"]) {
-    assert.ok(redirects.includes(route + " /download.html"), route + " must redirect");
+  for (const route of ["/app", "/app/", "/app.html", "/web", "/compatibility", "/compatibility.html"]) {
+    assert.ok(redirects.includes(route + " /download 302"), route + " must redirect to /download");
   }
+  const redirectLines = redirects.split("\n").map((line) => line.trim());
+  assert.ok(redirectLines.includes("/download/ /download 301"), "trailing slash should normalize to /download");
+  assert.ok(!redirectLines.includes("/download /download.html 200"));
+  assert.ok(!redirectLines.includes("/download/ /download.html 200"),
+    "do not rewrite /download to download.html: Pages clean URLs would redirect it back");
 });
 test("former PWA service worker is a retirement shim, not a cache or LINE client", () => {
   const code = fs.readFileSync(path.join(output, "liney-app-sw.js"), "utf8");

@@ -1,0 +1,61 @@
+name: GitHub Pages
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - "website/**"
+      - ".github/workflows/github-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build static website
+        working-directory: website
+        run: node build.mjs
+
+      - name: Verify website build
+        working-directory: website
+        run: |
+          test -s dist/index.html
+          test -s dist/404.html
+          node --test tests/theme.test.cjs tests/build-cache.test.mjs tests/navigation.test.mjs tests/retirement.test.mjs
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/dist
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

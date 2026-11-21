@@ -224,6 +224,83 @@
     applyTheme(mode, false);
   }
 
+
+  function setupMotionSystem() {
+    var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var header = document.querySelector('.site-header');
+    var progress = document.createElement('div');
+    progress.className = 'motion-progress';
+    progress.setAttribute('aria-hidden', 'true');
+    if (document.body && typeof document.body.appendChild === 'function') {
+      document.body.appendChild(progress);
+    }
+
+    var revealTargets = document.querySelectorAll(
+      '.section-heading, .home-teaser, .technology-preview-visual, .home-roadmap-strip, ' +
+      '.subpage-hero-layout, .feature-status-grid article, .technology-detail-grid article, ' +
+      '.roadmap-list article, .roadmap-note-grid article, .roadmap-feedback, ' +
+      '.architecture-diagram, .final-cta-inner, .download-promo-layout, .showcase'
+    );
+    revealTargets.forEach(function (element, index) {
+      element.setAttribute('data-reveal', '');
+      if (element.matches('.home-teaser, .feature-status-grid article, .technology-detail-grid article, .roadmap-list article, .roadmap-note-grid article')) {
+        var siblings = Array.prototype.indexOf.call(element.parentElement.children, element);
+        element.style.setProperty('--reveal-delay', Math.min(siblings, 5) * 85 + 'ms');
+      }
+    });
+
+    if (!reduceMotion && 'IntersectionObserver' in window) {
+      var observer = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          entry.target.classList.add('is-visible');
+          observer.unobserve(entry.target);
+        });
+      }, { threshold: 0.12, rootMargin: '0px 0px -45px 0px' });
+      revealTargets.forEach(function (element) { observer.observe(element); });
+    } else {
+      revealTargets.forEach(function (element) { element.classList.add('is-visible'); });
+    }
+
+    var ticking = false;
+    function updateScrollEffects() {
+      var root = document.documentElement;
+      var scrollable = root ? root.scrollHeight - window.innerHeight : 0;
+      var ratio = scrollable > 0 ? window.scrollY / scrollable : 0;
+      if (progress.style) {
+        progress.style.transform = 'scaleX(' + Math.max(0, Math.min(1, ratio)) + ')';
+      }
+      if (header && header.classList) header.classList.toggle('is-scrolled', window.scrollY > 12);
+      ticking = false;
+    }
+    if (typeof window.addEventListener === 'function') {
+      window.addEventListener('scroll', function () {
+        if (ticking) return;
+        ticking = true;
+        if (typeof window.requestAnimationFrame === 'function') {
+          window.requestAnimationFrame(updateScrollEffects);
+        } else {
+          updateScrollEffects();
+        }
+      }, { passive: true });
+    }
+    updateScrollEffects();
+
+    var showcase = document.querySelector('.showcase');
+    if (showcase && !reduceMotion && typeof window.matchMedia === 'function' && window.matchMedia('(pointer: fine)').matches) {
+      showcase.addEventListener('pointermove', function (event) {
+        var rect = showcase.getBoundingClientRect();
+        var x = (event.clientX - rect.left) / rect.width - .5;
+        var y = (event.clientY - rect.top) / rect.height - .5;
+        showcase.style.transform = 'perspective(1100px) rotateY(' + (x * 4).toFixed(2) + 'deg) rotateX(' + (-y * 3).toFixed(2) + 'deg)';
+      });
+      showcase.addEventListener('pointerleave', function () {
+        showcase.style.transform = '';
+      });
+    }
+  }
+
   setupThemeControl();
+  setupMotionSystem();
   setupMobileNavigation();
 })();
