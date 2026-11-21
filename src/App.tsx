@@ -1907,7 +1907,7 @@ function MainApp() {
       ? (settings.openchat ? (liveChats ?? []) : (liveChats ?? []).filter((chat) => chat.kind !== "openchat"))
       : seedChats;
     return mergeFriendProfilesIntoChats(base, allFriends)
-      .filter((chat) => !settings.hideEmptyChats || chat.id === activeChatId || hasReadableChatHistory(chat))
+      .filter((chat) => !settings.hideEmptyChats || chat.kind === "openchat" || chat.id === activeChatId || hasReadableChatHistory(chat))
       .map((chat) => {
         const localPinTimestamp = localPins[chat.id] ?? 0;
         const remotePinTimestamp = chat.favoriteTimestamp ?? 0;
@@ -6445,7 +6445,7 @@ function GeneralSettings({ settings, themeMode, dark, onLanguageChange, onThemeM
       <SettingRow title={t("ย่อไว้ใน System Tray")} subtitle={t("ปิดหน้าต่างโดยไม่ออกจากระบบ")}><Toggle checked={settings.tray} onChange={(checked) => onSetting("tray", checked)} /></SettingRow>
     </SettingsGroup>
     <SettingsGroup title={t("หน้าตาแอป")}>
-      <SettingRow title={t("ซ่อนแชทที่ยังไม่มีประวัติ")} subtitle={t("ซ่อนห้องว่างและห้องที่ LINE ไม่ส่งประวัติกลับมา")}><Toggle checked={settings.hideEmptyChats} onChange={(checked) => onSetting("hideEmptyChats", checked)} /></SettingRow>
+      <SettingRow title={t("ซ่อนแชทที่ยังไม่มีประวัติ")} subtitle={t("ซ่อนห้องว่างและกลุ่มที่ LINE ไม่ส่งประวัติกลับมา · OpenChat แสดงเสมอ")}><Toggle checked={settings.hideEmptyChats} onChange={(checked) => onSetting("hideEmptyChats", checked)} /></SettingRow>
       <SettingRow title={t("ปรับตามธีมระบบ")} subtitle={t("ติดตาม Light / Dark ของเดสก์ท็อประบบแบบอัตโนมัติ")}><Toggle checked={themeMode === "system"} onChange={(checked) => onThemeMode(checked ? "system" : (dark ? "dark" : "light"))} /></SettingRow>
       <ThemeCards themeMode={themeMode} dark={dark} onThemeMode={onThemeMode} />
     </SettingsGroup>
