@@ -187,8 +187,7 @@ jobs:
             '"shortcutInputSkipped":true' \
             '"nativeHelpers":5' \
             '"cspViolations":0' \
-            '"cspViolations":0' \
-    '"enginePong":true'; do
+            '"enginePong":true'; do
             grep -Fq "$marker" "$LOG"
           done
           flatpak uninstall --user --noninteractive --assumeyes com.cyoriasmp.liney

@@ -21,6 +21,7 @@ describe("renderer content security policy", () => {
     expect(map.get("script-src")).toEqual(["'self'"]);
     expect(map.get("object-src")).toEqual(["'none'"]);
     expect(map.get("frame-src")).toEqual(["'none'"]);
+    expect(map.get("frame-ancestors")).toEqual(["'none'"]);
     expect(map.get("base-uri")).toEqual(["'self'"]);
     expect(map.get("form-action")).toEqual(["'none'"]);
   });

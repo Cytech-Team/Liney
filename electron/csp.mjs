@@ -15,6 +15,7 @@ export const CONTENT_SECURITY_POLICY = [
   "worker-src 'self' blob:",
   "child-src 'none'",
   "frame-src 'none'",
+  "frame-ancestors 'none'",
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'none'",
