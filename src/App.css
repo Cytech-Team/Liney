@@ -1148,7 +1148,7 @@ button { border: 0; background: none; cursor: pointer; }
   .photo-card { width: min(240px, 100%); height: auto; aspect-ratio: 280 / 190; }
 }
 
-@media (max-width: 900px) and (min-width: 761px) {
+@media (max-width: 900px) and (min-width: 721px) {
   .app-shell { grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); }
   .list-header { padding-left: 15px; padding-right: 15px; }
   .search-box { margin-left: 13px; margin-right: 13px; }
@@ -1158,7 +1158,7 @@ button { border: 0; background: none; cursor: pointer; }
   .message-cluster { max-width: min(520px, 78%); }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 720px) {
   .app-shell {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
