@@ -1487,9 +1487,28 @@ button { border: 0; background: none; cursor: pointer; }
 .settings-action-button { display:inline-flex; align-items:center; gap:7px; border:1px solid var(--border); border-radius:9px; padding:8px 12px; color:var(--text); background:var(--panel-2); font:inherit; font-size:12px; cursor:pointer; }
 .settings-action-button.primary { color:#fff; background:var(--green); border-color:var(--green); }
 .settings-action-button:disabled { opacity:.55; cursor:not-allowed; }
-.update-release-notes { margin:0 16px 14px; padding:12px; border:1px solid var(--border); border-radius:10px; white-space:pre-wrap; }
-.update-release-notes strong { font-size:12px; }
-.update-release-notes p,.update-footnote,.update-error { color:var(--muted); font-size:11px; line-height:1.6; }
-.update-release-notes p { margin:6px 0 0; }
-.update-footnote,.update-error { margin:10px 16px 16px; }
-.update-error { color:var(--danger, #d34b4b); }
+/* About / software updates */
+.settings-placeholder.about-hero { height:auto; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; padding:22px 24px 18px; }
+.about-hero p { max-width:560px; line-height:1.6; }
+.about-version { margin-top:10px; padding:4px 10px; border:1px solid var(--border); border-radius:999px; background:var(--panel); color:var(--muted); font-size:10px; font-weight:600; }
+.about-settings .settings-group { margin-bottom:0; }
+.setting-row.update-status-row { border-bottom:0; }
+.update-action { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:13px 14px; border-top:1px solid var(--border); background:color-mix(in srgb, var(--green-soft) 26%, transparent); }
+.update-action-copy { display:flex; flex-direction:column; gap:3px; min-width:0; }
+.update-action-copy strong { font-size:12px; }
+.update-action-copy span { color:var(--muted); font-size:10px; line-height:1.45; }
+.update-actions { display:flex; gap:8px; flex:0 0 auto; }
+.update-progress { display:flex; align-items:center; gap:12px; padding:13px 14px; border-top:1px solid var(--border); }
+.update-progress progress { flex:1; appearance:none; height:8px; border-radius:999px; background:var(--panel-3); overflow:hidden; }
+.update-progress progress::-webkit-progress-bar { background:var(--panel-3); border-radius:999px; }
+.update-progress progress::-webkit-progress-value { background:var(--green); border-radius:999px; }
+.update-progress span { color:var(--muted); font-size:11px; min-width:40px; text-align:right; font-variant-numeric:tabular-nums; }
+.update-release-notes { padding:13px 14px 14px; border-top:1px solid var(--border); background:var(--panel); }
+.update-release-notes strong { display:block; margin-bottom:6px; font-size:12px; }
+.update-release-notes p { margin:0; max-height:210px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; color:var(--muted); font-size:11px; line-height:1.65; scrollbar-width:thin; }
+.update-footnote { margin:12px 14px 14px; color:var(--muted); font-size:10px; line-height:1.6; }
+.update-error { margin:0 14px 12px; color:var(--danger, #d34b4b); font-size:11px; line-height:1.5; }
+.settings-action-button:hover { background:var(--panel-3); }
+.settings-action-button:active { transform:translateY(1px); }
+.settings-action-button:focus-visible { outline:2px solid var(--green); outline-offset:2px; }
+.settings-action-button.primary:hover { background:color-mix(in srgb, var(--green) 86%, #000); }

@@ -6,6 +6,7 @@ import { emitTo, listen } from "./lib/desktop-api/event";
 import { getCurrentWindow } from "./lib/desktop-api/window";
 import { reduceLineTransportState } from "./transport-status";
 import { WebviewWindow } from "./lib/desktop-api/webview-window";
+import { releaseNotesText } from "./lib/release-notes";
 import { createPortal } from "react-dom";
 import {
   ArrowLeft,
@@ -6416,15 +6417,29 @@ function AboutSettings() {
       setUpdate(current => ({...current,status:"error",error:String(error).slice(0,300)}));
     } finally { setBusy(false); }
   };
-  const statusText:Record<string,string> = {idle:t("ยังไม่ได้ตรวจสอบ"),checking:t("กำลังตรวจสอบเวอร์ชัน…"),available:t("มีเวอร์ชันใหม่"),downloading:t("กำลังดาวน์โหลด {{percent}}%", { percent: update.percent ?? 0 }),downloaded:t("ดาวน์โหลดและตรวจสอบไฟล์แล้ว"),current:t("ใช้เวอร์ชันล่าสุดแล้ว"),unconfigured:t("ยังไม่ได้ตั้งค่า Update Feed"),error:t("ตรวจสอบการอัปเดตไม่สำเร็จ")};
-  return <div className="settings-scroll">
-    <div className="settings-placeholder"><div className="placeholder-orb"><Info size={25}/></div><h3>Liney — LINE, made for Linux.</h3><p>Unofficial LINE client สำหรับ Linux · React + Electron · LINEJS Worker · SQLite history</p><span className="settings-status">Version {update.version} · {update.channel.toUpperCase()} channel</span></div>
+  const statusText:Record<string,string> = {idle:t("ยังไม่ได้ตรวจสอบ"),checking:t("กำลังตรวจสอบเวอร์ชัน…"),downloaded:t("พร้อมติดตั้ง"),current:t("ใช้เวอร์ชันล่าสุดแล้ว"),unconfigured:t("ยังไม่ได้ตั้งค่า Update Feed"),error:t("ตรวจสอบการอัปเดตไม่สำเร็จ")};
+  const statusHeadline = update.status === "available"
+    ? t("มีเวอร์ชันใหม่ {{version}}", { version: update.availableVersion || "" })
+    : statusText[update.status] || t("สถานะการอัปเดต");
+  const statusDetail = update.status === "current"
+    ? t("Liney {{version}} เป็นเวอร์ชันล่าสุด", { version: update.version })
+    : update.status === "available"
+      ? t("เวอร์ชันปัจจุบัน {{version}} · ดาวน์โหลดได้โดยไม่ปิดแอป", { version: update.version })
+      : update.status === "downloaded"
+        ? t("เวอร์ชัน {{version}} ผ่านการตรวจสอบแล้ว", { version: update.availableVersion || "" })
+        : update.status === "downloading"
+          ? t("กำลังดาวน์โหลดในพื้นหลัง")
+          : update.error || t("ตรวจสอบเวอร์ชันใหม่จาก Cytech Team");
+  const notes = update.releaseNotes ? releaseNotesText(update.releaseNotes) : "";
+  const canCheck = !busy && update.status !== "checking" && update.status !== "downloading";
+  return <div className="settings-scroll about-settings">
+    <div className="settings-placeholder about-hero"><div className="placeholder-orb"><Info size={25}/></div><h3>Liney — LINE, made for Linux.</h3><p>Unofficial LINE client สำหรับ Linux · React + Electron · LINEJS Worker · SQLite history</p><span className="settings-status about-version">Version {update.version} · {update.channel === "stable" ? "Stable" : "Preview"}</span></div>
     <SettingsGroup title="Software Updates">
-      <div className="setting-row"><div><strong>{statusText[update.status] || t("สถานะการอัปเดต")}</strong><span>{update.status === "current" ? t("ไม่พบเวอร์ชันใหม่") : update.availableVersion ? t("เวอร์ชันใหม่ {{version}}", { version: update.availableVersion }) : t("ตรวจสอบเวอร์ชันใหม่จาก Cytech Team")}</span></div><div className="setting-control"><button type="button" className="settings-action-button" disabled={busy || update.status === "checking" || update.status === "downloading"} onClick={() => void run("check_for_updates")}><RefreshCw size={14}/> {t("ตรวจสอบ")}</button></div></div>
-      {update.status === "available" && update.availableVersion !== deferredVersion && <div className="setting-row"><div><strong>{t("พร้อมอัปเดต")}</strong><span>{t("ดาวน์โหลดได้โดยไม่ปิดแอป และจะติดตั้งเมื่อยืนยัน")}</span></div><div className="setting-control"><button type="button" className="settings-action-button" onClick={() => setDeferredVersion(update.availableVersion || null)}>{t("ไว้ภายหลัง")}</button><button type="button" className="settings-action-button primary" disabled={busy} onClick={() => void run("download_update")}>{t("ดาวน์โหลด")}</button></div></div>}
-      {update.status === "downloading" && <div className="setting-row"><div><strong>Download progress</strong><span>{update.percent ?? 0}%</span></div><div className="setting-control"><progress max="100" value={update.percent ?? 0}/></div></div>}
-      {update.status === "downloaded" && <div className="setting-row"><div><strong>{t("พร้อมติดตั้ง")}</strong><span>{t("ไฟล์อัปเดตผ่านการตรวจสอบความถูกต้องแล้ว")}</span></div><div className="setting-control"><button type="button" className="settings-action-button primary" onClick={() => void run("install_update")}>Restart & Update</button></div></div>}
-      {(update.status === "available" || update.status === "downloaded") && update.releaseNotes && <div className="update-release-notes"><strong>Release notes</strong><p>{update.releaseNotes}</p></div>}
+      <div className="setting-row update-status-row"><div><strong>{statusHeadline}</strong><span>{statusDetail}</span></div><div className="setting-control"><button type="button" className="settings-action-button" disabled={!canCheck} onClick={() => void run("check_for_updates")}><RefreshCw size={14}/> {t("ตรวจสอบ")}</button></div></div>
+      {update.status === "available" && update.availableVersion !== deferredVersion && <div className="update-action"><div className="update-action-copy"><strong>{t("พร้อมอัปเดต")}</strong><span>{t("ดาวน์โหลดและติดตั้งภายหลังได้")}</span></div><div className="update-actions"><button type="button" className="settings-action-button" onClick={() => setDeferredVersion(update.availableVersion || null)}>{t("ไว้ภายหลัง")}</button><button type="button" className="settings-action-button primary" disabled={busy} onClick={() => void run("download_update")}>{t("ดาวน์โหลด")}</button></div></div>}
+      {update.status === "downloading" && <div className="update-progress"><progress max="100" value={update.percent ?? 0}/><span>{update.percent ?? 0}%</span></div>}
+      {update.status === "downloaded" && <div className="update-action"><div className="update-action-copy"><strong>{t("พร้อมติดตั้ง")}</strong><span>{t("ไฟล์อัปเดตผ่านการตรวจสอบความถูกต้องแล้ว")}</span></div><div className="update-actions"><button type="button" className="settings-action-button primary" onClick={() => void run("install_update")}>{t("Restart & Update")}</button></div></div>}
+      {notes && (update.status === "available" || update.status === "downloaded") && <div className="update-release-notes"><strong>{t("Release notes")}</strong><p>{notes}</p></div>}
       {(update.status === "error" || update.status === "unconfigured") && update.error && <p className="update-error">{update.error}</p>}
       <p className="update-footnote">{t("ช่องทาง Preview และ Stable แยกจากกัน · ตรวจสอบลายเซ็นและ SHA-512 ตาม metadata ของแพ็กเกจ · ระบบอัปเดตอัตโนมัติรองรับ AppImage เท่านั้น")}</p>
     </SettingsGroup>
