@@ -1,7 +1,7 @@
 {
   "name": "liney",
   "private": true,
-  "version": "0.1.8",
+  "version": "0.1.9",
   "license": "LicenseRef-TLL-1.0",
   "type": "module",
   "scripts": {
@@ -125,13 +125,13 @@
       "maintainer": "Cytech Team Development",
       "desktop": {
         "entry": {
-          "Name": "Liney \u2014 LINE, made for Linux.",
-          "Name[th]": "Liney \u2014 LINE, made for Linux.",
+          "Name": "Liney — LINE, made for Linux.",
+          "Name[th]": "Liney — LINE, made for Linux.",
           "GenericName": "UNOFFICIAL LINE desktop client for Linux",
-          "GenericName[th]": "\u0e42\u0e1b\u0e23\u0e41\u0e01\u0e23\u0e21\u0e41\u0e0a\u0e17 LINE \u0e1a\u0e19\u0e40\u0e14\u0e2a\u0e01\u0e4c\u0e17\u0e47\u0e2d\u0e1b Linux (\u0e44\u0e21\u0e48\u0e40\u0e1b\u0e47\u0e19\u0e17\u0e32\u0e07\u0e01\u0e32\u0e23)",
+          "GenericName[th]": "โปรแกรมแชท LINE บนเดสก์ท็อป Linux (ไม่เป็นทางการ)",
           "Comment": "A LINE client built for the Linux desktop",
-          "Comment[th]": "\u0e44\u0e04\u0e25\u0e40\u0e2d\u0e19\u0e15\u0e4c LINE \u0e17\u0e35\u0e48\u0e2a\u0e23\u0e49\u0e32\u0e07\u0e21\u0e32\u0e40\u0e1e\u0e37\u0e48\u0e2d\u0e40\u0e14\u0e2a\u0e01\u0e4c\u0e17\u0e47\u0e2d\u0e1b Linux",
-          "Keywords": "line;chat;messenger;\u0e44\u0e25\u0e19\u0e4c;\u0e41\u0e0a\u0e17;",
+          "Comment[th]": "ไคลเอนต์ LINE ที่สร้างมาเพื่อเดสก์ท็อป Linux",
+          "Keywords": "line;chat;messenger;ไลน์;แชท;",
           "StartupNotify": "true",
           "StartupWMClass": "dev.cytechteam.liney.electron-preview"
         }
