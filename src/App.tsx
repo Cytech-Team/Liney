@@ -283,6 +283,7 @@ type AppSettings = {
   showUnreadDivider: boolean;
   autoScrollNewMessages: boolean;
   showReadCount: boolean;
+  hideEmptyChats: boolean;
   openImagesInWindow: boolean;
   loopImageGallery: boolean;
   openchatRealtimeRefresh: boolean;
@@ -310,6 +311,7 @@ const defaultSettings: AppSettings = {
   showUnreadDivider: true,
   autoScrollNewMessages: true,
   showReadCount: true,
+  hideEmptyChats: true,
   openImagesInWindow: true,
   loopImageGallery: true,
   openchatRealtimeRefresh: true,
@@ -1905,7 +1907,7 @@ function MainApp() {
       ? (settings.openchat ? (liveChats ?? []) : (liveChats ?? []).filter((chat) => chat.kind !== "openchat"))
       : seedChats;
     return mergeFriendProfilesIntoChats(base, allFriends)
-      .filter((chat) => chat.id === activeChatId || hasReadableChatHistory(chat))
+      .filter((chat) => !settings.hideEmptyChats || chat.id === activeChatId || hasReadableChatHistory(chat))
       .map((chat) => {
         const localPinTimestamp = localPins[chat.id] ?? 0;
         const remotePinTimestamp = chat.favoriteTimestamp ?? 0;
@@ -1923,7 +1925,7 @@ function MainApp() {
         if ((a.lastMessageTime ?? 0) !== (b.lastMessageTime ?? 0)) return (b.lastMessageTime ?? 0) - (a.lastMessageTime ?? 0);
         return (b.favoriteTimestamp ?? 0) - (a.favoriteTimestamp ?? 0);
       });
-  }, [liveChats, allFriends, favoriteFriendMap, localPins, settings.openchat, usesEngineRuntime, activeChatId]);
+  }, [liveChats, allFriends, favoriteFriendMap, localPins, settings.openchat, settings.hideEmptyChats, usesEngineRuntime, activeChatId]);
   const totalUnread = useMemo(
     () => allChats.reduce((sum, chat) => sum + Math.max(0, chat.unread ?? 0), 0),
     [allChats],
@@ -6443,6 +6445,7 @@ function GeneralSettings({ settings, themeMode, dark, onLanguageChange, onThemeM
       <SettingRow title={t("ย่อไว้ใน System Tray")} subtitle={t("ปิดหน้าต่างโดยไม่ออกจากระบบ")}><Toggle checked={settings.tray} onChange={(checked) => onSetting("tray", checked)} /></SettingRow>
     </SettingsGroup>
     <SettingsGroup title={t("หน้าตาแอป")}>
+      <SettingRow title={t("ซ่อนแชทที่ยังไม่มีประวัติ")} subtitle={t("ซ่อนห้องว่างและห้องที่ LINE ไม่ส่งประวัติกลับมา")}><Toggle checked={settings.hideEmptyChats} onChange={(checked) => onSetting("hideEmptyChats", checked)} /></SettingRow>
       <SettingRow title={t("ปรับตามธีมระบบ")} subtitle={t("ติดตาม Light / Dark ของเดสก์ท็อประบบแบบอัตโนมัติ")}><Toggle checked={themeMode === "system"} onChange={(checked) => onThemeMode(checked ? "system" : (dark ? "dark" : "light"))} /></SettingRow>
       <ThemeCards themeMode={themeMode} dark={dark} onThemeMode={onThemeMode} />
     </SettingsGroup>
