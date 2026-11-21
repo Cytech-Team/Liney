@@ -546,13 +546,14 @@ button { border: 0; background: none; cursor: pointer; }
   gap: 10px;
   text-align: left;
   border-radius: 14px;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
+  color: #eef4fb;
+  background: #1c242f;
+  border: 1px solid #34404e;
 }
-.qr-instruction > svg { flex: 0 0 auto; margin-top: 2px; color: #159956; }
-.qr-instruction > div { display: flex; flex-direction: column; gap: 3px; }
-.qr-instruction strong { font-size: 11px; }
-.qr-instruction span { color: var(--muted); font-size: 9px; line-height: 1.5; }
+.qr-instruction > svg { flex: 0 0 auto; margin-top: 2px; color: #6ee7a8; }
+.qr-instruction > div { display: flex; flex-direction: column; gap: 4px; }
+.qr-instruction strong { color: #f5f9fd; font-size: 12px; }
+.qr-instruction span { color: #b8c5d3; font-size: 12px; line-height: 1.55; }
 .pin-card {
   width: 100%;
   padding: 10px 13px;
