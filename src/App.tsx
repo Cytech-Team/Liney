@@ -23,6 +23,7 @@ import {
   Info,
   LoaderCircle,
   LogIn,
+  LogOut,
   Maximize2,
   Mail,
   MessageCircle,
@@ -791,6 +792,7 @@ function MainApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [albumsOpen, setAlbumsOpen] = useState(false);
+  const [albumTarget, setAlbumTarget] = useState<{ chatId: string; albumId: string; title: string } | null>(null);
   const [notesRoom, setNotesRoom] = useState<{ id: string; title: string } | null>(null);
   const [managedChat, setManagedChat] = useState<Chat | null>(null);
   const [settingsInitialTab, setSettingsInitialTab] = useState("ทั่วไป");
@@ -3584,6 +3586,25 @@ function MainApp() {
     }
   }
 
+  async function leaveGroupChat(target: Chat) {
+    if (!authenticated || target.kind !== "group") return;
+    const prompt = translateText(
+      settingsRef.current.language,
+      "ออกจากกลุ่ม “{{name}}” บน LINE ใช่หรือไม่?\nการกระทำนี้จะส่งไปยังเซิร์ฟเวอร์ LINE ทันที",
+      { name: target.name },
+    );
+    if (!window.confirm(prompt)) return;
+    try {
+      await lineyEngine.request("group.leave", { chatId: target.id }, 30_000);
+      setLiveChats((current) => (current ?? []).filter((chat) => chat.id !== target.id));
+      setActiveChatId((current) => current === target.id ? "" : current);
+      setManagedChat(null);
+      setAuthError("");
+    } catch (error) {
+      setAuthError(formatSendError(error));
+    }
+  }
+
   async function startFullSync() {
     if (!authenticated) return;
     setAuthError("");
@@ -3761,6 +3782,7 @@ function MainApp() {
         filter={listFilter}
         onFilter={setListFilter}
         onTogglePin={toggleLocalPin}
+        onLeaveGroup={(chat) => void leaveGroupChat(chat)}
         mergeCandidates={allChats.filter((chat) => chat.kind === "dm")}
         onMerge={mergeDuplicateChats}
         onCreate={() => setNewChatOpen(true)}
@@ -3807,7 +3829,9 @@ function MainApp() {
           onCall={() => void startCall("AUDIO")}
           onVideoCall={() => void startCall("VIDEO")}
         albumsAvailable={lineyEngine.isNative && authenticated && activeChat.kind !== "openchat"}
-        onAlbums={() => setAlbumsOpen(true)}
+        onAlbums={() => { setAlbumTarget(null); setAlbumsOpen(true); }}
+        onOpenAlbum={(album) => { setAlbumTarget(album); setAlbumsOpen(true); }}
+        onLeaveGroup={() => void leaveGroupChat(activeChat)}
         notesAvailable={lineyEngine.isNative && authenticated && /^[cs][a-f0-9]{30,}$/i.test(activeChat.id)}
         onNotes={() => setNotesRoom({ id: activeChat.id, title: activeChat.name })}
         manageAvailable={lineyEngine.isNative && authenticated && ((activeChat.kind === "group" && /^c[a-f0-9]{32}$/i.test(activeChat.id)) || (activeChat.kind === "dm" && /^u[a-f0-9]{32}$/i.test(activeChat.id)))}
@@ -3837,7 +3861,7 @@ function MainApp() {
           />
         )}
         {imageViewerSrc && <ImageViewerOverlay src={imageViewerSrc} onClose={() => setImageViewerSrc(null)} />}
-        {albumsOpen && <LineAlbumsModal onClose={() => setAlbumsOpen(false)} />}
+        {albumsOpen && <LineAlbumsModal initialAlbum={albumTarget ?? undefined} onClose={() => { setAlbumsOpen(false); setAlbumTarget(null); }} />}
         {notesRoom && <LineNotesModal homeId={notesRoom.id} title={notesRoom.title} onClose={() => setNotesRoom(null)} />}
         {managedChat && (managedChat.kind === "dm" || managedChat.kind === "group") && <LineChatManageModal room={{ id: managedChat.id, kind: managedChat.kind, name: managedChat.name }} friends={allFriends} onUpdated={() => loadLiveFriends()} onClose={() => setManagedChat(null)} />}
         {settingsOpen && <SettingsModal initialTab={settingsInitialTab} themeMode={themeMode} dark={dark} settings={settings} callAvailable={callAvailable} onLanguageChange={(value) => updateSetting("language", value)} onThemeMode={setThemeMode} onSetting={updateAppSettings} onDensity={(value) => updateSetting("density", value)} onRadius={(value) => updateSetting("radius", value)} onClearHistory={() => void clearLocalHistory()} onClearStickerCache={() => void clearStickerCache()} onFullSync={() => void startFullSync()} onProfileChange={setProfile} onClose={() => setSettingsOpen(false)} />}
@@ -3990,6 +4014,7 @@ function ChatList({
   filter,
   onFilter,
   onTogglePin,
+  onLeaveGroup,
   mergeCandidates,
   onMerge,
   onCreate,
@@ -4008,6 +4033,7 @@ function ChatList({
   filter: "all" | "unread" | "pinned" | "favorites";
   onFilter: (filter: "all" | "unread" | "pinned" | "favorites") => void;
   onTogglePin: (id: string) => void;
+  onLeaveGroup: (chat: Chat) => void;
   mergeCandidates: Chat[];
   onMerge: (aliasMid: string, canonicalMid: string) => Promise<void>;
   onCreate: () => void;
@@ -4213,6 +4239,18 @@ function ChatList({
             <PinIcon size={15} fill={contextMenu.chat.pinned ? "currentColor" : "none"} />
             {contextMenu.chat.pinned ? t("เลิกปักหมุด") : t("ปักหมุด")}
           </button>
+          {section === "messages" && contextMenu.chat.kind === "group" ? (
+            <button
+              onClick={() => {
+                const target = contextMenu.chat;
+                setContextMenu(null);
+                onLeaveGroup(target);
+              }}
+            >
+              <LogOut size={15} />
+              {t("ออกจากกลุ่ม")}
+            </button>
+          ) : null}
           {section === "messages" && contextMenu.chat.kind === "dm" ? (
             <button
               onClick={() => {
@@ -4506,6 +4544,8 @@ function Conversation({
   onVideoCall,
   albumsAvailable,
   onAlbums,
+  onOpenAlbum,
+  onLeaveGroup,
   notesAvailable,
   onNotes,
   manageAvailable,
@@ -4555,6 +4595,8 @@ function Conversation({
   onVideoCall: () => void;
   albumsAvailable: boolean;
   onAlbums: () => void;
+  onOpenAlbum: (album: { chatId: string; albumId: string; title: string }) => void;
+  onLeaveGroup: () => void;
   notesAvailable: boolean;
   onNotes: () => void;
   manageAvailable: boolean;
@@ -5183,6 +5225,7 @@ function Conversation({
                   {manageAvailable ? <button type="button" role="menuitem" onClick={() => { setHeaderMenuOpen(false); onManage(); }}><Info size={17} />{t("ข้อมูลและจัดการแชต")}</button> : null}
                   {albumsAvailable ? <button type="button" role="menuitem" onClick={() => { setHeaderMenuOpen(false); onAlbums(); }}><Image size={17} />{t("อัลบั้มรูปภาพ")}</button> : null}
                   {notesAvailable ? <button type="button" role="menuitem" onClick={() => { setHeaderMenuOpen(false); onNotes(); }}><Pencil size={17} />{t("โน้ต")}</button> : null}
+                  {chat.kind === "group" ? <button type="button" role="menuitem" className="danger" onClick={() => { setHeaderMenuOpen(false); onLeaveGroup(); }}><LogOut size={17} />{t("ออกจากกลุ่ม")}</button> : null}
                 </div>
               ) : null}
             </div>
@@ -5423,7 +5466,7 @@ function Conversation({
                           {message.contentType === 6 ? (
                             <CallHistoryCard data={message.call ?? { durationMs: 0, result: "", cause: "", status: "unknown" }} />
                           ) : !message.rich && message.postNotification ? (
-                            <PostNotificationCard data={message.postNotification} />
+                            <PostNotificationCard data={message.postNotification} onOpenAlbum={onOpenAlbum} />
                          ) : !message.rich && showMessageText ? (
                            <div className={`bubble ${message.status === "error" ? "bubble-error" : ""}`}><MessageTextWithLinks text={td(message.text!)} /></div>
                          ) : null}
@@ -5738,7 +5781,13 @@ function TimelineConversation({
   return <Conversation {...props} messages={messages} />;
 }
 
-function PostNotificationCard({ data }: { data: NonNullable<Message["postNotification"]> }) {
+function PostNotificationCard({
+  data,
+  onOpenAlbum,
+}: {
+  data: NonNullable<Message["postNotification"]>;
+  onOpenAlbum?: (album: { chatId: string; albumId: string; title: string }) => void;
+}) {
   const { t, td } = useAppTranslation();
   const isAlbum = data.kind === "album";
   const label = isAlbum ? t("อัลบั้ม") : t("โน้ต");
@@ -5749,8 +5798,11 @@ function PostNotificationCard({ data }: { data: NonNullable<Message["postNotific
   const translatedTitle = rawTitle ? td(rawTitle) : "";
   const rawBody = (data.body ?? "").trim();
   const bodyText = rawBody ? td(rawBody) : "";
-  return (
-    <div className={`post-notification-card ${isAlbum ? "album-card" : "note-card"}`}>
+  const album = isAlbum && data.albumId && data.chatId
+    ? { chatId: data.chatId, albumId: data.albumId, title: rawTitle }
+    : null;
+  const content = (
+    <>
       <div className="post-notification-thumb">
         {isAlbum ? <Image size={21} /> : <MessageCircle size={20} />}
       </div>
@@ -5760,6 +5812,24 @@ function PostNotificationCard({ data }: { data: NonNullable<Message["postNotific
         {!isAlbum && bodyText ? <p>{bodyText}</p> : null}
       </div>
       <span className="post-notification-arrow">›</span>
+    </>
+  );
+  const className = `post-notification-card ${isAlbum ? "album-card" : "note-card"}`;
+  if (album && onOpenAlbum) {
+    return (
+      <button
+        type="button"
+        className={`${className} is-clickable`}
+        title={t("เปิดอัลบั้ม")}
+        onClick={() => onOpenAlbum(album)}
+      >
+        {content}
+      </button>
+    );
+  }
+  return (
+    <div className={className}>
+      {content}
     </div>
   );
 }

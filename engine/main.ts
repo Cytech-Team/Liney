@@ -1232,6 +1232,8 @@ function parsePostNotification(raw: any) {
       title: albumName,
       body: action === "created" ? "สร้างอัลบั้ม" : action === "added" ? "เพิ่มรูปภาพในอัลบั้ม" : "อัปเดตอัลบั้ม",
       link: String(metadata.postEndUrl ?? ""),
+      albumId: String(metadata.cafeId ?? "").trim() || undefined,
+      chatId: String(metadata.chatId ?? "").trim() || undefined,
     };
   }
   if (serviceType === "GB") {

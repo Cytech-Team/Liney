@@ -996,6 +996,10 @@ button { border: 0; background: none; cursor: pointer; }
   background: var(--panel);
   box-shadow: 0 3px 12px rgba(45,56,73,.05);
 }
+button.post-notification-card { font: inherit; color: inherit; text-align: left; }
+.post-notification-card.is-clickable { cursor: pointer; transition: border-color .15s ease, background-color .15s ease; }
+.post-notification-card.is-clickable:hover { border-color: color-mix(in srgb, var(--green) 34%, var(--border)); background: color-mix(in srgb, var(--green) 6%, var(--panel)); }
+.post-notification-card.is-clickable:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 .post-notification-thumb {
   width: 46px;
   height: 46px;

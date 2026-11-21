@@ -29,6 +29,10 @@ export type PostNotification = {
   title: string;
   body?: string;
   link?: string;
+  /** LINE album (Moa) id carried by album post notifications. */
+  albumId?: string;
+  /** Room that owns the album; usually the chat the card appears in. */
+  chatId?: string;
 };
 
 export type FlexMessageData = {

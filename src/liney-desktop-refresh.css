@@ -458,6 +458,12 @@
   background: var(--green-soft);
   outline: none;
 }
+.conversation-more-menu button.danger { color: #e06464; }
+.conversation-more-menu button.danger svg { color: #e06464; }
+.conversation-more-menu button.danger:hover, .conversation-more-menu button.danger:focus-visible {
+  color: #e06464;
+  background: color-mix(in srgb, #e06464 12%, var(--panel));
+}
 .message-stage { background: color-mix(in srgb, var(--panel) 91%, var(--bg)); }
 .message-row .bubble { box-shadow: none; }
 .composer-area { border-color: var(--border-strong); }

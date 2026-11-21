@@ -17,11 +17,19 @@ type AlbumPhoto = { id: string; oid: string; resourceType: string; sid: string }
 type PhotoPage = { photos: AlbumPhoto[]; nextCursor?: string };
 type PhotoPreview = { dataUrl: string; bytes: number };
 
-export function LineAlbumsModal({ onClose }: { onClose: () => void }) {
+export function LineAlbumsModal({
+  initialAlbum,
+  onClose,
+}: {
+  initialAlbum?: { chatId: string; albumId: string; title: string };
+  onClose: () => void;
+}) {
   const { t, td } = useAppTranslation();
   const [albums, setAlbums] = useState<Album[]>([]);
   const [albumCursor, setAlbumCursor] = useState<string>();
-  const [selected, setSelected] = useState<Album>();
+  const [selected, setSelected] = useState<Album | undefined>(
+    initialAlbum ? { ...initialAlbum, photoCount: 0 } : undefined,
+  );
   const [photos, setPhotos] = useState<AlbumPhoto[]>([]);
   const [photoCursor, setPhotoCursor] = useState<string>();
   const [loading, setLoading] = useState(true);
@@ -32,6 +40,7 @@ export function LineAlbumsModal({ onClose }: { onClose: () => void }) {
   const [thumbnailLoader] = useState(() => new AlbumThumbnailLoader());
 
   useEffect(() => {
+    if (initialAlbum) return;
     let valid = true;
     void lineyEngine.request<AlbumPage>("album.list", {}, 30_000).then((page) => {
       if (!valid) return;
@@ -105,8 +114,9 @@ export function LineAlbumsModal({ onClose }: { onClose: () => void }) {
         <header className="liney-albums-head">
           {selected ? (
             <button type="button" className="icon-button" onClick={() => {
+              if (initialAlbum) { onClose(); return; }
               setSelected(undefined); setPhotos([]); setError(""); setPreview(undefined); setLoading(false);
-            }} aria-label={t("Back to albums")}><ArrowLeft size={18}/></button>
+            }} aria-label={initialAlbum ? t("Close albums") : t("Back to albums")}><ArrowLeft size={18}/></button>
           ) : <ImageIcon size={20} />}
           <div>
             <strong>{selected ? td(selected.title) : t("LINE albums")}</strong>
