@@ -1657,7 +1657,7 @@ async function resolveTalkIdentities(ids: string[]): Promise<Map<string, SenderI
 async function resolveSquareSender(mid: string, fallbackName = ""): Promise<SenderIdentity | null> {
   if (!client || !mid || !mid.startsWith("p")) return null;
   const cached = squareSenderCache.get(mid);
-  if (cached) return cached;
+  if (cached && (cached.name !== "OpenChat member" || !fallbackName)) return cached;
   try {
     const response: any = await LineJsAdapter.getSquareMember(client, { squareMemberMid: mid });
     const member = response?.squareMember ?? response ?? {};
@@ -6133,16 +6133,21 @@ async function handle(request: any) {
     if (method === "user.profile") {
       const mid = String(request?.params?.mid ?? "").trim();
       if (!/^[up][a-f0-9]{32}$/i.test(mid)) throw new Error("valid user mid is required");
+      const fallbackName = String(request?.params?.fallbackName ?? "").trim().slice(0, 100);
+      const fallbackAvatarUrl = String(request?.params?.fallbackAvatarUrl ?? "").trim();
       const identity = mid.startsWith("p")
-        ? await resolveSquareSender(mid)
+        ? await resolveSquareSender(mid, fallbackName)
         : await resolveTalkSender(mid);
+      const name = identity?.name && identity.name !== "OpenChat member"
+        ? identity.name
+        : fallbackName || identity?.name || "LINE User";
       emit({
         id,
         ok: true,
         result: normalize({
           id: mid,
-          name: identity?.name || "LINE User",
-          avatarUrl: identity?.avatarUrl || "",
+          name,
+          avatarUrl: identity?.avatarUrl || fallbackAvatarUrl || "",
           isOfficialAccount: Boolean(identity?.isOfficialAccount),
         }),
       });

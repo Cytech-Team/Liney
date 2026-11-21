@@ -794,7 +794,7 @@ function MainApp() {
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [albumsOpen, setAlbumsOpen] = useState(false);
   const [albumTarget, setAlbumTarget] = useState<{ chatId: string; albumId: string; title: string } | null>(null);
-  const [profileMid, setProfileMid] = useState<string | null>(null);
+  const [profileTarget, setProfileTarget] = useState<{ mid: string; fallbackName?: string; fallbackAvatarUrl?: string } | null>(null);
   const [notesRoom, setNotesRoom] = useState<{ id: string; title: string } | null>(null);
   const [managedChat, setManagedChat] = useState<Chat | null>(null);
   const [settingsInitialTab, setSettingsInitialTab] = useState("ทั่วไป");
@@ -3837,7 +3837,7 @@ function MainApp() {
         onAlbums={() => { setAlbumTarget(null); setAlbumsOpen(true); }}
         onOpenAlbum={(album) => { setAlbumTarget(album); setAlbumsOpen(true); }}
         onLeaveGroup={() => void leaveGroupChat(activeChat)}
-        onOpenProfile={(mid) => setProfileMid(mid)}
+        onOpenProfile={(mid, fallbackName, fallbackAvatarUrl) => setProfileTarget({ mid, fallbackName, fallbackAvatarUrl })}
         notesAvailable={lineyEngine.isNative && authenticated && /^[cs][a-f0-9]{30,}$/i.test(activeChat.id)}
         onNotes={() => setNotesRoom({ id: activeChat.id, title: activeChat.name })}
         manageAvailable={lineyEngine.isNative && authenticated && ((activeChat.kind === "group" && /^c[a-f0-9]{32}$/i.test(activeChat.id)) || (activeChat.kind === "dm" && /^u[a-f0-9]{32}$/i.test(activeChat.id)))}
@@ -3868,7 +3868,7 @@ function MainApp() {
         )}
         {imageViewerSrc && <ImageViewerOverlay src={imageViewerSrc} onClose={() => setImageViewerSrc(null)} />}
         {albumsOpen && <LineAlbumsModal initialAlbum={albumTarget ?? undefined} onClose={() => { setAlbumsOpen(false); setAlbumTarget(null); }} />}
-        {profileMid && <UserProfileModal mid={profileMid} onClose={() => setProfileMid(null)} />}
+        {profileTarget && <UserProfileModal mid={profileTarget.mid} fallbackName={profileTarget.fallbackName} fallbackAvatarUrl={profileTarget.fallbackAvatarUrl} onClose={() => setProfileTarget(null)} />}
         {notesRoom && <LineNotesModal homeId={notesRoom.id} title={notesRoom.title} onClose={() => setNotesRoom(null)} />}
         {managedChat && (managedChat.kind === "dm" || managedChat.kind === "group") && <LineChatManageModal room={{ id: managedChat.id, kind: managedChat.kind, name: managedChat.name }} friends={allFriends} onUpdated={() => loadLiveFriends()} onClose={() => setManagedChat(null)} />}
         {settingsOpen && <SettingsModal initialTab={settingsInitialTab} themeMode={themeMode} dark={dark} settings={settings} callAvailable={callAvailable} onLanguageChange={(value) => updateSetting("language", value)} onThemeMode={setThemeMode} onSetting={updateAppSettings} onDensity={(value) => updateSetting("density", value)} onRadius={(value) => updateSetting("radius", value)} onClearHistory={() => void clearLocalHistory()} onClearStickerCache={() => void clearStickerCache()} onFullSync={() => void startFullSync()} onProfileChange={setProfile} onClose={() => setSettingsOpen(false)} />}
@@ -4357,7 +4357,7 @@ function senderAccent(seed: string) {
   return palette[Math.abs(hash) % palette.length];
 }
 
-function MessageAvatar({ message, chat, onOpenProfile }: { message: Message; chat: Chat; onOpenProfile?: (mid: string) => void }) {
+function MessageAvatar({ message, chat, onOpenProfile }: { message: Message; chat: Chat; onOpenProfile?: (mid: string, fallbackName?: string, fallbackAvatarUrl?: string) => void }) {
   const [failed, setFailed] = useState(false);
   const name = message.senderName || (chat.kind === "dm" ? chat.name : "LINE User");
   const url = message.senderAvatarUrl || (chat.kind === "dm" ? chat.avatarUrl : undefined);
@@ -4382,7 +4382,7 @@ function MessageAvatar({ message, chat, onOpenProfile }: { message: Message; cha
         style={style}
         title={name}
         aria-label={name}
-        onClick={() => onOpenProfile!(mid)}
+        onClick={() => onOpenProfile!(mid, name, url)}
       >
         {content}
       </button>
@@ -4619,7 +4619,7 @@ function Conversation({
   onAlbums: () => void;
   onOpenAlbum: (album: { chatId: string; albumId: string; title: string }) => void;
   onLeaveGroup: () => void;
-  onOpenProfile: (mid: string) => void;
+  onOpenProfile: (mid: string, fallbackName?: string, fallbackAvatarUrl?: string) => void;
   notesAvailable: boolean;
   onNotes: () => void;
   manageAvailable: boolean;
@@ -5217,7 +5217,7 @@ function Conversation({
         <button className="conversation-back-button" type="button" aria-label={t("กลับไปยังรายการแชต")} title={t("กลับไปยังรายการแชต")} onClick={onBack}><ArrowLeft size={18} /></button>
         <div className="conversation-person">
           {chat.kind === "dm" && /^u[a-f0-9]{32}$/i.test(chat.id) ? (
-            <button type="button" className="conversation-avatar-button" onClick={() => onOpenProfile(chat.id)} title={t("ดูโปรไฟล์")} aria-label={t("ดูโปรไฟล์")}>
+            <button type="button" className="conversation-avatar-button" onClick={() => onOpenProfile(chat.id, chat.name, chat.avatarUrl)} title={t("ดูโปรไฟล์")} aria-label={t("ดูโปรไฟล์")}>
               <Avatar chat={chat} />
             </button>
           ) : <Avatar chat={chat} />}
@@ -5808,7 +5808,17 @@ function TimelineConversation({
   return <Conversation {...props} messages={messages} />;
 }
 
-function UserProfileModal({ mid, onClose }: { mid: string; onClose: () => void }) {
+function UserProfileModal({
+  mid,
+  fallbackName,
+  fallbackAvatarUrl,
+  onClose,
+}: {
+  mid: string;
+  fallbackName?: string;
+  fallbackAvatarUrl?: string;
+  onClose: () => void;
+}) {
   const { t } = useAppTranslation();
   const [profile, setProfile] = useState<{ id: string; name: string; avatarUrl?: string; isOfficialAccount?: boolean } | null>(null);
   const [error, setError] = useState("");
@@ -5822,7 +5832,7 @@ function UserProfileModal({ mid, onClose }: { mid: string; onClose: () => void }
     setAvatarFailed(false);
     void lineyEngine.request<{ id: string; name: string; avatarUrl?: string; isOfficialAccount?: boolean }>(
       "user.profile",
-      { mid },
+      { mid, fallbackName: fallbackName || "", fallbackAvatarUrl: fallbackAvatarUrl || "" },
       20_000,
     ).then((value) => {
       if (valid) setProfile(value);
@@ -5832,7 +5842,7 @@ function UserProfileModal({ mid, onClose }: { mid: string; onClose: () => void }
     return () => { valid = false; };
   }, [mid]);
 
-  const name = profile?.name || "LINE User";
+  const name = profile?.name || fallbackName || "LINE User";
 
   async function copyMid() {
     try {
@@ -5851,8 +5861,8 @@ function UserProfileModal({ mid, onClose }: { mid: string; onClose: () => void }
       <section className="user-profile-card" role="dialog" aria-modal="true" aria-labelledby="user-profile-title">
         <button className="user-profile-close" type="button" onClick={onClose} aria-label={t("ปิด")}><X size={18} /></button>
         <div className="user-profile-avatar">
-          {profile?.avatarUrl && !avatarFailed
-            ? <img src={profile.avatarUrl} alt={name} loading="lazy" referrerPolicy="no-referrer" onError={() => setAvatarFailed(true)} />
+          {(profile?.avatarUrl || fallbackAvatarUrl) && !avatarFailed
+            ? <img src={profile?.avatarUrl || fallbackAvatarUrl} alt={name} loading="lazy" referrerPolicy="no-referrer" onError={() => setAvatarFailed(true)} />
             : <span>{initials(name)}</span>}
         </div>
         <h2 id="user-profile-title">{name}</h2>
