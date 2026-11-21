@@ -5925,7 +5925,10 @@ async function handle(request: any) {
       switch (method) {
         case "group.rename": result = await LineJsAdapter.renameGroup(client, params.chatId, params.name); break;
         case "group.invite": result = await LineJsAdapter.inviteGroupFriends(client, params.chatId, params.memberMids); break;
-        case "group.leave": result = await LineJsAdapter.leaveGroup(client, params.chatId); break;
+        case "group.leave": result = params.kind === "openchat"
+          ? await LineJsAdapter.leaveSquareChat(client, String(params.chatId ?? ""))
+          : await LineJsAdapter.leaveGroup(client, params.chatId);
+          break;
         case "friend.rename": result = await LineJsAdapter.renameFriend(client, params.mid, params.name); break;
         case "friend.favorite": result = await LineJsAdapter.setFriendFavorite(client, params.mid, params.favorite); break;
         case "friend.mute": result = await LineJsAdapter.setFriendMuted(client, params.mid, params.muted); break;

@@ -6,6 +6,12 @@ export function requireTalkGroupMid(value: unknown): string {
   }
   return value;
 }
+export function requireSquareChatMid(value: unknown): string {
+  if (typeof value !== "string" || !/^m[a-f0-9]{32}$/i.test(value)) {
+    throw new TypeError("A LINE OpenChat room MID is required");
+  }
+  return value;
+}
 export function requireFriendMid(value: unknown): string {
   if (typeof value !== "string" || !/^u[a-f0-9]{32}$/i.test(value)) {
     throw new TypeError("A LINE friend MID is required");
@@ -35,6 +41,16 @@ export async function inviteGroupFriends(client: Client, roomId: string, memberM
 export async function leaveGroup(client: Client, roomId: string) {
   const group = await client.getChat(requireTalkGroupMid(roomId));
   await group.leave();
+  return { left: true };
+}
+export async function leaveSquareChat(client: Client, roomId: string) {
+  const square = (client as any).base?.square;
+  if (typeof square?.leaveSquareChat !== "function") {
+    throw new Error("LINEJS OpenChat service is unavailable");
+  }
+  await square.leaveSquareChat({
+    request: { squareChatMid: requireSquareChatMid(roomId), sayGoodbye: false },
+  });
   return { left: true };
 }
 export async function renameFriend(client: Client, friendId: string, name: string | null) {

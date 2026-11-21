@@ -3587,15 +3587,18 @@ function MainApp() {
   }
 
   async function leaveGroupChat(target: Chat) {
-    if (!authenticated || target.kind !== "group") return;
+    if (!authenticated || (target.kind !== "group" && target.kind !== "openchat")) return;
+    const openchat = target.kind === "openchat";
     const prompt = translateText(
       settingsRef.current.language,
-      "ออกจากกลุ่ม “{{name}}” บน LINE ใช่หรือไม่?\nการกระทำนี้จะส่งไปยังเซิร์ฟเวอร์ LINE ทันที",
+      openchat
+        ? "ออกจากห้อง OpenChat “{{name}}” ใช่หรือไม่?\nการกระทำนี้จะส่งไปยังเซิร์ฟเวอร์ LINE ทันที"
+        : "ออกจากกลุ่ม “{{name}}” บน LINE ใช่หรือไม่?\nการกระทำนี้จะส่งไปยังเซิร์ฟเวอร์ LINE ทันที",
       { name: target.name },
     );
     if (!window.confirm(prompt)) return;
     try {
-      await lineyEngine.request("group.leave", { chatId: target.id }, 30_000);
+      await lineyEngine.request("group.leave", { chatId: target.id, kind: openchat ? "openchat" : "talk" }, 30_000);
       setLiveChats((current) => (current ?? []).filter((chat) => chat.id !== target.id));
       setActiveChatId((current) => current === target.id ? "" : current);
       setManagedChat(null);
@@ -4239,7 +4242,7 @@ function ChatList({
             <PinIcon size={15} fill={contextMenu.chat.pinned ? "currentColor" : "none"} />
             {contextMenu.chat.pinned ? t("เลิกปักหมุด") : t("ปักหมุด")}
           </button>
-          {section === "messages" && contextMenu.chat.kind === "group" ? (
+          {section === "messages" && (contextMenu.chat.kind === "group" || contextMenu.chat.kind === "openchat") ? (
             <button
               onClick={() => {
                 const target = contextMenu.chat;
@@ -4248,7 +4251,7 @@ function ChatList({
               }}
             >
               <LogOut size={15} />
-              {t("ออกจากกลุ่ม")}
+              {contextMenu.chat.kind === "openchat" ? t("ออกจากห้อง OpenChat") : t("ออกจากกลุ่ม")}
             </button>
           ) : null}
           {section === "messages" && contextMenu.chat.kind === "dm" ? (
@@ -5217,7 +5220,7 @@ function Conversation({
         <div className="header-actions" ref={headerActionsRef}>
           <button className="icon-button call-action" onClick={onCall} title={callAvailable ? t("โทรเสียง") : t("สายเสียงยังไม่พร้อม")} aria-label={t("โทรเสียง")} disabled={!canSend || !callAvailable}><Phone size={18} /></button>
           <button className="icon-button video-action" onClick={onVideoCall} title={callAvailable ? t("วิดีโอคอล (ทดลอง)") : t("ระบบโทรยังไม่พร้อม")} aria-label={t("วิดีโอคอล")} disabled={!canSend || !callAvailable}><Video size={19} /></button>
-          {(albumsAvailable || notesAvailable || manageAvailable) ? (
+          {(albumsAvailable || notesAvailable || manageAvailable || (canSend && (chat.kind === "group" || chat.kind === "openchat"))) ? (
             <div className="conversation-more">
               <button className="icon-button more-action" type="button" onClick={() => setHeaderMenuOpen((open) => !open)} aria-label={t("ตัวเลือกเพิ่มเติมของแชต")} aria-haspopup="menu" aria-expanded={headerMenuOpen} title={t("ตัวเลือกเพิ่มเติม")}><Ellipsis size={20} /></button>
               {headerMenuOpen ? (
@@ -5225,7 +5228,7 @@ function Conversation({
                   {manageAvailable ? <button type="button" role="menuitem" onClick={() => { setHeaderMenuOpen(false); onManage(); }}><Info size={17} />{t("ข้อมูลและจัดการแชต")}</button> : null}
                   {albumsAvailable ? <button type="button" role="menuitem" onClick={() => { setHeaderMenuOpen(false); onAlbums(); }}><Image size={17} />{t("อัลบั้มรูปภาพ")}</button> : null}
                   {notesAvailable ? <button type="button" role="menuitem" onClick={() => { setHeaderMenuOpen(false); onNotes(); }}><Pencil size={17} />{t("โน้ต")}</button> : null}
-                  {chat.kind === "group" ? <button type="button" role="menuitem" className="danger" onClick={() => { setHeaderMenuOpen(false); onLeaveGroup(); }}><LogOut size={17} />{t("ออกจากกลุ่ม")}</button> : null}
+                  {(chat.kind === "group" || chat.kind === "openchat") ? <button type="button" role="menuitem" className="danger" onClick={() => { setHeaderMenuOpen(false); onLeaveGroup(); }}><LogOut size={17} />{chat.kind === "openchat" ? t("ออกจากห้อง OpenChat") : t("ออกจากกลุ่ม")}</button> : null}
                 </div>
               ) : null}
             </div>

@@ -6,7 +6,7 @@
 import { Buffer } from "node:buffer";
 import { listLineAlbums, listLineAlbumPhotos, previewLineAlbumCover, previewLineAlbumPhoto } from "./albums";
 import { listNotes, getNote, createNote, updateNote, deleteNote, likeNote, commentNote } from "./notes";
-import { renameGroup, inviteGroupFriends, leaveGroup, renameFriend, setFriendFavorite, setFriendMuted } from "./social";
+import { renameGroup, inviteGroupFriends, leaveGroup, leaveSquareChat, renameFriend, setFriendFavorite, setFriendMuted } from "./social";
 import { uploadProfileAvatar } from "./profile-media";
 import { loginWithAuthToken, loginWithPassword, loginWithQR, Client as LineJsRuntimeClient, SquareMessage, TalkMessage, User as LineJsUser, type Client } from "@evex/linejs";
 import { BaseClient } from "@evex/linejs/base";
@@ -50,6 +50,7 @@ export const LineJsAdapter = {
   renameGroup,
   inviteGroupFriends,
   leaveGroup,
+  leaveSquareChat,
   renameFriend,
   setFriendFavorite,
   setFriendMuted,
