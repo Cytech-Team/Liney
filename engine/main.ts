@@ -6598,6 +6598,34 @@ async function handle(request: any) {
       return;
     }
 
+    if (method === "media.file.download") {
+      if (!client) throw new Error("not authenticated");
+      const params = request?.params ?? {};
+      const messageId = String(params.messageId ?? "").trim();
+      const chatId = String(params.chatId ?? "").trim();
+      const kind = String(params.kind ?? "talk") === "openchat" ? "openchat" : "talk";
+      if (!messageId || !chatId) throw new Error("messageId and chatId are required");
+      const stored = database.getMessage(ACCOUNT_ID, chatId, messageId);
+      if (!stored) throw new Error("ไม่พบข้อความนี้ในเครื่อง");
+      const file = await LineJsAdapter.downloadMessageData(client, {
+        messageId,
+        isSquare: kind === "openchat",
+      });
+      const bytes = Buffer.from(await file.arrayBuffer());
+      if (!bytes.length) throw new Error("LINE ไม่ส่งไฟล์กลับมา (อาจหมดอายุแล้ว)");
+      const fallbackName = `${messageId}.bin`;
+      const safeName = String(file.name || stored.filename || fallbackName)
+        .replace(/[\\/\0]/g, "_")
+        .replace(/^\.+/, "_")
+        .slice(0, 120) || fallbackName;
+      const cacheDir = join(dataPath(), "file-cache");
+      ensurePrivateDirectory(cacheDir);
+      const target = join(cacheDir, safeName.startsWith(`${messageId}-`) ? safeName : `${messageId}-${safeName}`);
+      await writeFileAsync(target, bytes, { mode: 0o600 });
+      emit({ id, ok: true, result: { path: target, name: safeName, size: bytes.length, type: file.type || "" } });
+      return;
+    }
+
     if (method === "chat.markRead" || method === "chat.mark_read") {
       const requestedChatId = String(request?.params?.chatId ?? "");
       const kind = String(request?.params?.kind ?? "talk");

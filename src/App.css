@@ -176,6 +176,12 @@ button { border: 0; background: none; cursor: pointer; }
 .message-row.mine .message-cluster { align-items: flex-end; }
 .bubble { position: relative; padding: 10px 13px; border-radius: 16px 16px 16px 5px; background: var(--panel); border: 1px solid var(--border); box-shadow: 0 3px 12px rgba(45,56,73,.05); font-size: 13px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; unicode-bidi: plaintext; }
 .message-row.mine .bubble { border-color: color-mix(in srgb, var(--green) 16%, var(--border)); background: var(--mine); border-radius: 16px 16px 5px 16px; }
+.bubble-file { display: flex; align-items: center; gap: 9px; width: min(100%, 340px); text-align: left; cursor: pointer; }
+.bubble-file:disabled { cursor: progress; opacity: .78; }
+.bubble-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bubble-file-state { margin-left: auto; flex: 0 0 auto; color: var(--muted); font-size: 10px; white-space: nowrap; }
+.bubble-file.has-error { border-color: color-mix(in srgb, #e06464 45%, var(--border)); }
+.bubble-file.has-error .bubble-file-state { max-width: 55%; color: #e06464; white-space: normal; text-align: right; line-height: 1.4; }
 .call-history-card { min-width: 188px; padding: 10px 12px; display: flex; align-items: center; gap: 10px; border: 1px solid color-mix(in srgb, var(--green) 28%, var(--border)); border-radius: 15px 15px 15px 5px; background: color-mix(in srgb, var(--green-soft) 72%, var(--panel)); box-shadow: 0 3px 12px rgba(45,56,73,.05); }
 .message-row.mine .call-history-card { border-radius: 15px 15px 5px 15px; }
 .call-history-icon { width: 31px; height: 31px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; color: var(--green-strong); background: var(--panel); }

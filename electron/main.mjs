@@ -384,8 +384,17 @@ async function runDesktopCommand(command,args={}) {
       if (!updateConfigured || updateState.status !== "downloaded") throw new Error("Update has not been downloaded and verified");
       autoUpdater.quitAndInstall(true, true);
       return true;
-    case "set_close_to_tray": {
-      if (Boolean(args.enabled)) {
+    case "open_path": {
+      // Only files Liney downloaded into its own cache can be opened from the
+      // renderer; never hand shell.openPath an arbitrary path.
+      const target = path.resolve(String(args.path || ""));
+      const cacheRoot = path.resolve(stateDir, "file-cache") + path.sep;
+      if (!target.startsWith(cacheRoot)) throw new Error("Path is outside the Liney file cache");
+      const failure = await shell.openPath(target);
+      if (failure) throw new Error(failure);
+      return true;
+    }
+    case "set_close_to_tray": {      if (Boolean(args.enabled)) {
         // Never hide the only window unless Electron successfully created a
         // native tray icon. Electron selects the host integration for the
         // current OS/desktop; LINEY does not depend on a KDE-specific API.

@@ -4578,6 +4578,43 @@ function Conversation({
   const messageMenuRef = useRef<HTMLDivElement>(null);
   const openedChatRef = useRef("");
   const [messageMenuPosition, setMessageMenuPosition] = useState({ left: 8, top: 8, ready: false });
+  const [fileOpenState, setFileOpenState] = useState<Record<string, { busy?: boolean; error?: string }>>({});
+
+  /**
+   * Files are fetched on demand: LINE keeps attachments for about a week, and
+   * the download URL is per message, so nothing can be cached before a click.
+   */
+  async function openFileAttachment(message: Message) {
+    if (fileOpenState[message.id]?.busy) return;
+    const expiresAt = attachmentExpiresAt(message);
+    if (expiresAt > 0 && Date.now() > expiresAt) {
+      setFileOpenState((current) => ({
+        ...current,
+        [message.id]: { error: t("ไฟล์นี้หมดอายุแล้ว · LINE เก็บไฟล์ไว้ประมาณ 7 วัน") },
+      }));
+      return;
+    }
+    setFileOpenState((current) => ({ ...current, [message.id]: { busy: true } }));
+    try {
+      const result = await lineyEngine.request<{ path: string }>("media.file.download", {
+        chatId: chat.id,
+        messageId: message.id,
+        kind: chat.kind === "openchat" ? "openchat" : "talk",
+      }, 120_000);
+      await invoke("open_path", { path: result.path });
+      setFileOpenState((current) => {
+        const next = { ...current };
+        delete next[message.id];
+        return next;
+      });
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error);
+      setFileOpenState((current) => ({
+        ...current,
+        [message.id]: { error: /404|not found|expired|expire/i.test(raw) ? t("ไฟล์นี้หมดอายุหรือถูกลบจาก LINE แล้ว") : formatSendError(raw) },
+      }));
+    }
+  }
   const [stickerPickerOpen, setStickerPickerOpen] = useState(false);
   const [pickerTab, setPickerTab] = useState<"sticker" | "emoji">("sticker");
   const [recentStickers, setRecentStickers] = useState<RecentSticker[]>([]);
@@ -5265,6 +5302,8 @@ function Conversation({
               const index = virtualItem.index;
               const message = messages[index];
               const showMessageText = hasUserVisibleMessageText(message);
+              const fileState = fileOpenState[message.id];
+              const attachmentExpired = attachmentExpiresAt(message) > 0 && Date.now() > attachmentExpiresAt(message);
               return (
               <div
                 key={`message-wrap-${message.id}`}
@@ -5359,8 +5398,30 @@ function Conversation({
                            <div className={`bubble ${message.status === "error" ? "bubble-error" : ""}`}><MessageTextWithLinks text={td(message.text!)} /></div>
                          ) : null}
                           {showMessageText && message.status !== "sending" ? <LinkPreviewFor text={message.text!} /> : null}
+                          {message.contentType === 14 && message.filename && !message.rich ? (
+                            <button
+                              type="button"
+                              className={`bubble bubble-file ${fileState?.error ? "has-error" : ""}`}
+                              onClick={() => void openFileAttachment(message)}
+                              disabled={Boolean(fileState?.busy)}
+                              title={fileState?.error ?? t("เปิดไฟล์ด้วยแอปเริ่มต้น")}
+                            >
+                              <Paperclip size={16} />
+                              <span className="bubble-file-name">{message.filename}</span>
+                              <span className="bubble-file-state">
+                                {fileState?.error
+                                  ? fileState.error
+                                  : fileState?.busy
+                                    ? t("กำลังดาวน์โหลด…")
+                                    : attachmentExpired
+                                      ? t("หมดอายุ")
+                                      : t("เปิดไฟล์")}
+                              </span>
+                            </button>
+                          ) : null}
                           {!message.rich && !message.flex && !message.stickerUrl && !message.emojiUrl
                             && !message.image && !message.postNotification && !message.call && !showMessageText
+                            && message.contentType !== 14
                             && (Boolean(message.filename)
                               || [1, 2, 3, 14].includes(Number(message.contentType ?? 0))
                               || (message.author === "me" && (message.status === "error" || message.status === "unknown"))) ? (
@@ -6752,6 +6813,13 @@ function formatSendError(value: unknown): string {
 function mediaLabel(contentType: number, filename: string): string {
   const label = contentType === 2 ? "วิดีโอ" : contentType === 3 ? "เสียง" : contentType === 14 ? "ไฟล์" : "รูปภาพ";
   return filename ? `${label}: ${filename}` : label;
+}
+
+/** LINE returns a millisecond expiry (about a week) for uploaded attachments. */
+function attachmentExpiresAt(message: Message): number {
+  const metadata = (message.raw as { contentMetadata?: Record<string, unknown> } | undefined)?.contentMetadata;
+  const value = Number(metadata?.FILE_EXPIRE_TIMESTAMP ?? metadata?.fileExpireTimestamp ?? 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
 function hasUserVisibleMessageText(message: Message): boolean {
