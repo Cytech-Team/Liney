@@ -1,7 +1,7 @@
 {
   "name": "liney",
   "private": true,
-  "version": "0.1.22",
+  "version": "0.1.23",
   "license": "LicenseRef-TLL-1.0",
   "type": "module",
   "scripts": {
