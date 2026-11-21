@@ -121,7 +121,7 @@ export class LineyDatabase {
     this.path = path;
     ensurePrivateDirectory(dirname(path));
     this.db = new Database(path, { create: true });
-    this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;");
+    this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS accounts (
         account_id TEXT PRIMARY KEY,
@@ -1572,6 +1572,9 @@ export class LineyDatabase {
       this.db.query("DELETE FROM link_previews WHERE account_id = ?").run(accountId);
       this.db.query("DELETE FROM protocol_events WHERE account_id = ?").run(accountId);
     });
+    // Deleted rows must not remain readable in free pages. This is an explicit
+    // user action, so the compaction cost belongs to the clear operation.
+    this.db.exec("VACUUM");
   }
 
   clearAccount(accountId: string): void {

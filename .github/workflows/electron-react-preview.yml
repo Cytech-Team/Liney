@@ -34,12 +34,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
           cache: npm
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.4.4"
       - name: Native UI dependencies for isolated Xvfb test
@@ -76,6 +76,7 @@ jobs:
           cat /tmp/liney-source-smoke.log
           if [ "$smoke_status" -ne 0 ]; then exit "$smoke_status"; fi
           grep -q '"enginePong":true' /tmp/liney-source-smoke.log
+          grep -q '"cspViolations":0' /tmp/liney-source-smoke.log
           grep -q '"logoLoaded":true' /tmp/liney-source-smoke.log
           grep -q '"menuHidden":true' /tmp/liney-source-smoke.log
           grep -q '"nativeEditMenu":true' /tmp/liney-source-smoke.log
@@ -99,6 +100,7 @@ jobs:
           cat /tmp/liney-packaged-smoke.log
           if [ "$smoke_status" -ne 0 ]; then exit "$smoke_status"; fi
           grep -q '"enginePong":true' /tmp/liney-packaged-smoke.log
+          grep -q '"cspViolations":0' /tmp/liney-packaged-smoke.log
           grep -q '"authDialog":true' /tmp/liney-packaged-smoke.log
           grep -q '"menuHidden":true' /tmp/liney-packaged-smoke.log
           grep -q '"nativeEditMenu":true' /tmp/liney-packaged-smoke.log
@@ -119,7 +121,7 @@ jobs:
           "$native/liney-media" --liney-keyring-probe | grep -q '"available":'
       - name: Checksums
         run: sha256sum release-electron/*.AppImage > release-electron/SHA256SUMS
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: liney-electron-linux-preview
           path: |

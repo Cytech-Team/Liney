@@ -106,6 +106,7 @@ run_smoke() {
     '"cut":true' \
     '"paste":true' \
     '"nativeHelpers":5' \
+    '"cspViolations":0' \
     '"enginePong":true'; do
     grep -Fq "$marker" "$logfile" || {
       echo "${label} smoke test did not report ${marker}" >&2

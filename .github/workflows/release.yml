@@ -56,14 +56,14 @@ jobs:
             channel=stable
           fi
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.ref || github.ref }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: '1.4.4'
       - name: Install release gate dependencies
@@ -85,14 +85,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.ref || github.ref }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: '1.4.4'
       - name: Install Electron Linux runtime dependencies
@@ -112,7 +112,7 @@ jobs:
           LINEY_RELEASE_CHANNEL: ${{ needs.verify.outputs.channel }}
         run: bash scripts/verify-linux-packages.sh release-electron
       - name: Upload desktop package artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: liney-electron-packages-${{ github.sha }}
           path: |
@@ -133,14 +133,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.ref || github.ref }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
       - name: Download desktop packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: liney-electron-packages-${{ github.sha }}
           path: release-electron
@@ -186,12 +186,14 @@ jobs:
             '"nativeEditMenu":true' \
             '"shortcutInputSkipped":true' \
             '"nativeHelpers":5' \
-            '"enginePong":true'; do
+            '"cspViolations":0' \
+            '"cspViolations":0' \
+    '"enginePong":true'; do
             grep -Fq "$marker" "$LOG"
           done
           flatpak uninstall --user --noninteractive --assumeyes com.cyoriasmp.liney
       - name: Upload Flatpak artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: liney-electron-flatpak-${{ github.sha }}
           path: release-electron/*.flatpak
@@ -208,13 +210,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Download desktop packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: liney-electron-packages-${{ github.sha }}
           path: release-electron
       - name: Download Flatpak bundle
         if: needs.verify.outputs.channel != 'stable'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: liney-electron-flatpak-${{ github.sha }}
           path: release-electron
@@ -232,7 +234,7 @@ jobs:
           fi
           ls -lh release-assets
       - name: Publish GitHub Release assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           generate_release_notes: true
           prerelease: ${{ needs.verify.outputs.channel != 'stable' }}

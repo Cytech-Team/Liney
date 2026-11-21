@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LineyDatabase } from "./database";
@@ -215,6 +215,29 @@ describe("LineyDatabase", () => {
     database.clearHistory("default");
     expect(database.stats("default")).toEqual({ chats: 1, messages: 0, pending: 0 });
     database.close();
+  });
+
+  test("clearHistory removes deleted message text from the database files", () => {
+    const root = mkdtempSync(join(tmpdir(), "liney-clear-history-test-"));
+    const path = join(root, "liney.sqlite");
+    const database = new LineyDatabase(path);
+    database.upsertChat("default", { id: "u-peer", kind: "dm", name: "Peer" });
+    database.upsertMessage("default", {
+      id: "secret-1",
+      chatId: "u-peer",
+      kind: "dm",
+      text: "SENTINEL-PRIVATE-MESSAGE",
+      isMine: true,
+      createdTime: 1_700_000_000_000,
+      status: "sent",
+    });
+
+    database.clearHistory("default");
+    database.close();
+
+    let raw = readFileSync(path).toString("latin1");
+    if (existsSync(`${path}-wal`)) raw += readFileSync(`${path}-wal`).toString("latin1");
+    expect(raw).not.toContain("SENTINEL-PRIVATE-MESSAGE");
   });
 
   test("finds accounts by MID and rekeys legacy data without merging accounts", () => {

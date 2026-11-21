@@ -81,6 +81,8 @@ import { callHistoryPreview, parseCallHistory } from "./call-history";
 import { canonicalTalkOperationType, isLineServiceChatOperation } from "./talk-operation";
 import { talkReadStateForMessages } from "./talk-read-state";
 import { normalizeJsonValue } from "./serialization";
+import { isPrivateAddress } from "./net-guard";
+import { isOwnedPath } from "./media-path";
 import { stickerUrlFromRaw } from "./sticker";
 import { ownedStickersFromPurchases } from "./sticker-catalog";
 import { StickerCatalogCache } from "./sticker-catalog-cache";
@@ -4535,7 +4537,7 @@ async function stageMediaInput(params: any, localId: string): Promise<string> {
 }
 
 function isOwnedMediaTemp(path: string): boolean {
-  return path.startsWith(`${mediaUploadTempDir}/`);
+  return isOwnedPath(mediaUploadTempDir, path);
 }
 
 async function removeOwnedMediaTemp(path: string | undefined): Promise<void> {
@@ -4931,37 +4933,16 @@ async function unsendMessage(chatId: string, kind: "dm" | "group" | "openchat", 
   return { chatId, messageId: numericId, unsent: true, server: normalize(result) };
 }
 
-function isPrivateAssetAddress(address: string): boolean {
-  const lower = address.toLowerCase();
-  if (isIP(address) === 4) {
-    const parts = address.split(".").map(Number);
-    const [a, b, c] = parts;
-    return a === 0 || a === 10 || a === 127 || a >= 224
-      || (a === 100 && b >= 64 && b <= 127)
-      || (a === 169 && b === 254)
-      || (a === 172 && b >= 16 && b <= 31)
-      || (a === 192 && (b === 168 || (b === 0 && (c === 0 || c === 2))))
-      || (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100)))
-      || (a === 203 && b === 0 && c === 113);
-  }
-  if (isIP(address) === 6) {
-    if (lower === "::" || lower === "::1" || lower.startsWith("fc") || lower.startsWith("fd") || /^fe[89ab]/.test(lower) || lower.startsWith("ff") || lower.startsWith("2001:db8:")) return true;
-    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(lower)?.[1];
-    return mapped ? isPrivateAssetAddress(mapped) : false;
-  }
-  return true;
-}
-
 async function assertPublicAssetUrl(url: URL): Promise<void> {
   if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443")) throw new Error("asset URL must be public HTTPS");
   const host = url.hostname.toLowerCase();
   if (!host || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) throw new Error("asset host is not public");
   if (isIP(host)) {
-    if (isPrivateAssetAddress(host)) throw new Error("asset host is not public");
+    if (isPrivateAddress(host)) throw new Error("asset host is not public");
     return;
   }
   const records = await lookup(host, { all: true, verbatim: true });
-  if (!records.length || records.some((record) => isPrivateAssetAddress(record.address))) throw new Error("asset host resolves to a private address");
+  if (!records.length || records.some((record) => isPrivateAddress(record.address))) throw new Error("asset host resolves to a private address");
 }
 
 async function assertPublicLinkUrl(url: URL): Promise<void> {
@@ -4973,11 +4954,11 @@ async function assertPublicLinkUrl(url: URL): Promise<void> {
     throw new Error("link host is not public");
   }
   if (isIP(host)) {
-    if (isPrivateAssetAddress(host)) throw new Error("link host is not public");
+    if (isPrivateAddress(host)) throw new Error("link host is not public");
     return;
   }
   const records = await lookup(host, { all: true, verbatim: true });
-  if (!records.length || records.some((record) => isPrivateAssetAddress(record.address))) {
+  if (!records.length || records.some((record) => isPrivateAddress(record.address))) {
     throw new Error("link host resolves to a private address");
   }
 }

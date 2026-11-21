@@ -15,6 +15,9 @@ import { execFileSync } from "node:child_process";
 import { getEditActionCalls, hasNativeEditShortcuts, installNativeEditMenu, installNativeEditShortcuts, resetEditActionCalls } from "./edit-menu.mjs";
 import { resolveUpdaterConfig } from "./updater-config.mjs";
 import { resolveRuntimePaths } from "./runtime-paths.mjs";
+import { isPermittedNavigation } from "./navigation.mjs";
+import { CONTENT_SECURITY_POLICY } from "./csp.mjs";
+import { normalizeExternalUrl } from "./external-links.mjs";
 
 protocol.registerSchemesAsPrivileged([
   {scheme:"lineyapp",privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}
@@ -303,6 +306,12 @@ function createWindow(label="main", opts={}) {
   });
   win.once("ready-to-show",()=>{win.show();win.webContents.send("liney:desktop:event",{name:"liney:window-created",payload:{label}});});
   if(label==="main" && process.env.LINEY_ELECTRON_SMOKE==="1") {
+    const cspViolations=[];
+    win.webContents.on("console-message",(_event,detailsOrLevel,message)=>{
+      const details=typeof detailsOrLevel==="object"&&detailsOrLevel!==null?detailsOrLevel:null;
+      const text=details?String(details.message??""):String(message??"");
+      if(/content security policy/i.test(text)) cspViolations.push(text.slice(0,300));
+    });
     win.webContents.once("did-finish-load",()=>{
       setTimeout(async()=>{
         try{
@@ -319,10 +328,10 @@ function createWindow(label="main", opts={}) {
           const appMenu=Menu.getApplicationMenu();
           const editMenu=appMenu?.items?.find(item=>item.label==="Edit");
           const editItems=(editMenu?.submenu?.items ?? []).map(item=>({label:item.label,role:item.role,accelerator:item.accelerator,registerAccelerator:item.registerAccelerator}));
-          const outcome={...checks,nativeHelpers:Object.keys(helpers).length,menuHidden:!win.isMenuBarVisible(),nativeEditMenu:hasNativeEditShortcuts(appMenu),editItems,nativeEditShortcuts,shortcutInputSkipped:skipShortcutInput,enginePong:Boolean(pong),renderer:"React original",system:"Electron"};
+          const outcome={...checks,nativeHelpers:Object.keys(helpers).length,menuHidden:!win.isMenuBarVisible(),nativeEditMenu:hasNativeEditShortcuts(appMenu),editItems,nativeEditShortcuts,shortcutInputSkipped:skipShortcutInput,cspViolations:cspViolations.length,enginePong:Boolean(pong),renderer:"React original",system:"Electron"};
           console.log("LINEY_ELECTRON_SMOKE_RESULT="+JSON.stringify(outcome));
           const shortcutsPassed=skipShortcutInput || Object.values(nativeEditShortcuts).every(Boolean);
-          app.exit(checks.authDialog && checks.logoLoaded && checks.bridge && outcome.nativeHelpers===5 && outcome.menuHidden && outcome.nativeEditMenu && shortcutsPassed && Boolean(pong) ? 0 : 3);
+          app.exit(checks.authDialog && checks.logoLoaded && checks.bridge && outcome.nativeHelpers===5 && outcome.menuHidden && outcome.nativeEditMenu && shortcutsPassed && cspViolations.length===0 && Boolean(pong) ? 0 : 3);
         }catch(e){console.error("LINEY_ELECTRON_SMOKE_ERROR="+(e?.stack || String(e)));app.exit(4);}
       },1000);
     });
@@ -332,14 +341,29 @@ function createWindow(label="main", opts={}) {
     return {action:"deny"};
   });
   win.webContents.on("will-navigate",(event,url)=>{
-    const permitted = process.env.LINEY_ELECTRON_DEV_URL || "lineyapp://app/";
-    if(!url.startsWith(permitted)) event.preventDefault();
+    if(!isPermittedNavigation(url, process.env.LINEY_ELECTRON_DEV_URL)) event.preventDefault();
   });
   loadApp(win,opts.query||"").catch(error=>{console.error("React UI load failed:",error.message);});
   return win;
 }
 const avatarFolder = path.join(stateDir,"notification-avatars");
 const avatarPath = key => path.join(avatarFolder,key+".png");
+function isTrustedSender(event) {
+  const frameUrl = event?.senderFrame?.url || "";
+  return isPermittedNavigation(frameUrl, process.env.LINEY_ELECTRON_DEV_URL);
+}
+
+/**
+ * Every renderer IPC entry point is restricted to the app frame. Without this
+ * a navigated or embedded frame would inherit the full engine/desktop bridge.
+ */
+function handleIpc(channel, handler) {
+  ipcMain.handle(channel, (event, ...args) => {
+    if (!isTrustedSender(event)) throw new Error("Untrusted renderer sender");
+    return handler(event, ...args);
+  });
+}
+
 async function runDesktopCommand(command,args={}) {
   switch(command) {
     case "updater_state":
@@ -406,9 +430,8 @@ async function runDesktopCommand(command,args={}) {
       return null;
     }
     case "open_external_url": {
-      const u=new URL(String(args.url||""));
-      if(!["https:","http:"].includes(u.protocol)||u.username||u.password) throw new Error("External URL not allowed");
-      await shell.openExternal(u.href);return null;
+      const href=normalizeExternalUrl(args.url);
+      await shell.openExternal(href);return null;
     }
     case "read_clipboard_image": {
       const im=clipboard.readImage();
@@ -577,7 +600,7 @@ app.whenReady().then(async()=>{
   if (!primaryInstance) return;
   // Keep standard Edit roles for native text controls; the menu bar remains hidden per window.
   installNativeEditMenu(Menu);
-  protocol.handle("lineyapp",request=>{
+  protocol.handle("lineyapp",async request=>{
     const url=new URL(request.url);
     if(url.hostname!=="app")return new Response("Unknown app host",{status:403});
     let urlPath;
@@ -586,16 +609,23 @@ app.whenReady().then(async()=>{
     const folder=path.resolve(root,"dist")+path.sep;
     if(filename!==path.resolve(root,"dist/index.html") && !filename.startsWith(folder))
       return new Response("Forbidden",{status:403});
-    return net.fetch(new URL("file://"+filename).toString());
+    const response=await net.fetch(new URL("file://"+filename).toString());
+    const headers=new Headers(response.headers);
+    headers.set("X-Content-Type-Options","nosniff");
+    headers.set("Referrer-Policy","no-referrer");
+    // The document owns the renderer tree; subresources inherit the policy.
+    if(filename===path.resolve(root,"dist/index.html"))
+      headers.set("Content-Security-Policy",CONTENT_SECURITY_POLICY);
+    return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
   });
-  ipcMain.handle("liney:engine:start",async()=>{await ensureEngine();return true;});
-  ipcMain.handle("liney:engine:request",async(_event,method,params,timeout)=>{
+  handleIpc("liney:engine:start",async()=>{await ensureEngine();return true;});
+  handleIpc("liney:engine:request",async(_event,method,params,timeout)=>{
     await ensureEngine();
     return requestEngine(method,params,timeout);
   });
-  ipcMain.handle("liney:engine:stop",()=>stopEngine());
-  ipcMain.handle("liney:desktop:command",(_event,command,args)=>runDesktopCommand(command,args));
-  ipcMain.handle("liney:desktop:dialog",async(event,options={})=>{
+  handleIpc("liney:engine:stop",()=>stopEngine());
+  handleIpc("liney:desktop:command",(_event,command,args)=>runDesktopCommand(command,args));
+  handleIpc("liney:desktop:dialog",async(event,options={})=>{
     const owner=BrowserWindow.fromWebContents(event.sender);
     const opts={properties:options.multiple?["openFile","multiSelections"]:["openFile"]};
     if(options.directory) opts.properties=["openDirectory"];
@@ -603,7 +633,7 @@ app.whenReady().then(async()=>{
     if(result.canceled)return null;
     return options.multiple?result.filePaths:result.filePaths[0]||null;
   });
-  ipcMain.handle("liney:desktop:window",async(_event,cmd,label,options)=>{
+  handleIpc("liney:desktop:window",async(_event,cmd,label,options)=>{
     if(cmd==="exists"){const existing=windows.get(label);return Boolean(existing&&!existing.isDestroyed());}
     if(cmd==="create"){if(windows.has(label))return true;createWindow(label,options);return true;}
     const win=windows.get(label);
@@ -613,7 +643,7 @@ app.whenReady().then(async()=>{
     if(cmd==="close"){win.close();return true;}
     return false;
   });
-  ipcMain.handle("liney:desktop:emit",(_event,label,name,payload)=>{
+  handleIpc("liney:desktop:emit",(_event,label,name,payload)=>{
     const win=windows.get(label);
     if(win&&!win.isDestroyed())win.webContents.send("liney:desktop:event",{name,payload});
     return Boolean(win);
