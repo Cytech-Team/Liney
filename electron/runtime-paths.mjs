@@ -12,6 +12,14 @@ function customNamespace(explicitDataDir) {
 }
 
 /**
+ * Only the packaged manifest can declare a stable build. Unknown or missing
+ * values must fall back to preview so a broken build never claims stability.
+ */
+export function channelFromManifest(manifest) {
+  return manifest && manifest.lineyChannel === "stable" ? "stable" : "preview";
+}
+
+/**
  * Resolve the runtime channel and data locations.
  *
  * Preview keeps the legacy directory and keyring names so existing preview

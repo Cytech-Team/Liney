@@ -247,6 +247,7 @@ jobs:
       - name: Publish GitHub Release assets
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
+          tag_name: ${{ needs.verify.outputs.tag }}
           generate_release_notes: true
           prerelease: ${{ needs.verify.outputs.channel != 'stable' }}
           files: release-assets/*

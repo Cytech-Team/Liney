@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { getEditActionCalls, hasNativeEditShortcuts, installNativeEditMenu, installNativeEditShortcuts, resetEditActionCalls } from "./edit-menu.mjs";
 import { resolveUpdaterConfig } from "./updater-config.mjs";
-import { resolveRuntimePaths } from "./runtime-paths.mjs";
+import { channelFromManifest, resolveRuntimePaths } from "./runtime-paths.mjs";
 import { isPermittedNavigation } from "./navigation.mjs";
 import { CONTENT_SECURITY_POLICY } from "./csp.mjs";
 import { normalizeExternalUrl } from "./external-links.mjs";
@@ -31,7 +31,7 @@ function packagedBuildChannel() {
   if (!bundled) return "preview";
   try {
     const manifest = JSON.parse(readFileSync(path.join(app.getAppPath(), "package.json"), "utf8"));
-    return manifest.lineyChannel === "stable" ? "stable" : "preview";
+    return channelFromManifest(manifest);
   } catch {
     return "preview";
   }

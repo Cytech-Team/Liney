@@ -1,6 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { resolveRuntimePaths } from "./runtime-paths.mjs";
+import { channelFromManifest, resolveRuntimePaths } from "./runtime-paths.mjs";
+
+describe("channelFromManifest", () => {
+  test("accepts only an explicit stable marker", () => {
+    expect(channelFromManifest({ lineyChannel: "stable" })).toBe("stable");
+  });
+
+  test("falls back to preview for missing, unknown or broken manifests", () => {
+    expect(channelFromManifest({})).toBe("preview");
+    expect(channelFromManifest({ lineyChannel: "stable-ish" })).toBe("preview");
+    expect(channelFromManifest(null)).toBe("preview");
+    expect(channelFromManifest(undefined)).toBe("preview");
+  });
+});
 
 describe("resolveRuntimePaths", () => {
   test("uses an isolated dev data dir for unpackaged builds", () => {
