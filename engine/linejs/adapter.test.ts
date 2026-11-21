@@ -854,10 +854,15 @@ describe("LineJsAdapter group metadata recovery", () => {
 
 // Regression: engine imports the LineJsAdapter facade, not named exports.
 // All public methods used by engine/main.ts must be reachable via that facade.
+// `observePushHeartbeat` shipped without being added here, so every PUSH
+// supervision cycle threw before it could report a connection.
 describe("LineJsAdapter public facade contract", () => {
-  test("exposes friend diagnostics, retry and group metadata batch at runtime", () => {
-    expect(typeof LineJsAdapter.getFriendSyncDiagnostics).toBe("function");
-    expect(typeof LineJsAdapter.retryMissingFriendProfiles).toBe("function");
-    expect(typeof LineJsAdapter.getChatMetadataBatch).toBe("function");
+  test("exposes every helper engine/main.ts calls", () => {
+    const source = readFileSync(new URL("../main.ts", import.meta.url), "utf8");
+    const used = new Set(
+      [...source.matchAll(/LineJsAdapter\.([A-Za-z0-9_]+)/g)].map((match) => match[1]),
+    );
+    const missing = [...used].filter((name) => (LineJsAdapter as Record<string, unknown>)[name] === undefined);
+    expect(missing).toEqual([]);
   });
 });

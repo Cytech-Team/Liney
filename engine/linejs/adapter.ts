@@ -114,6 +114,7 @@ export const LineJsAdapter = {
   initializePushConnection,
   readPush,
   observePushTalkSyncResponse,
+  observePushHeartbeat,
   talkSyncCursor,
   restoreTalkSyncCursor,
   resetTalkSyncCursor,
