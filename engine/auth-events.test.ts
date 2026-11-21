@@ -23,7 +23,7 @@ describe("auth events", () => {
     expect(tokens).toEqual(["rotated-token"]);
   });
 
-  test("keeps the current token when LINE emits an empty rotation", () => {
+  test("does not persist an unchanged or empty rotation", () => {
     const { client, base } = fakeClient();
     const tokens: string[] = [];
     attachAuthEvents(client, {
@@ -33,9 +33,10 @@ describe("auth events", () => {
     });
 
     base.emit("update:authtoken", "");
+    base.emit("update:authtoken", "old-token");
 
     expect(base.authToken).toBe("old-token");
-    expect(tokens).toEqual(["old-token"]);
+    expect(tokens).toEqual([]);
   });
 
   test("surfaces a remote session end instead of ignoring it", () => {

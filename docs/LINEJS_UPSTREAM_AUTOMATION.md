@@ -73,6 +73,20 @@ runners change IP on every run, which can trigger LINE risk control and looks
 exactly like a Liney logout bug. Until that runner exists, the automated
 workflow keeps opening PRs and no release is tagged automatically.
 
+### Canary runner checklist
+
+- Register a self-hosted Linux runner with a unique label (`liney-canary`) and
+  `concurrency: 1`; never use a GitHub-hosted runner for a real account.
+- Use a dedicated OS user and a persistent data directory such as
+  `/var/lib/liney-canary` (mode `0700`), plus a separate `LINEY_CONFIG_DIR`.
+- Use a dedicated LINE account and set `LINEY_CLIENT_SUFFIX=Canary` so LINE sees
+  a separate device from the daily client.
+- Log in once with QR on that machine. Never commit or upload the session.
+- Candidate job: build the engine from the PR, start with auto-restore, assert
+  `auth.ready`, keep push alive for 15 minutes, send one self-message, assert no
+  `auth.restore_failed` and no `session-ended` in `auth-diagnostics.jsonl`.
+- Create a patch tag only after two consecutive green canary runs.
+
 ## Diagnosing a logout report
 
 Every engine writes a redacted journal at

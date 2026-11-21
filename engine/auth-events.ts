@@ -21,8 +21,11 @@ export type AuthEventHooks = {
 export function attachAuthEvents(client: LineClient, hooks: AuthEventHooks): void {
   LineJsAdapter.on(client, "update:authtoken", (token: unknown) => {
     if (!hooks.active()) return;
-    const next = resolveAccessToken(LineJsAdapter.authToken(client), token);
-    if (!next) return;
+    const current = LineJsAdapter.authToken(client);
+    const next = resolveAccessToken(current, token);
+    // LINE can repeat the same token on many responses. Writing the keyring on
+    // every response is a synchronous native call, so only persist real changes.
+    if (!next || next === current) return;
     setAuthToken(client, next);
     hooks.onToken(next);
   });
