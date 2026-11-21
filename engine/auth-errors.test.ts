@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { authErrorCode, isDefinitiveAuthFailure } from "./auth-errors";
+import { authErrorCode, authErrorSummary, isDefinitiveAuthFailure } from "./auth-errors";
 
 describe("auth error classification", () => {
   test("reads the LINE error code from the flat data payload", () => {
@@ -20,5 +20,17 @@ describe("auth error classification", () => {
     expect(isDefinitiveAuthFailure(new Error("fetch failed"))).toBe(false);
     expect(isDefinitiveAuthFailure({ data: { code: "INTERNAL_ERROR" } })).toBe(false);
     expect(isDefinitiveAuthFailure(null)).toBe(false);
+  });
+
+  test("summarizes a failed QR request without leaking headers or bodies", () => {
+    const summary = authErrorSummary(new Error(
+      'Request internal failed: status=429 headers=[["set-cookie","secret=abc"],["x-line-access","0123456789abcdef0123456789abcdef0123456789"]] body=<68 74 6d 6c>',
+    ));
+
+    expect(summary.status).toBe("429");
+    expect(summary.code).toBe("unknown");
+    expect(summary.message).not.toContain("set-cookie");
+    expect(summary.message).not.toContain("0123456789abcdef");
+    expect(summary.message).not.toContain("68 74 6d 6c");
   });
 });

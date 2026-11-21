@@ -1,7 +1,7 @@
 import { bindClientStorage, createTemporaryQrStorage, getTargetProfiles, LineJsAdapter, parseE2EEKeyData, type LineClient, type LineyPollingSession, type TalkSyncCursor } from "./linejs/adapter";
 import { AuthDiagnostics } from "./auth-diagnostics";
 import { attachAuthEvents } from "./auth-events";
-import { authErrorCode, isDefinitiveAuthFailure } from "./auth-errors";
+import { authErrorCode, authErrorSummary, isDefinitiveAuthFailure } from "./auth-errors";
 import { selectCredential, type CredentialSource } from "./credential-source";
 import { resolveTalkOwnership, reconcileTalkOwnership } from "./talk-ownership";
 import { presentOwnProfile } from "./linejs/profile-display";
@@ -181,6 +181,17 @@ function clientIdentity() {
     channel,
     device: "DESKTOPWIN" as const,
   };
+}
+
+/**
+ * LINE's LEGY encrypted gateway (`/enc`) has returned empty 404s since
+ * 2026-11-18. The plain `/S4` path still accepts the same V3 tokens, so this
+ * opt-in keeps Liney usable until LINE restores the gateway.
+ */
+function legyInit(): { legy?: { encrypted: false } } {
+  return process.env.LINEY_DISABLE_LEGY_ENCRYPTION === "1"
+    ? { legy: { encrypted: false } }
+    : {};
 }
 const liveMessageOverlayKeys = new Set<string>();
 let preSyncedChats: any[] | null = null;
@@ -4589,6 +4600,7 @@ async function startQrLogin(id: string) {
       {
         device: identity.device,
         storage: store,
+        ...legyInit(),
       },
       identity,
     );
@@ -4596,7 +4608,9 @@ async function startQrLogin(id: string) {
       if (generation !== authGeneration) return;
       await finishAuthentication(next, false);
     }).catch((error) => {
-      authDiagnostics.record("auth.qr.failed", { code: authErrorCode(error) || "unknown" });
+      const summary = authErrorSummary(error);
+      authDiagnostics.record("auth.qr.failed", summary);
+      console.error("Liney QR login failed:", JSON.stringify(summary));
       if (generation !== authGeneration) return;
       if (!acknowledged) replyError(id, error);
       else emit({ type: "auth.error", error: errorInfo(error) });
@@ -4605,7 +4619,9 @@ async function startQrLogin(id: string) {
       loginInFlight = false;
     });
   } catch (error) {
-    authDiagnostics.record("auth.qr.failed", { code: authErrorCode(error) || "unknown" });
+    const summary = authErrorSummary(error);
+    authDiagnostics.record("auth.qr.failed", summary);
+    console.error("Liney QR login failed:", JSON.stringify(summary));
     if (generation !== authGeneration) return;
     if (!acknowledged) replyError(id, error);
     else emit({ type: "auth.error", error: errorInfo(error) });
@@ -4790,6 +4806,7 @@ async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: un
       {
         device: clientIdentity().device,
         storage: store,
+        ...legyInit(),
       },
     );
     if (generation !== authGeneration) return;
@@ -4815,6 +4832,7 @@ async function restoreToken(id: string, token: unknown) {
     const next = await loginWithAuthToken(token as any, {
       device: clientIdentity().device,
       storage: store,
+      ...legyInit(),
     });
     if (generation !== authGeneration) return;
     await finishAuthentication(next, true);
@@ -4878,6 +4896,7 @@ async function autoRestore() {
     const next = await loginWithAuthToken(credential as any, {
       device: clientIdentity().device,
       storage: store,
+      ...legyInit(),
     });
     if (generation !== authGeneration) return;
     await finishAuthentication(next, true);
