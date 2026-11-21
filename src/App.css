@@ -1526,3 +1526,22 @@ button.post-notification-card { font: inherit; color: inherit; text-align: left;
 .settings-action-button:active { transform:translateY(1px); }
 .settings-action-button:focus-visible { outline:2px solid var(--green); outline-offset:2px; }
 .settings-action-button.primary:hover { background:color-mix(in srgb, var(--green) 86%, #000); }
+
+
+/* User profile card opened from a DM header or a message avatar. */
+.conversation-avatar-button { padding: 0; border: 0; background: none; border-radius: 50%; cursor: pointer; }
+.conversation-avatar-button:hover { filter: brightness(1.07); }
+.conversation-avatar-button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.message-sender-avatar.is-clickable { cursor: pointer; }
+.message-sender-avatar.is-clickable:hover { filter: brightness(1.08); }
+.user-profile-backdrop { display: grid; place-items: center; }
+.user-profile-card { position: relative; width: min(360px, calc(100vw - 32px)); padding: 26px 24px 20px; display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; border: 1px solid var(--border-strong); border-radius: 20px; background: var(--panel); box-shadow: 0 24px 70px rgba(6, 14, 24, .35); }
+.user-profile-close { position: absolute; top: 10px; right: 10px; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; color: var(--muted); }
+.user-profile-close:hover { color: var(--text); background: var(--panel-3); }
+.user-profile-avatar { width: 84px; height: 84px; display: grid; place-items: center; overflow: hidden; border-radius: 50%; background: var(--panel-3); color: var(--text); font-size: 28px; font-weight: 800; }
+.user-profile-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.user-profile-card h2 { margin: 4px 0 0; color: var(--text); font-size: 18px; line-height: 1.35; overflow-wrap: anywhere; }
+.user-profile-badge { padding: 3px 9px; border-radius: 999px; background: var(--green-soft); color: var(--green-strong); font-size: 10px; font-weight: 700; }
+.user-profile-mid { max-width: 100%; margin: 0; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+.user-profile-error { margin: 0; color: #e06464; font-size: 11px; line-height: 1.5; }
+.user-profile-actions { display: flex; gap: 8px; margin-top: 10px; }

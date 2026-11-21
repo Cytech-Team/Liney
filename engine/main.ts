@@ -6130,6 +6130,25 @@ async function handle(request: any) {
       return;
     }
 
+    if (method === "user.profile") {
+      const mid = String(request?.params?.mid ?? "").trim();
+      if (!/^[up][a-f0-9]{32}$/i.test(mid)) throw new Error("valid user mid is required");
+      const identity = mid.startsWith("p")
+        ? await resolveSquareSender(mid)
+        : await resolveTalkSender(mid);
+      emit({
+        id,
+        ok: true,
+        result: normalize({
+          id: mid,
+          name: identity?.name || "LINE User",
+          avatarUrl: identity?.avatarUrl || "",
+          isOfficialAccount: Boolean(identity?.isOfficialAccount),
+        }),
+      });
+      return;
+    }
+
     if (method === "chat.identity.merge") {
       const aliasInput = String(request?.params?.aliasMid ?? "").trim();
       const canonicalInput = String(request?.params?.canonicalMid ?? "").trim();
