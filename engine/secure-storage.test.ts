@@ -179,4 +179,54 @@ describe("secure storage", () => {
     expect(persisted).not.toContain("nested-secret");
     expect(persisted).toContain('"safe": true');
   });
+
+  test("namespaces Wallet items for non-preview channels", () => {
+    const calls: string[][] = [];
+    const runner = ((_binary: string, args: string[]) => {
+      if (args[0] === "--liney-keyring-probe") {
+        return { status: 0, signal: null, stdout: '{"available":true}', stderr: "" };
+      }
+      calls.push(args);
+      return { status: 0, signal: null, stdout: '{"available":true,"value":"stored"}', stderr: "" };
+    }) as unknown as typeof spawnSync;
+    const keyring = new LineyKeyring("/tmp/liney-media-test", runner, "stable");
+
+    expect(keyring.get("credential")).toBe("stored");
+    expect(calls).toEqual([["--liney-keyring-get", "--kind", "liney:stable:credential"]]);
+  });
+
+  test("namespaces encrypted fallback files for non-preview channels", () => {
+    const root = mkdtempSync(join(tmpdir(), "liney-fallback-namespace-test-"));
+    const config = join(root, "config");
+    const stable = new LineyEncryptedFallback(root, config, "stable");
+    const preview = new LineyEncryptedFallback(root, config);
+
+    expect(stable.vaultPath).toBe(join(root, "credential-fallback-stable.enc"));
+    expect(stable.keyPath).toBe(join(config, "credential-fallback-stable.key"));
+    expect(preview.vaultPath).toBe(join(root, "credential-fallback.enc"));
+    expect(preview.keyPath).toBe(join(config, "credential-fallback.key"));
+  });
+
+  test("re-probes an unavailable keyring after the retry window", () => {
+    let now = 0;
+    let probes = 0;
+    const runner = ((_binary: string, args: string[]) => {
+      if (args[0] === "--liney-keyring-probe") {
+        probes += 1;
+        return {
+          status: 0,
+          signal: null,
+          stdout: JSON.stringify({ available: probes > 1 }),
+          stderr: "",
+        };
+      }
+      return { status: 0, signal: null, stdout: '{"available":true}', stderr: "" };
+    }) as unknown as typeof spawnSync;
+    const keyring = new LineyKeyring("/tmp/liney-media-test", runner, "", () => now);
+
+    expect(keyring.available).toBe(false);
+    now = 11_000;
+    expect(keyring.refreshAvailability()).toBe(true);
+    expect(keyring.available).toBe(true);
+  });
 });

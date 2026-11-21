@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { getEditActionCalls, hasNativeEditShortcuts, installNativeEditMenu, installNativeEditShortcuts, resetEditActionCalls } from "./edit-menu.mjs";
 import { resolveUpdaterConfig } from "./updater-config.mjs";
+import { resolveRuntimePaths } from "./runtime-paths.mjs";
 
 protocol.registerSchemesAsPrivileged([
   {scheme:"lineyapp",privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}
@@ -21,15 +22,23 @@ protocol.registerSchemesAsPrivileged([
 const base = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(base, "..");
 const bundled = app.isPackaged;
-const preview = process.env.LINEY_ELECTRON_STABLE !== "1";
+const runtime = resolveRuntimePaths({
+  isPackaged: bundled,
+  env: process.env,
+  home: app.getPath("home"),
+  xdgDataHome: process.env.XDG_DATA_HOME,
+});
 app.setName("Liney");
-const stateDir = process.env.LINEY_DATA_DIR || path.join(
-  process.env.XDG_DATA_HOME || path.join(app.getPath("home"), ".local/share"),
-  preview ? "liney-electron-preview" : "liney"
-);
-if (preview || process.env.LINEY_DATA_DIR) app.setPath("userData", stateDir);
+const stateDir = runtime.stateDir;
+if (runtime.userDataDir) app.setPath("userData", stateDir);
 process.umask(0o077);
 const icon = path.join(root, "branding/icons/128x128.png");
+
+// Two Liney windows sharing one data dir race on the same refresh token: the
+// second process rotates it and the first one is silently logged out. The lock
+// is scoped to userData, so dev/preview/stable still run side by side.
+const primaryInstance = app.requestSingleInstanceLock();
+if (!primaryInstance) app.quit();
 
 // Bundled helpers are executed by LINEJS's Node Worker, not by Chromium.
 // When packaged, all five are unpacked next to app.asar, so we never depend
@@ -72,7 +81,7 @@ const updaterConfig = resolveUpdaterConfig({
   isPackaged: app.isPackaged,
   appImagePath: process.env.APPIMAGE,
   feedUrlEnv: process.env.LINEY_UPDATE_FEED_URL,
-  updateChannelEnv: process.env.LINEY_UPDATE_CHANNEL,
+  updateChannelEnv: process.env.LINEY_UPDATE_CHANNEL || runtime.channel,
 });
 const updateChannel = updaterConfig.displayChannel;
 let updateState = { status: "idle", channel: updateChannel, version: app.getVersion(), availableVersion: null, releaseNotes: "", percent: 0, error: null };
@@ -198,7 +207,7 @@ async function ensureEngine() {
     const location = path.join(nativeRoot, "electron/dist/engine.mjs");
     if (!existsSync(location)) throw new Error("LINEJS Engine bundle missing. Run npm run electron:engine");
     const worker = new Worker(location, {
-      env: {...process.env, ...bundledHelperEnvironment(), LINEY_DATA_DIR:stateDir},
+      env: {...process.env, ...bundledHelperEnvironment(), LINEY_DATA_DIR:stateDir, LINEY_CREDENTIAL_NAMESPACE:runtime.credentialNamespace},
     });
     engine = worker;
     worker.on("message", (packet) => {
@@ -349,7 +358,7 @@ async function runDesktopCommand(command,args={}) {
     case "set_autostart":
       if (!args.enabled) return null;
       // Linux desktop-file/systemd autostart needs a separately reviewed implementation.
-      throw new Error("Autostart is not yet supported in Electron preview");
+      throw new Error(`Autostart is not yet supported in the Electron ${runtime.channel} build`);
     case "notify_message":
     case "notify_call": {
       // Clicking the toast focuses the main window
@@ -553,6 +562,7 @@ async function verifyNativeEditShortcuts(win) {
 }
 
 app.whenReady().then(async()=>{
+  if (!primaryInstance) return;
   // Keep standard Edit roles for native text controls; the menu bar remains hidden per window.
   installNativeEditMenu(Menu);
   protocol.handle("lineyapp",request=>{
@@ -602,6 +612,17 @@ app.whenReady().then(async()=>{
   configureUpdater();
   createWindow();
   if (updateConfigured) setTimeout(() => { void checkForUpdates().catch(() => {}); }, 30000);
+});
+app.on("second-instance",()=>{
+  if (!primaryInstance) return;
+  const win = windows.get("main");
+  if (win && !win.isDestroyed()) {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  } else if (app.isReady()) {
+    createWindow();
+  }
 });
 app.on("window-all-closed",()=>{if(!closeToTray)app.quit();});
 app.on("before-quit",()=>{quitting=true;closeToTray=false;destroyTray();});

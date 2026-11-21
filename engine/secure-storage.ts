@@ -57,24 +57,52 @@ export function nativeKeyringSidecarAvailable(
 }
 
 export class LineyKeyring {
-  readonly available: boolean;
+  private availableValue: boolean;
+  private lastProbeAt: number;
   private readonly binary?: string;
   private readonly runner: KeyringRunner;
+  private readonly namespace: string;
+  private readonly now: () => number;
 
   constructor(
     binary = resolveLineyMediaBinary(),
     runner: KeyringRunner = spawnSync,
+    namespace = "",
+    now: () => number = () => Date.now(),
   ) {
     this.binary = binary;
     this.runner = runner;
-    this.available = nativeKeyringSidecarAvailable(binary, runner);
+    this.namespace = String(namespace ?? "").trim();
+    this.now = now;
+    this.lastProbeAt = now();
+    this.availableValue = nativeKeyringSidecarAvailable(binary, runner);
+  }
+
+  get available(): boolean {
+    return this.availableValue;
+  }
+
+  /**
+   * Re-probe after the user unlocks the desktop keyring. The normal getter is
+   * cached so auth paths never block on a synchronous D-Bus probe.
+   */
+  refreshAvailability(force = false): boolean {
+    const now = this.now();
+    if (!force && now - this.lastProbeAt < 10_000) return this.availableValue;
+    this.lastProbeAt = now;
+    this.availableValue = nativeKeyringSidecarAvailable(this.binary, this.runner);
+    return this.availableValue;
+  }
+
+  private kind(kind: string): string {
+    return this.namespace ? `liney:${this.namespace}:${kind}` : kind;
   }
 
   get(kind: string): string | null {
-    if (!this.available || !this.binary) return null;
+    if (!this.availableValue || !this.binary) return null;
     const result = runNativeKeyring(
       this.binary,
-      ["--liney-keyring-get", "--kind", kind],
+      ["--liney-keyring-get", "--kind", this.kind(kind)],
       this.runner,
     );
     if (!result.ok) return null;
@@ -87,10 +115,10 @@ export class LineyKeyring {
   }
 
   set(kind: string, value: string): boolean {
-    if (!this.available || !this.binary || !value) return false;
+    if (!this.availableValue || !this.binary || !value) return false;
     const result = runNativeKeyring(
       this.binary,
-      ["--liney-keyring-set", "--kind", kind],
+      ["--liney-keyring-set", "--kind", this.kind(kind)],
       this.runner,
       value,
     );
@@ -99,10 +127,10 @@ export class LineyKeyring {
   }
 
   clear(kind: string): boolean {
-    if (!this.available || !this.binary) return false;
+    if (!this.availableValue || !this.binary) return false;
     return runNativeKeyring(
       this.binary,
-      ["--liney-keyring-clear", "--kind", kind],
+      ["--liney-keyring-clear", "--kind", this.kind(kind)],
       this.runner,
     ).ok;
   }
@@ -130,9 +158,10 @@ export class LineyEncryptedFallback {
   readonly vaultPath: string;
   readonly keyPath: string;
 
-  constructor(dataDir: string, configDir = dataDir) {
-    this.vaultPath = join(dataDir, "credential-fallback.enc");
-    this.keyPath = join(configDir, "credential-fallback.key");
+  constructor(dataDir: string, configDir = dataDir, namespace = "") {
+    const suffix = String(namespace ?? "").trim() ? `-${String(namespace).trim()}` : "";
+    this.vaultPath = join(dataDir, `credential-fallback${suffix}.enc`);
+    this.keyPath = join(configDir, `credential-fallback${suffix}.key`);
     ensurePrivateDirectory(dataDir);
     ensurePrivateDirectory(configDir);
     this.hardenExistingFiles();

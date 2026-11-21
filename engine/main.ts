@@ -1,4 +1,8 @@
 import { bindClientStorage, createTemporaryQrStorage, getTargetProfiles, LineJsAdapter, parseE2EEKeyData, type LineClient, type LineyPollingSession } from "./linejs/adapter";
+import { AuthDiagnostics } from "./auth-diagnostics";
+import { attachAuthEvents } from "./auth-events";
+import { authErrorCode, isDefinitiveAuthFailure } from "./auth-errors";
+import { selectCredential, type CredentialSource } from "./credential-source";
 import { resolveTalkOwnership, reconcileTalkOwnership } from "./talk-ownership";
 import { presentOwnProfile } from "./linejs/profile-display";
 import { resolveFavoriteTime } from "./linejs/favorite-state";
@@ -45,6 +49,8 @@ import {
   LineyEncryptedFallback,
   LineyKeyring,
   SecureLineStorage,
+  clearCredentialFromFallback,
+  clearCredentialFromWallet,
   credentialPersistenceStatus,
   ensurePrivateDirectory,
   migrateFallbackCredentialToWallet,
@@ -441,10 +447,21 @@ function databasePath() {
 ensureDataDir();
 const stickerCatalogCache = new StickerCatalogCache(join(dataPath(), "sticker-catalog-cache.json"));
 const emojiCatalogCache = new EmojiCatalogCache(join(dataPath(), "emoji-catalog-cache.json"));
-const keyring = new LineyKeyring();
-const credentialFallback = new LineyEncryptedFallback(dataPath(), configPath());
+// Channels (dev/preview/stable) must never share a Wallet item or fallback
+// file: two Liney processes rotating the same refresh token is what silently
+// logs the other install out. The Electron shell passes the namespace.
+const credentialNamespace = String(process.env.LINEY_CREDENTIAL_NAMESPACE ?? "").trim();
+const keyring = new LineyKeyring(undefined, undefined, credentialNamespace);
+const credentialFallback = new LineyEncryptedFallback(dataPath(), configPath(), credentialNamespace);
+const authDiagnostics = new AuthDiagnostics(join(dataPath(), "auth-diagnostics.jsonl"));
 const fallbackMigration = migrateFallbackCredentialToWallet(keyring, credentialFallback);
 const legacyMigration = migrateLegacyCredentials(dataPath(), keyring, credentialFallback);
+authDiagnostics.record("auth.storage.probe", {
+  channel: credentialNamespace || "legacy",
+  keyring: keyring.available,
+  fallback: credentialFallback.usable,
+  walletMigration: fallbackMigration.migrated,
+});
 const store = new SecureLineStorage(storagePath(), keyring, credentialFallback);
 const database = new LineyDatabase(databasePath());
 if (readCredential()) ACCOUNT_ID = database.latestAccountId() ?? ACCOUNT_ID;
@@ -564,18 +581,35 @@ function normalize(value: any): any {
   return normalizeJsonValue(value);
 }
 
+let lastPersistenceMode: CredentialPersistenceMode | "" = "";
+
 async function persistCredential(next: LineClient): Promise<CredentialPersistenceMode> {
+  // A keyring locked during autostart must not pin the process to the
+  // fallback forever; re-probe (throttled inside LineyKeyring) before writing.
+  keyring.refreshAvailability();
   const refreshToken = await store.get("refreshToken");
   const expireValue = await store.get("expire");
+  const accessToken = LineJsAdapter.authToken(next);
+  // LINEJS deletes `client.authToken` before emitting `end`, so a late
+  // rotation can reach us with no token. Never persist that empty record.
+  if (!accessToken) return credentialPersistenceStatus(store);
   const credential: AuthCredential = {
-    accessToken: LineJsAdapter.authToken(next),
+    accessToken,
     ...(typeof refreshToken === "string" ? { refreshToken } : {}),
     ...(typeof expireValue === "number" ? { expire: expireValue } : {}),
   };
 
+  const finish = (mode: CredentialPersistenceMode): CredentialPersistenceMode => {
+    if (lastPersistenceMode !== mode) {
+      lastPersistenceMode = mode;
+      authDiagnostics.record("auth.persistence", { mode });
+    }
+    return mode;
+  };
+
   if (writeCredentialToWallet(keyring, credential)) {
     credentialFallback.clearAll();
-    return "wallet";
+    return finish("wallet");
   }
 
   if (writeCredentialToFallback(credentialFallback, credential)) {
@@ -584,7 +618,7 @@ async function persistCredential(next: LineClient): Promise<CredentialPersistenc
       mode: "encrypted-file",
       warning: "Secret Service unavailable; using Liney's encrypted local fallback until a Wallet becomes available",
     });
-    return "encrypted-file";
+    return finish("encrypted-file");
   }
 
   emit({
@@ -592,17 +626,27 @@ async function persistCredential(next: LineClient): Promise<CredentialPersistenc
     mode: "session-only",
     warning: "Credential persistence is unavailable; login will last for this process only",
   });
-  return "session-only";
+  return finish("session-only");
+}
+
+function credentialCandidate(): { credential: AuthCredential | null; source: CredentialSource } {
+  return selectCredential({
+    wallet: readCredentialFromWallet(keyring),
+    fallback: readCredentialFromFallback(credentialFallback),
+    migratedWallet: fallbackMigration.credential,
+    legacy: legacyMigration.credential,
+  });
 }
 
 function readCredential(): AuthCredential | null {
-  return readCredentialFromWallet(keyring)
-    ?? readCredentialFromFallback(credentialFallback)
-    ?? fallbackMigration.credential
-    ?? legacyMigration.credential;
+  return credentialCandidate().credential;
 }
 
-async function clearLocalSession() {
+/**
+ * Drop everything that belongs to the authenticated session while leaving the
+ * local history readable. Used by both logout and a remote session end.
+ */
+async function resetSessionState(reason: string): Promise<void> {
   authGeneration += 1;
   listenerAbort?.abort();
   listenerAbort = null;
@@ -629,7 +673,11 @@ async function clearLocalSession() {
   talkSenderResolutionCache.clear();
   groupMetadataCheckedAt.clear();
   squareSenderCache.clear();
-  await callManager.stop("logged-out").catch(() => undefined);
+  await callManager.stop(reason).catch(() => undefined);
+}
+
+async function clearLocalSession() {
+  await resetSessionState("logged-out");
   database.clearAccount(ACCOUNT_ID);
   await mediaDiskCache.clear();
   ownedStickerCache = null;
@@ -640,6 +688,23 @@ async function clearLocalSession() {
   } catch {
     // Keep logout best-effort if the keyring daemon disappears mid-operation.
   }
+  authDiagnostics.record("auth.logout");
+}
+
+async function handleRemoteSessionEnd(reason: string) {
+  await resetSessionState("session-ended");
+  // LINE rejected the session, so the stored credential is already dead. Drop
+  // it, but keep the local history available for offline reading.
+  try {
+    await store.clear();
+  } catch {
+    // Best effort: the keyring may be locked or gone.
+  }
+  authDiagnostics.record("auth.session_ended", { reason });
+  emit({
+    type: "auth.restore_failed",
+    error: "LINE ปิดเซสชันของอุปกรณ์นี้ กรุณาเข้าสู่ระบบใหม่ด้วย QR หรือ Email/Password",
+  });
 }
 
 function accountIdForMid(value: unknown): string | null {
@@ -4071,8 +4136,15 @@ function attachEvents(next: LineClient) {
     (operation: any) => squareOperationIdentity(operation, operationTypeName(operation?.type, SQUARE_OPERATION_NAMES)),
     (operation: any) => handleSquareOperation(next, operation));
 
-  LineJsAdapter.on(next, "update:authtoken", () => {
-    void persistCredential(next).catch(() => undefined);
+  attachAuthEvents(next, {
+    active,
+    onToken: () => {
+      authDiagnostics.record("auth.token.rotated");
+      void persistCredential(next).catch(() => undefined);
+    },
+    onSessionEnded: (reason) => {
+      void handleRemoteSessionEnd(reason).catch(() => undefined);
+    },
   });
 
   // Do not use Client.listen here. Its internal async iterator rejects on one
@@ -4122,6 +4194,11 @@ async function finishAuthentication(next: LineClient, restored: boolean) {
   callManager.attach(next);
   attachEvents(next);
   const credentialStorage = await persistCredential(next);
+  authDiagnostics.record("auth.ready", {
+    restored,
+    storage: credentialStorage,
+    accountChanged: account.changed && !account.migrated,
+  });
   emit({
     type: "auth.ready",
     restored,
@@ -4389,9 +4466,20 @@ async function restoreToken(id: string, token: unknown) {
 }
 
 async function autoRestore() {
-  const credential = readCredential();
-  if (!credential) return;
+  // The desktop keyring may have been locked when the engine started. Probe
+  // again before choosing where to read the session from.
+  keyring.refreshAvailability();
+  const candidate = credentialCandidate();
+  const credential = candidate.credential;
+  if (!credential) {
+    authDiagnostics.record("auth.restore.skipped", { reason: "no-credential" });
+    return;
+  }
   const generation = authGeneration;
+  authDiagnostics.record("auth.restore.start", {
+    source: candidate.source,
+    keyring: keyring.available,
+  });
   emit({ type: "auth.restoring" });
   try {
     const next = await loginWithAuthToken(credential as any, {
@@ -4400,11 +4488,24 @@ async function autoRestore() {
     });
     if (generation !== authGeneration) return;
     await finishAuthentication(next, true);
+    authDiagnostics.record("auth.restore.ok", { source: candidate.source });
   } catch (error) {
     client = null;
+    const info = errorInfo(error);
+    authDiagnostics.record("auth.restore.failed", {
+      source: candidate.source,
+      code: authErrorCode(error) || info.code,
+      retryable: info.retryable,
+    });
+    // Only a real rejection invalidates the credential. A network failure
+    // must not force the user through a new QR login.
+    if (isDefinitiveAuthFailure(error)) {
+      clearCredentialFromWallet(keyring);
+      clearCredentialFromFallback(credentialFallback);
+    }
     emit({
       type: "auth.restore_failed",
-      error: errorInfo(error).message,
+      error: info.message,
     });
   }
 }
