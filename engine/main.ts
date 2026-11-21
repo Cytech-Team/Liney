@@ -4410,6 +4410,7 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
         if (forceFreshCursor) {
           LineJsAdapter.resetTalkSyncCursor(next);
         }
+        const handshakeRevision = talkSyncCursor(next).revision;
         const readPromise = LineJsAdapter.readPush(push, initServices);
         let startupResult: "ready" | "closed" | "timeout";
         try {
@@ -4424,8 +4425,12 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
           // reconnect starts the same full sync over from revision zero.
           // REST polling stays held back during this window because PUSH and
           // polling share one Talk revision cursor.
-          if (startupResult === "timeout") {
-            const attemptWaitMs = forceFreshCursor ? Math.max(syncResponseWaitMs, 120_000) : syncResponseWaitMs;
+          //
+          // A persisted cursor gets only the short window: if LINE ignores it,
+          // the retry from revision zero is what recovers the transport, so
+          // there is no reason to keep the session waiting a full minute.
+          if (startupResult === "timeout" && (forceFreshCursor || handshakeRevision === 0)) {
+            const attemptWaitMs = Math.max(syncResponseWaitMs, 120_000);
             pushFallbackNotBefore = Date.now() + attemptWaitMs;
             if (!signal.aborted) {
               emit({
