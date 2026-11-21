@@ -8,7 +8,7 @@ const { autoUpdater } = updater;
 import { Worker } from "node:worker_threads";
 import { randomUUID } from "node:crypto";
 import { writeFile, mkdir, stat } from "node:fs/promises";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
@@ -18,6 +18,7 @@ import { channelFromManifest, resolveRuntimePaths } from "./runtime-paths.mjs";
 import { isPermittedNavigation } from "./navigation.mjs";
 import { CONTENT_SECURITY_POLICY } from "./csp.mjs";
 import { normalizeExternalUrl } from "./external-links.mjs";
+import { autostartEntry } from "./autostart.mjs";
 
 protocol.registerSchemesAsPrivileged([
   {scheme:"lineyapp",privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}
@@ -395,10 +396,20 @@ async function runDesktopCommand(command,args={}) {
       }
       return { enabled: closeToTray };
     }
-    case "set_autostart":
-      if (!args.enabled) return null;
-      // Linux desktop-file/systemd autostart needs a separately reviewed implementation.
-      throw new Error(`Autostart is not yet supported in the Electron ${runtime.channel} build`);
+    case "set_autostart": {
+      const enabled = Boolean(args.enabled);
+      const autostartDir = path.join(app.getPath("home"), ".config", "autostart");
+      const autostartFile = path.join(autostartDir, "dev.cytechteam.liney.desktop");
+      if (!enabled) {
+        try { unlinkSync(autostartFile); } catch { /* already absent */ }
+        return { enabled: false };
+      }
+      const target = String(process.env.APPIMAGE || process.env.LINEY_APPIMAGE || process.execPath || "").trim();
+      if (!target || !existsSync(target)) throw new Error("Liney executable path is unavailable for autostart");
+      await mkdir(autostartDir, { recursive: true, mode: 0o700 });
+      await writeFile(autostartFile, autostartEntry(target), { mode: 0o600 });
+      return { enabled: true };
+    }
     case "notify_message":
     case "notify_call": {
       // Clicking the toast focuses the main window
