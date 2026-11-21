@@ -6432,13 +6432,16 @@ async function handle(request: any) {
     }
 
     if (method === "history.clear") {
-      database.clearHistory(ACCOUNT_ID);
+      database.deleteHistory(ACCOUNT_ID);
       await mediaDiskCache.clear();
       await clearMediaUploadTemp();
       preSyncedMessages.clear();
       mediaPreviewCache.clear();
       messageMediaSourceCache.clear();
       emit({ id, ok: true, result: { cleared: true } });
+      // Compaction can take seconds on a large database; never hold the RPC
+      // (and the UI timeout) while it runs.
+      setTimeout(() => database.compact(), 250);
       return;
     }
 

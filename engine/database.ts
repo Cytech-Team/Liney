@@ -1563,7 +1563,7 @@ export class LineyDatabase {
     return { removed: Math.max(0, before - remaining), remaining };
   }
 
-  clearHistory(accountId: string): void {
+  deleteHistory(accountId: string): void {
     this.transaction(() => {
       this.db.query("DELETE FROM messages WHERE account_id = ?").run(accountId);
       this.db.query("DELETE FROM hidden_messages WHERE account_id = ?").run(accountId);
@@ -1572,15 +1572,25 @@ export class LineyDatabase {
       this.db.query("DELETE FROM link_previews WHERE account_id = ?").run(accountId);
       this.db.query("DELETE FROM protocol_events WHERE account_id = ?").run(accountId);
     });
-    // Deleted rows must not remain readable in free pages or in the WAL.
-    // This is an explicit user action, so the compaction cost belongs here;
-    // the rows are already gone even if compaction fails (e.g. disk full).
+  }
+
+  /**
+   * Removed rows must not remain readable in free pages or in the WAL.
+   * Compaction is best effort and never reports failure after the delete
+   * committed; callers may defer it off the request path.
+   */
+  compact(): void {
     try {
       this.db.exec("VACUUM");
       this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     } catch {
-      // Best effort: never report failure after the delete committed.
+      // Disk full or a transient lock: secure_delete already zeroed the rows.
     }
+  }
+
+  clearHistory(accountId: string): void {
+    this.deleteHistory(accountId);
+    this.compact();
   }
 
   clearAccount(accountId: string): void {
