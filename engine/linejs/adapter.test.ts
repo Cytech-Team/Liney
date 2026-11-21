@@ -85,6 +85,7 @@ describe("LineJsAdapter fallback polling", () => {
     };
     const client = {
       base: {
+        square: { fetchMyEvents: async () => ({ events: [], syncToken: "sync" }) },
         createPolling: () => { created += 1; return polling; },
       },
     } as any;
@@ -95,7 +96,234 @@ describe("LineJsAdapter fallback polling", () => {
     session.talk({ pollingInterval: 250 });
 
     expect(created).toBe(1);
-    expect(calls).toEqual(["talk:true", "square:true", "talk:true"]);
+    expect(calls).toEqual(["talk:true", "talk:true"]);
+  });
+
+  test("drains Square continuation pages before releasing the shared PUSH cursor", async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const events: string[] = [];
+    let releasePush!: () => void;
+    const pushStarted = new Promise<void>((resolve) => { releasePush = resolve; });
+    let pushFinished = false;
+    const pollingState = { sync: { square: "initial-sync", talk: {} }, _listenTalkEvents: () => ({}) };
+    const client = {
+      base: {
+        square: {
+          fetchMyEvents: async (request: Record<string, unknown>) => {
+            requests.push(request);
+            if (request.subscriptionId) {
+              pushFinished = true;
+              return { events: [], syncToken: "push-sync" };
+            }
+            if (!request.continuationToken) {
+              releasePush();
+              return { events: [{ id: "page-1" }], syncToken: "page-sync", continuationToken: "next-page" };
+            }
+            return { events: [{ id: "page-2" }], syncToken: "final-sync" };
+          },
+        },
+        createPolling: () => pollingState,
+      },
+    } as any;
+
+    const session = createPollingSession(client);
+    const controller = new AbortController();
+    const iterator = session.square({ signal: controller.signal, pollingInterval: 60_000 })[Symbol.asyncIterator]();
+    const first = await iterator.next();
+    events.push(first.value.id);
+
+    const pushRequest = client.base.square.fetchMyEvents({ subscriptionId: 7, syncToken: "ignored" });
+    await pushStarted;
+    const second = await iterator.next();
+    events.push(second.value.id);
+    controller.abort();
+    const finished = await iterator.next();
+    expect(finished.done).toBe(true);
+    await pushRequest;
+
+    expect(events).toEqual(["page-1", "page-2"]);
+    expect(requests.slice(0, 2)).toEqual([
+      { syncToken: "initial-sync", continuationToken: undefined, limit: 100 },
+      { syncToken: "page-sync", continuationToken: "next-page", limit: 100 },
+    ]);
+    expect(pushFinished).toBe(true);
+    expect(pollingState.sync.square).toBe("final-sync");
+  });
+
+  test("serializes the complete PUSH response so it snapshots the committed REST cursor", async () => {
+    const pollingState = { sync: { square: "initial-sync", talk: {} }, _listenTalkEvents: () => ({}) };
+    const requests: Array<Record<string, unknown>> = [];
+    const client = {
+      base: {
+        push: {
+          onPushResponse: async () => {
+            const syncToken = pollingState.sync.square;
+            await client.base.square.fetchMyEvents({ subscriptionId: 7, syncToken });
+            pollingState.sync.square = "push-committed";
+          },
+        },
+        square: {
+          fetchMyEvents: async (request: Record<string, unknown>) => {
+            requests.push(request);
+            if (request.subscriptionId) return { events: [], syncToken: "push-response-sync" };
+            if (!request.continuationToken) {
+              return { events: [{ id: "page-1" }], syncToken: "page-sync", continuationToken: "next-page" };
+            }
+            return { events: [{ id: "page-2" }], syncToken: "final-sync" };
+          },
+        },
+        createPolling: () => pollingState,
+      },
+    } as any;
+
+    const session = createPollingSession(client);
+    const controller = new AbortController();
+    const iterator = session.square({ signal: controller.signal, pollingInterval: 60_000 })[Symbol.asyncIterator]();
+    expect((await iterator.next()).value.id).toBe("page-1");
+
+    const pushResponse = client.base.push.onPushResponse({});
+    await Promise.resolve();
+    expect(requests.some((request) => request.subscriptionId === 7)).toBe(false);
+
+    expect((await iterator.next()).value.id).toBe("page-2");
+    controller.abort();
+    expect((await iterator.next()).done).toBe(true);
+    await pushResponse;
+
+    expect(requests.find((request) => request.subscriptionId === 7)).toEqual({
+      subscriptionId: 7,
+      syncToken: "final-sync",
+    });
+    expect(pollingState.sync.square).toBe("push-committed");
+  });
+
+  test("keeps REST out until PUSH has committed its cursor after fetch", async () => {
+    const pollingState = { sync: { square: "before-push", talk: {} }, _listenTalkEvents: () => ({}) };
+    const requests: Array<Record<string, unknown>> = [];
+    let finishFetch!: () => void;
+    const fetchGate = new Promise<void>((resolve) => { finishFetch = resolve; });
+    let pushFetchStarted!: () => void;
+    const started = new Promise<void>((resolve) => { pushFetchStarted = resolve; });
+    const client = {
+      base: {
+        push: {
+          onPushResponse: async () => {
+            const cursor = pollingState.sync.square;
+            await client.base.square.fetchMyEvents({ subscriptionId: 9, syncToken: cursor });
+            pollingState.sync.square = "after-push-commit";
+          },
+        },
+        square: {
+          fetchMyEvents: async (request: Record<string, unknown>) => {
+            requests.push(request);
+            if (request.subscriptionId) {
+              pushFetchStarted();
+              await fetchGate;
+              return { events: [], syncToken: "push-result" };
+            }
+            return { events: [{ id: "rest-event" }], syncToken: "rest-result" };
+          },
+        },
+        createPolling: () => pollingState,
+      },
+    } as any;
+
+    const session = createPollingSession(client);
+    const pushResponse = client.base.push.onPushResponse({});
+    await started;
+    const controller = new AbortController();
+    const iterator = session.square({ signal: controller.signal, pollingInterval: 60_000 })[Symbol.asyncIterator]();
+    await Promise.resolve();
+    expect(requests.filter((request) => !request.subscriptionId)).toHaveLength(0);
+
+    finishFetch();
+    await pushResponse;
+    expect(pollingState.sync.square).toBe("after-push-commit");
+    expect((await iterator.next()).value.id).toBe("rest-event");
+    expect(requests.find((request) => !request.subscriptionId)?.syncToken).toBe("after-push-commit");
+    controller.abort();
+    await iterator.next();
+  });
+
+  test("releases the shared cursor lock when a PUSH handler throws synchronously", async () => {
+    const errors: unknown[] = [];
+    let fetchCalls = 0;
+    const client = {
+      base: {
+        push: {
+          onPushResponse: () => {
+            throw new Error("synchronous PUSH failure");
+          },
+        },
+        square: {
+          fetchMyEvents: async () => {
+            fetchCalls++;
+            return { events: [], syncToken: "rest-sync" };
+          },
+        },
+        createPolling: () => ({
+          sync: { square: "initial-sync", talk: {} },
+          _listenTalkEvents: () => ({}),
+        }),
+        log: (_message: string, details: unknown) => errors.push(details),
+      },
+    } as any;
+
+    createPollingSession(client);
+    await client.base.push.onPushResponse({});
+
+    const fetchResult = await Promise.race([
+      client.base.square.fetchMyEvents({ syncToken: "initial-sync" }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("cursor lock was not released")), 250)),
+    ]);
+
+    expect(fetchResult.syncToken).toBe("rest-sync");
+    expect(fetchCalls).toBe(1);
+    expect(errors).toHaveLength(1);
+  });
+
+  test("serializes PUSH sign-on cursor updates behind an active Square pagination chain", async () => {
+    const pollingState = { sync: { square: "initial-sync", talk: {} }, _listenTalkEvents: () => ({}) };
+    const requests: Array<Record<string, unknown>> = [];
+    let signOnFinished = false;
+    const client = {
+      base: {
+        push: {
+          onSignOnResponse: async () => {
+            pollingState.sync.square = "push-sign-on-sync";
+            signOnFinished = true;
+          },
+        },
+        square: {
+          fetchMyEvents: async (request: Record<string, unknown>) => {
+            requests.push(request);
+            if (!request.continuationToken) {
+              return { events: [{ id: "page-1" }], syncToken: "page-sync", continuationToken: "next-page" };
+            }
+            return { events: [{ id: "page-2" }], syncToken: "final-sync" };
+          },
+        },
+        createPolling: () => pollingState,
+      },
+    } as any;
+
+    const session = createPollingSession(client);
+    const controller = new AbortController();
+    const iterator = session.square({ signal: controller.signal, pollingInterval: 60_000 })[Symbol.asyncIterator]();
+    expect((await iterator.next()).value.id).toBe("page-1");
+
+    const signOn = client.base.push.onSignOnResponse();
+    await Promise.resolve();
+    expect(signOnFinished).toBe(false);
+
+    expect((await iterator.next()).value.id).toBe("page-2");
+    controller.abort();
+    expect((await iterator.next()).done).toBe(true);
+    await signOn;
+
+    expect(signOnFinished).toBe(true);
+    expect(pollingState.sync.square).toBe("push-sign-on-sync");
+    expect(requests).toHaveLength(2);
   });
 });
 
@@ -110,6 +338,7 @@ describe("LineJsAdapter fallback polling", () => {
     };
     const client = {
       base: {
+        square: { fetchMyEvents: async () => ({ events: [], syncToken: "sync" }) },
         createPolling: () => { created += 1; return polling; },
       },
     } as any;
@@ -120,7 +349,7 @@ describe("LineJsAdapter fallback polling", () => {
     session.talk({ pollingInterval: 250 });
 
     expect(created).toBe(1);
-    expect(calls).toEqual(["talk:true", "square:true", "talk:true"]);
+    expect(calls).toEqual(["talk:true", "talk:true"]);
   });
 });
 

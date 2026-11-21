@@ -10,6 +10,14 @@ export const PUSH_STARTUP_GRACE_MS = PUSH_SYNC_RESPONSE_TIMEOUT_MS;
  * full sync over from revision zero.
  */
 export const PUSH_SYNC_RESPONSE_EXTENDED_TIMEOUT_MS = 60_000;
+// LINEJS sends a PUSH heartbeat every 30 seconds. Allow three missed beats
+// before declaring the stream stale; quiet chats are not themselves failures.
+export const PUSH_HEARTBEAT_TIMEOUT_MS = 95_000;
+export const PUSH_HEARTBEAT_CHECK_INTERVAL_MS = 10_000;
+
+export function isPushHeartbeatStale(lastHeartbeatAt: number, now: number): boolean {
+  return lastHeartbeatAt > 0 && now - lastHeartbeatAt >= PUSH_HEARTBEAT_TIMEOUT_MS;
+}
 
 export type PushConnectionState = {
   healthy: boolean;

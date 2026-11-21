@@ -635,3 +635,26 @@
     bottom: calc(64px + env(safe-area-inset-bottom, 0px) + 8px);
   }
 }
+
+.liney-transport-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--muted, #888);
+}
+.liney-transport-indicator-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: #a1a1aa;
+}
+.liney-transport-indicator[data-state="connected"] .liney-transport-indicator-dot { background: #22c55e; }
+.liney-transport-indicator[data-state="reconnecting"] .liney-transport-indicator-dot { background: #f59e0b; }
+
+.liney-transport-indicator[data-state="degraded"] .liney-transport-indicator-dot {
+  background: var(--warning, #d97706);
+}
