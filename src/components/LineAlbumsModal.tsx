@@ -18,7 +18,7 @@ type PhotoPage = { photos: AlbumPhoto[]; nextCursor?: string };
 type PhotoPreview = { dataUrl: string; bytes: number };
 
 export function LineAlbumsModal({ onClose }: { onClose: () => void }) {
-  const { t } = useAppTranslation();
+  const { t, td } = useAppTranslation();
   const [albums, setAlbums] = useState<Album[]>([]);
   const [albumCursor, setAlbumCursor] = useState<string>();
   const [selected, setSelected] = useState<Album>();
@@ -109,12 +109,12 @@ export function LineAlbumsModal({ onClose }: { onClose: () => void }) {
             }} aria-label={t("Back to albums")}><ArrowLeft size={18}/></button>
           ) : <ImageIcon size={20} />}
           <div>
-            <strong>{selected?.title ?? t("LINE albums")}</strong>
+            <strong>{selected ? td(selected.title) : t("LINE albums")}</strong>
             <small>{selected ? t("{{count}} photos in album", { count: photos.length }) : t("All albums in this account · Read only")}</small>
           </div>
           <button className="icon-button" type="button" onClick={onClose} aria-label={t("Close albums")}><X size={19}/></button>
         </header>
-        {error ? <p role="alert" className="liney-albums-error">{error}</p> : null}
+        {error ? <p role="alert" className="liney-albums-error">{td(error)}</p> : null}
         {loading ? <div className="liney-albums-empty"><LoaderCircle className="spin" size={22}/> {t("Loading…")}</div> : null}
         {!loading && !selected && albums.length === 0 && !error ? <p className="liney-albums-empty">{t("No albums found, or Album service is not supported for this account.")}</p> : null}
         {!loading && !selected ? (
@@ -126,10 +126,10 @@ export function LineAlbumsModal({ onClose }: { onClose: () => void }) {
                       loader={thumbnailLoader}
                       cacheKey={`cover:${album.chatId}:${album.albumId}`}
                       request={{ method: "album.cover.preview", params: { chatId: album.chatId, albumId: album.albumId } }}
-                      className="liney-albums-cover" alt={t("Album cover: {{title}}", { title: album.title })}
+                      className="liney-albums-cover" alt={t("Album cover: {{title}}", { title: td(album.title) })}
                     />
                   : <span className="liney-albums-cover"><ImageIcon aria-hidden="true" size={21}/></span>}
-                <span><strong>{album.title}</strong><small>{t("{{count}} photos", { count: album.photoCount })} · {t("Chat")} {album.chatId.slice(0, 10)}…</small></span>
+                <span><strong>{td(album.title)}</strong><small>{t("{{count}} photos", { count: album.photoCount })} · {t("Chat")} {album.chatId.slice(0, 10)}…</small></span>
                 <span aria-hidden="true">›</span>
               </button>
             ))}

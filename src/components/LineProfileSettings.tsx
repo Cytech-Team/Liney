@@ -33,7 +33,7 @@ function imageSource(profile: EditableLineProfile | null): string | undefined {
 }
 
 export function LineProfileSettings({ onUpdated }: { onUpdated: (profile: EditableLineProfile) => void }) {
-  const { t } = useAppTranslation();
+  const { t, td } = useAppTranslation();
   const [original, setOriginal] = useState<EditableLineProfile | null>(null);
   const [displayName, setDisplayName] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
@@ -188,7 +188,7 @@ export function LineProfileSettings({ onUpdated }: { onUpdated: (profile: Editab
         </label>
       </div>
       {loading && <div className="liney-inline-message"><LoaderCircle size={16} className="spin"/> {t("กำลังดึงข้อมูลโปรไฟล์…")}</div>}
-      {error && <div className="liney-inline-message liney-inline-error" role="alert"><CircleAlert size={17}/> <span>{error}</span>{!original && <button type="button" onClick={() => { setLoading(true); setAttempt(x => x + 1); }}>{t("ลองใหม่")}</button>}</div>}
+      {error && <div className="liney-inline-message liney-inline-error" role="alert"><CircleAlert size={17}/> <span>{td(error)}</span>{!original && <button type="button" onClick={() => { setLoading(true); setAttempt(x => x + 1); }}>{t("ลองใหม่")}</button>}</div>}
       {success && <div className="liney-inline-message liney-inline-success" role="status"><Check size={17}/> {success}</div>}
       <div className="liney-editor-footer">
         <span><ShieldCheck size={15}/> {t("บันทึกผ่าน LINEJS โดยตรง")}</span>
