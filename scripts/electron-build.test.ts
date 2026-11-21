@@ -15,6 +15,7 @@ describe("electron build arguments", () => {
 
     expect(args).toContain("--config.appId=dev.cytechteam.liney");
     expect(args).toContain("--config.extraMetadata.lineyChannel=stable");
+    expect(args).toContain("--config.extraMetadata.desktopName=dev.cytechteam.liney");
     expect(args).toContain("--config.appImage.artifactName=Liney-${version}-${arch}.AppImage");
     expect(args).toContain("--config.deb.artifactName=Liney-${version}-${arch}.deb");
     expect(args).toContain("--config.rpm.artifactName=Liney-${version}-${arch}.rpm");

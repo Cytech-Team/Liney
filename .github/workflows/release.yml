@@ -213,7 +213,7 @@ jobs:
 
   publish-release:
     name: Publish GitHub Release
-    if: ${{ needs.verify.outputs.tag != '' && !cancelled() }}
+    if: ${{ !cancelled() && needs.verify.outputs.tag != '' && needs.release-linux.result == 'success' }}
     needs:
       - verify
       - release-linux

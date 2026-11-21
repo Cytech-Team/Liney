@@ -14,6 +14,7 @@ export function buildArgs(channel) {
     args.push(
       "--config.appId=dev.cytechteam.liney",
       "--config.extraMetadata.lineyChannel=stable",
+      "--config.extraMetadata.desktopName=dev.cytechteam.liney",
       "--config.appImage.artifactName=Liney-${version}-${arch}.AppImage",
       "--config.deb.artifactName=Liney-${version}-${arch}.deb",
       "--config.rpm.artifactName=Liney-${version}-${arch}.rpm",
