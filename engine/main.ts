@@ -1034,7 +1034,7 @@ async function tryImageSource(
   }
 }
 
-async function fetchMessageMediaBlob(messageId: string, isSquare: boolean, chatId?: string): Promise<{ blob: Blob; cacheable: boolean }> {
+async function fetchMessageMediaBlob(messageId: string, isSquare: boolean, chatId?: string, full = false): Promise<{ blob: Blob; cacheable: boolean }> {
   if (!client) throw new Error("not authenticated");
   const source = messageMediaSourceCache.get(`${isSquare ? "square" : "talk"}:${messageId}`);
   const persisted = database.getMessageSource(
@@ -1069,7 +1069,7 @@ async function fetchMessageMediaBlob(messageId: string, isSquare: boolean, chatI
 
   // Some generations of LINE messages carry signed OBS URLs directly.
   const previewUrl = httpsUrl(metadata.PREVIEW_URL);
-  if (previewUrl) {
+  if (!full && previewUrl) {
     const result = await tryImageSource(() => fetchMessageAsset(client!, previewUrl), true);
     if (result) return result;
   }
@@ -1116,27 +1116,31 @@ async function fetchMessageMediaBlob(messageId: string, isSquare: boolean, chatI
     if (result) return result;
   }
 
-  // Normal Talk/OpenChat image preview path.
-  const previewResult = await tryImageSource(
-    () => downloadObsMessageData(messageId, true, isSquare),
-    true,
-  );
-  if (previewResult) return previewResult;
+  // Normal Talk/OpenChat image preview path. Full-quality requests skip the
+  // preview object entirely: it is a separate, smaller OBS object and using it
+  // for the viewer is what made opened images look blurry.
+  if (!full) {
+    const previewResult = await tryImageSource(
+      () => downloadObsMessageData(messageId, true, isSquare),
+      true,
+    );
+    if (previewResult) return previewResult;
 
-  // Keep the SDK helper as a compatibility fallback for older LINE gateways.
-  // Its object_info request can fail independently of the media request, so
-  // the direct OBS request above must be attempted first.
-  const sdkPreviewResult = await tryImageSource(async () => LineJsAdapter.downloadMessageData(client!, {
-    messageId,
-    isPreview: true,
-    isSquare,
-  }), true);
-  if (sdkPreviewResult) return sdkPreviewResult;
+    // Keep the SDK helper as a compatibility fallback for older LINE gateways.
+    // Its object_info request can fail independently of the media request, so
+    // the direct OBS request above must be attempted first.
+    const sdkPreviewResult = await tryImageSource(async () => LineJsAdapter.downloadMessageData(client!, {
+      messageId,
+      isPreview: true,
+      isSquare,
+    }), true);
+    if (sdkPreviewResult) return sdkPreviewResult;
+  }
 
   // A full OBS object is still useful as the inline image if preview is absent.
   const fullResult = await tryImageSource(
     () => downloadObsMessageData(messageId, false, isSquare),
-    false,
+    true,
   );
   if (fullResult) return fullResult;
 
@@ -1144,7 +1148,7 @@ async function fetchMessageMediaBlob(messageId: string, isSquare: boolean, chatI
     messageId,
     isPreview: false,
     isSquare,
-  }), false);
+  }), true);
   if (sdkFullResult) return sdkFullResult;
 
   const downloadUrl = httpsUrl(metadata.DOWNLOAD_URL);
@@ -1156,9 +1160,9 @@ async function fetchMessageMediaBlob(messageId: string, isSquare: boolean, chatI
   throw new Error(`LINE media object ${messageId} is unavailable`);
 }
 
-async function getImagePreviewDataUrl(messageId: string, isSquare: boolean, chatId?: string, forceRefresh = false): Promise<string> {
+async function getImagePreviewDataUrl(messageId: string, isSquare: boolean, chatId?: string, forceRefresh = false, full = false): Promise<string> {
   if (!client) throw new Error("not authenticated");
-  const key = `${isSquare ? "square" : "talk"}:${messageId}`;
+  const key = `${isSquare ? "square" : "talk"}:${messageId}${full ? ":full" : ""}`;
   if (forceRefresh) {
     mediaPreviewCache.delete(key);
     await mediaDiskCache.remove(key);
@@ -1188,7 +1192,7 @@ async function getImagePreviewDataUrl(messageId: string, isSquare: boolean, chat
     }
   }
 
-  const fetched = await fetchMessageMediaBlob(messageId, isSquare, chatId);
+  const fetched = await fetchMessageMediaBlob(messageId, isSquare, chatId, full);
   const dataUrl = await blobToDataUrl(fetched.blob);
   if (fetched.cacheable) {
     const saved = await mediaDiskCache.put(key, fetched.blob);
@@ -6593,6 +6597,7 @@ async function handle(request: any) {
         kind === "openchat",
         chatId,
         Boolean(request?.params?.refresh),
+        Boolean(request?.params?.full),
       );
       emit({ id, ok: true, result: { dataUrl } });
       return;

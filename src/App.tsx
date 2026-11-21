@@ -3609,52 +3609,82 @@ function MainApp() {
     void loadLiveFriends();
   }
 
-  async function openImageViewer(dataUrl: string) {
+  async function openImageViewer(message: Message) {
+    const dataUrl = message.image;
     if (!dataUrl || dataUrl === "food") return;
     const loadedImages = (getTimelineRooms()[activeChat.id] ?? [])
-      .filter((message) => Boolean(message.image && message.image !== "food"))
-      .map((message) => ({ id: message.id, src: message.image!, time: message.time }));
-    const currentIndex = Math.max(0, loadedImages.findIndex((item) => item.src === dataUrl));
+      .filter((item) => Boolean(item.image && item.image !== "food"))
+      .map((item) => ({ id: item.id, src: item.image!, time: item.time }));
+    const currentIndex = Math.max(0, loadedImages.findIndex((item) => item.id === message.id));
     const windowStart = Math.max(0, Math.min(currentIndex - 12, Math.max(0, loadedImages.length - 30)));
     const items = loadedImages.length
       ? loadedImages.slice(windowStart, windowStart + 30)
-      : [{ id: `image-${Date.now()}`, src: dataUrl }];
+      : [{ id: message.id, src: dataUrl }];
     const payload: ImageGalleryPayload = {
       title: translateDisplayText(settingsRef.current.language, activeChat.name || "รูปภาพ"),
-      index: Math.max(0, items.findIndex((item) => item.src === dataUrl)),
+      index: Math.max(0, items.findIndex((item) => item.id === message.id)),
       loop: settingsRef.current.loopImageGallery,
       items,
     };
 
     if (!lineyEngine.isNative || !settingsRef.current.openImagesInWindow) {
       setImageViewerSrc(dataUrl);
-      return;
+    } else {
+      imageGalleryPayloadRef.current = payload;
+      try {
+        const existing = await WebviewWindow.getByLabel("image-viewer");
+        if (existing) {
+          await emitTo("image-viewer", "liney://image-gallery", payload);
+          await existing.show();
+          await existing.setFocus();
+        } else {
+          const viewer = new WebviewWindow("image-viewer", {
+            url: "/?liney-view=image-viewer",
+            title: `Liney · ${payload.title}`,
+            width: 1120,
+            height: 780,
+            minWidth: 680,
+            minHeight: 480,
+            center: true,
+            resizable: true,
+          });
+          viewer.once("liney:window-created", () => { void viewer.setFocus(); });
+          viewer.once("liney:window-error", () => setImageViewerSrc(dataUrl));
+        }
+      } catch {
+        setImageViewerSrc(dataUrl);
+      }
     }
 
-    imageGalleryPayloadRef.current = payload;
-    try {
-      const existing = await WebviewWindow.getByLabel("image-viewer");
-      if (existing) {
-        await emitTo("image-viewer", "liney://image-gallery", payload);
-        await existing.show();
-        await existing.setFocus();
-        return;
-      }
-      const viewer = new WebviewWindow("image-viewer", {
-        url: "/?liney-view=image-viewer",
-        title: `Liney · ${payload.title}`,
-        width: 1120,
-        height: 780,
-        minWidth: 680,
-        minHeight: 480,
-        center: true,
-        resizable: true,
-      });
-      viewer.once("liney:window-created", () => { void viewer.setFocus(); });
-      viewer.once("liney:window-error", () => setImageViewerSrc(dataUrl));
-    } catch {
-      setImageViewerSrc(dataUrl);
-    }
+    // Inline bubbles carry the small preview object. Replace it with the full
+    // OBS image once the viewer is open so zooming and saving stay sharp.
+    const chatId = activeChat.id;
+    const kind = activeChat.kind === "openchat" ? "openchat" : "talk";
+    void lineyEngine.request<MediaPreviewResult>(
+      "media.preview",
+      { messageId: message.id, chatId, kind, full: true },
+      90_000,
+    ).then((full) => {
+      const src = full?.dataUrl;
+      if (!src || src === dataUrl) return;
+      setMessageMap((current) => ({
+        ...current,
+        [chatId]: (current[chatId] ?? []).map((item) =>
+          item.id === message.id ? { ...item, image: src, text: undefined } : item
+        ),
+      }));
+      setImageViewerSrc((current) => (current === dataUrl ? src : current));
+      const gallery = imageGalleryPayloadRef.current;
+      if (!gallery) return;
+      const updatedItems = gallery.items.map((item) => item.id === message.id ? { ...item, src } : item);
+      const updated: ImageGalleryPayload = {
+        ...gallery,
+        items: updatedItems,
+        index: Math.max(0, updatedItems.findIndex((item) => item.id === message.id)),
+      };
+      imageGalleryPayloadRef.current = updated;
+      void emitTo("image-viewer", "liney://image-gallery", updated).catch(() => undefined);
+    }).catch(() => undefined);
   }
 
   useEffect(() => {
@@ -3757,7 +3787,7 @@ function MainApp() {
         onSendEmoji={sendLineEmoji}
         onInsertText={insertComposerText}
         onFlexAction={handleFlexAction}
-        onViewImage={(src) => void openImageViewer(src)}
+        onViewImage={(message) => void openImageViewer(message)}
         onImage={sendImage}
         onNativeImage={pasteNativeClipboardImage}
         onPickImage={pickImage}
@@ -4502,7 +4532,7 @@ function Conversation({
   onSendEmoji: (emoji: RecentEmoji) => void | Promise<void>;
   onInsertText: (text: string) => void;
   onFlexAction: (action: FlexAction) => void | Promise<void>;
-  onViewImage: (src: string) => void;
+  onViewImage: (message: Message) => void;
   onImage: (file: File) => void | Promise<void>;
   onNativeImage: (showError?: boolean) => void | Promise<void>;
   onPickImage: () => void | Promise<void>;
@@ -5388,7 +5418,7 @@ function Conversation({
                         {!message.rich && message.stickerUrl ? <StickerImage key={message.stickerUrl} src={message.stickerUrl} /> : null}
                         {!message.rich && message.emojiUrl ? <img className="message-line-emoji" src={message.emojiUrl} alt="LINE Emoji" loading="lazy" referrerPolicy="no-referrer" /> : null}
                         {!message.rich && message.image ? (
-                          message.image === "food" ? <FoodCard /> : <button className="message-image-button" type="button" title={t("เปิดดูรูปภาพ")} onClick={() => onViewImage(message.image!)}><img className="message-image" src={message.image} alt={t("รูปภาพ")} /></button>
+                          message.image === "food" ? <FoodCard /> : <button className="message-image-button" type="button" title={t("เปิดดูรูปภาพ")} onClick={() => onViewImage(message)}><img className="message-image" src={message.image} alt={t("รูปภาพ")} /></button>
                         ) : null}
                           {message.contentType === 6 ? (
                             <CallHistoryCard data={message.call ?? { durationMs: 0, result: "", cause: "", status: "unknown" }} />
