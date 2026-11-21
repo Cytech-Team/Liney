@@ -31,6 +31,7 @@ export type EngineEventType =
   | "auth.ready"
   | "auth.qr"
   | "auth.pin"
+  | "auth.error"
   | "auth.logged_out"
   | "sync.start"
   | "sync.progress"

@@ -4373,17 +4373,31 @@ async function startQrLogin(id: string) {
   }
   loginInFlight = true;
   const generation = ++authGeneration;
+  let acknowledged = false;
+  const acknowledgeStarted = () => {
+    if (acknowledged || generation !== authGeneration) return;
+    acknowledged = true;
+    emit({ id, ok: true, result: { authenticated: false, started: true } });
+  };
   try {
     listenerAbort?.abort();
     client = null;
     const identity = clientIdentity();
-    const next = await loginWithBrandedQR(
+    // A QR login resolves only after the user scans and approves. Keep that
+    // promise in the worker, but answer the RPC as soon as LINEJS produced the
+    // QR/PIN challenge. Waiting for the scan made the UI hit its RPC timeout
+    // and report a generic "operation failed" before the QR was even usable.
+    const login = loginWithBrandedQR(
       {
         onReceiveQRUrl(url) {
+          if (generation !== authGeneration) return;
           emit({ type: "auth.qr", url });
+          acknowledgeStarted();
         },
         onPincodeRequest(pin) {
+          if (generation !== authGeneration) return;
           emit({ type: "auth.pin", pin });
+          acknowledgeStarted();
         },
       },
       {
@@ -4392,12 +4406,23 @@ async function startQrLogin(id: string) {
       },
       identity,
     );
-    if (generation !== authGeneration) return;
-    await finishAuthentication(next, false);
-    emit({ id, ok: true, result: { authenticated: true } });
+    void login.then(async (next) => {
+      if (generation !== authGeneration) return;
+      await finishAuthentication(next, false);
+    }).catch((error) => {
+      authDiagnostics.record("auth.qr.failed", { code: authErrorCode(error) || "unknown" });
+      if (generation !== authGeneration) return;
+      if (!acknowledged) replyError(id, error);
+      else emit({ type: "auth.error", error: errorInfo(error) });
+    }).finally(() => {
+      // A stale login still owns the single LINEJS auth slot until it settles.
+      loginInFlight = false;
+    });
   } catch (error) {
-    replyError(id, error);
-  } finally {
+    authDiagnostics.record("auth.qr.failed", { code: authErrorCode(error) || "unknown" });
+    if (generation !== authGeneration) return;
+    if (!acknowledged) replyError(id, error);
+    else emit({ type: "auth.error", error: errorInfo(error) });
     loginInFlight = false;
   }
 }
