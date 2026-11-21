@@ -4314,15 +4314,43 @@ async function consumeSquarePolling(next: LineClient, signal: AbortSignal, polli
   });
 }
 
+/**
+ * Which PUSH services to subscribe to. LINE's Talk sync normally answers on
+ * service 8; keep the default stable and allow a diagnostic override for
+ * testing alternative service sets without rebuilding the app.
+ */
+function pushInitServices(): number[] {
+  const parsed = String(process.env.LINEY_PUSH_SERVICES ?? "")
+    .split(",")
+    .map((value) => Number(value.trim()))
+    .filter((value) => Number.isInteger(value) && value > 0 && value < 32);
+  return parsed.length ? [...new Set(parsed)] : [3, 8];
+}
+
+/**
+ * How long to wait for the first Talk sync response before tearing the PUSH
+ * connection down. Lengthy waits are opt-in diagnostics only: normal startup
+ * must hand over to REST fallback quickly.
+ */
+function pushSyncResponseWaitMs(): number {
+  const value = Number(process.env.LINEY_PUSH_SYNC_WAIT_MS);
+  if (!Number.isFinite(value) || value <= 0) return PUSH_SYNC_RESPONSE_EXTENDED_TIMEOUT_MS;
+  return Math.min(Math.max(value, PUSH_SYNC_RESPONSE_TIMEOUT_MS), 10 * 60_000);
+}
+
 async function supervisePush(next: LineClient, signal: AbortSignal, push: any): Promise<void> {
   let backoff = 1_000;
   let stage: "connect" | "handshake" | "listening" = "connect";
+  const initServices = pushInitServices();
+  const syncResponseWaitMs = pushSyncResponseWaitMs();
   authDiagnostics.record("push.supervisor.start", {
     pushPresent: Boolean(push),
     pushMethods: push && typeof push === "object"
       ? ["initializeConn", "InitAndRead", "onSignOnResponse", "onPingCallback"]
         .filter((name) => typeof push[name] === "function")
       : [],
+    initServices,
+    syncResponseWaitMs,
   });
   const stop = () => {
     void LineJsAdapter.closePushConnections(push);
@@ -4336,7 +4364,7 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
       try {
         stage = "connect";
         LineJsAdapter.setPushListening(push, true);
-        await LineJsAdapter.initializePushConnection(push, 1, [3, 8]);
+        await LineJsAdapter.initializePushConnection(push, 1, initServices);
 
         // Opening HTTP/2 only proves that the socket exists. Do not disable
         // REST fallback until LINE has answered the initial Talk sync request.
@@ -4360,7 +4388,7 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
           if (!firstSignOnFrame) firstSignOnFrame = { ...frame, afterMs: Date.now() - handshakeStartedAt };
         });
         const handshakeTimeout = new AbortController();
-        const readPromise = LineJsAdapter.readPush(push, [3, 8]);
+        const readPromise = LineJsAdapter.readPush(push, initServices);
         let startupResult: "ready" | "closed" | "timeout";
         try {
           startupResult = await Promise.race([
@@ -4375,19 +4403,19 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
           // REST polling stays held back during this window because PUSH and
           // polling share one Talk revision cursor.
           if (startupResult === "timeout") {
-            pushFallbackNotBefore = Date.now() + PUSH_SYNC_RESPONSE_EXTENDED_TIMEOUT_MS;
+            pushFallbackNotBefore = Date.now() + syncResponseWaitMs;
             if (!signal.aborted) {
               emit({
                 type: "event.transport",
                 transport: "line",
                 state: "reconnecting",
-                error: `Talk Sync is still starting after ${PUSH_SYNC_RESPONSE_TIMEOUT_MS}ms; waiting up to ${PUSH_SYNC_RESPONSE_EXTENDED_TIMEOUT_MS}ms`,
+                error: `Talk Sync is still starting after ${PUSH_SYNC_RESPONSE_TIMEOUT_MS}ms; waiting up to ${syncResponseWaitMs}ms`,
               });
             }
             startupResult = await Promise.race([
               talkSyncReady.then(() => "ready" as const),
               readPromise.then(() => "closed" as const),
-              waitForSignal(PUSH_SYNC_RESPONSE_EXTENDED_TIMEOUT_MS, handshakeTimeout.signal).then(() => "timeout" as const),
+              waitForSignal(syncResponseWaitMs, handshakeTimeout.signal).then(() => "timeout" as const),
             ]);
           }
         } finally {
