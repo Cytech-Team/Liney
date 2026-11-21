@@ -43,3 +43,14 @@ the release gate and the stable auto-update policy.
   full sync.
 - `auth-diagnostics.jsonl` records `push.handshake` and `push.connected` lines,
   so a "no notification" report can be checked against real transport state.
+
+## LINE LEGY `/enc` outage (since 2026-11-18)
+
+LINE's encrypted gateway returns empty `404` responses for `/enc` across
+regions and clients. Liney therefore defaults to the plain `/S4` transport
+(`legy.encrypted=false`) for QR, password and token logins, and keeps that
+transport for the rest of the session. Set `LINEY_ENABLE_LEGY_ENCRYPTION=1` to
+test the encrypted path; remove that opt-out once LINE restores the gateway.
+
+Do not re-scan the QR repeatedly while `/enc` is down: upstream reports that
+the QR step can log out the previous session before the new token is usable.

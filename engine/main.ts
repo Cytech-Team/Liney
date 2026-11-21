@@ -185,13 +185,14 @@ function clientIdentity() {
 
 /**
  * LINE's LEGY encrypted gateway (`/enc`) has returned empty 404s since
- * 2026-11-18. The plain `/S4` path still accepts the same V3 tokens, so this
- * opt-in keeps Liney usable until LINE restores the gateway.
+ * 2026-11-18. The plain `/S4` path still accepts the same V3 tokens, so plain
+ * transport is the default until LINE restores the gateway. Set
+ * `LINEY_ENABLE_LEGY_ENCRYPTION=1` to opt back in early.
  */
 function legyInit(): { legy?: { encrypted: false } } {
-  return process.env.LINEY_DISABLE_LEGY_ENCRYPTION === "1"
-    ? { legy: { encrypted: false } }
-    : {};
+  return process.env.LINEY_ENABLE_LEGY_ENCRYPTION === "1"
+    ? {}
+    : { legy: { encrypted: false } };
 }
 const liveMessageOverlayKeys = new Set<string>();
 let preSyncedChats: any[] | null = null;
