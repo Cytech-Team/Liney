@@ -4316,6 +4316,14 @@ async function consumeSquarePolling(next: LineClient, signal: AbortSignal, polli
 
 async function supervisePush(next: LineClient, signal: AbortSignal, push: any): Promise<void> {
   let backoff = 1_000;
+  let stage: "connect" | "handshake" | "listening" = "connect";
+  authDiagnostics.record("push.supervisor.start", {
+    pushPresent: Boolean(push),
+    pushMethods: push && typeof push === "object"
+      ? ["initializeConn", "InitAndRead", "onSignOnResponse", "onPingCallback"]
+        .filter((name) => typeof push[name] === "function")
+      : [],
+  });
   const stop = () => {
     void LineJsAdapter.closePushConnections(push);
     LineJsAdapter.closePushStream(push, "op");
@@ -4326,6 +4334,7 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
     while (!signal.aborted && client === next && LineJsAdapter.authToken(next)) {
       const cycleStartedAt = Date.now();
       try {
+        stage = "connect";
         LineJsAdapter.setPushListening(push, true);
         await LineJsAdapter.initializePushConnection(push, 1, [3, 8]);
 
@@ -4333,6 +4342,7 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
         // REST fallback until LINE has answered the initial Talk sync request.
         let resolveTalkSync!: () => void;
         const talkSyncReady = new Promise<void>((resolve) => { resolveTalkSync = resolve; });
+        stage = "handshake";
         const handshakeStartedAt = Date.now();
         let signOnFrames = 0;
         let handshakePings = 0;
@@ -4416,6 +4426,7 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
           pushFallbackNotBefore = Date.now();
           backoff = Math.min(backoff * 2, 30_000);
         } else {
+          stage = "listening";
           // LINEJS already receives protocol heartbeat frames every 30s.
           // Use those acknowledgements (not chat activity) to detect a stream
           // that remains open but has stopped making progress.
@@ -4455,6 +4466,13 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
         pushConnectedSince = 0;
         // Hold fallback until the failed PUSH reader and connections close.
         pushFallbackNotBefore = Number.POSITIVE_INFINITY;
+        const info = errorInfo(error);
+        authDiagnostics.record("push.cycle.error", {
+          stage,
+          code: info.code,
+          message: info.message,
+          elapsedMs: Date.now() - cycleStartedAt,
+        });
         if (isExpiredTalkSyncCursorError(error) && client === next) {
           resetTalkSyncCursor(next);
           clearStoredTalkSyncCursor();
