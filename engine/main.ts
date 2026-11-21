@@ -102,6 +102,31 @@ let ACCOUNT_ID = "default";
 if (!parentPort) process.umask(0o077); // Node Workers inherit the host's secure umask.
 let client: LineClient | null = null;
 let loginInFlight = false;
+let loginKind: "qr" | "password" | "keychain" | null = null;
+
+/**
+ * A QR login stays pending until the user scans, so switching to another auth
+ * method used to be blocked forever by the stale slot. A different method may
+ * take over (the abandoned flow is invalidated by the generation check), while
+ * a double submit of the same method is still rejected.
+ */
+function claimLoginSlot(kind: "qr" | "password" | "keychain"): boolean {
+  if (loginInFlight) {
+    if (loginKind === kind) return false;
+    authGeneration += 1;
+    loginInFlight = false;
+    loginKind = null;
+  }
+  loginInFlight = true;
+  loginKind = kind;
+  return true;
+}
+
+function releaseLoginSlot(kind: "qr" | "password" | "keychain", generation: number): void {
+  if (generation !== authGeneration || loginKind !== kind) return;
+  loginInFlight = false;
+  loginKind = null;
+}
 let authGeneration = 0;
 let listenerAbort: AbortController | null = null;
 let currentProfile: any = null;
@@ -4688,11 +4713,10 @@ async function finishAuthentication(next: LineClient, restored: boolean) {
 }
 
 async function startQrLogin(id: string) {
-  if (loginInFlight) {
+  if (!claimLoginSlot("qr")) {
     replyError(id, new Error("login already in progress"));
     return;
   }
-  loginInFlight = true;
   const generation = ++authGeneration;
   let acknowledged = false;
   const acknowledgeStarted = () => {
@@ -4740,7 +4764,7 @@ async function startQrLogin(id: string) {
       else emit({ type: "auth.error", error: errorInfo(error) });
     }).finally(() => {
       // A stale login still owns the single LINEJS auth slot until it settles.
-      loginInFlight = false;
+      releaseLoginSlot("qr", generation);
     });
   } catch (error) {
     const summary = authErrorSummary(error);
@@ -4749,7 +4773,7 @@ async function startQrLogin(id: string) {
     if (generation !== authGeneration) return;
     if (!acknowledged) replyError(id, error);
     else emit({ type: "auth.error", error: errorInfo(error) });
-    loginInFlight = false;
+    releaseLoginSlot("qr", generation);
   }
 }
 
@@ -4788,12 +4812,11 @@ async function importE2EEKeychainViaQr(id: string) {
     replyError(id, new Error("ต้องเชื่อมต่อบัญชี LINE ก่อนนำเข้าคีย์"));
     return;
   }
-  if (loginInFlight) {
+  if (!claimLoginSlot("keychain")) {
     replyError(id, new Error("มีการเข้าสู่ระบบอีกครั้งกำลังทำงานอยู่"));
     return;
   }
 
-  loginInFlight = true;
   const generation = authGeneration;
   let temporary: ReturnType<typeof createTemporaryQrStorage> | null = null;
   try {
@@ -4893,16 +4916,18 @@ async function importE2EEKeychainViaQr(id: string) {
     replyError(id, error);
   } finally {
     if (temporary) await temporary.clear().catch(() => undefined);
-    loginInFlight = false;
+    releaseLoginSlot("keychain", generation);
   }
 }
 
 async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: unknown) {
-  if (loginInFlight) {
+  if (!claimLoginSlot("password")) {
     replyError(id, new Error("login already in progress"));
     return;
   }
   if (client) {
+    loginInFlight = false;
+    loginKind = null;
     emit({ id, ok: true, result: { authenticated: true, restored: true } });
     return;
   }
@@ -4910,11 +4935,12 @@ async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: un
   let email = String(rawEmail ?? "").trim();
   let password = String(rawPassword ?? "");
   if (!email || !password) {
+    loginInFlight = false;
+    loginKind = null;
     replyError(id, new Error("email and password are required"));
     return;
   }
 
-  loginInFlight = true;
   const generation = ++authGeneration;
   try {
     listenerAbort?.abort();
@@ -4942,7 +4968,7 @@ async function startPasswordLogin(id: string, rawEmail: unknown, rawPassword: un
     // Do not retain the user's password in the engine after the login attempt.
     email = "";
     password = "";
-    loginInFlight = false;
+    releaseLoginSlot("password", generation);
   }
 }
 

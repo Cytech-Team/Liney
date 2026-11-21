@@ -326,6 +326,22 @@ const MAX_ACTIVE_MESSAGES_IN_MEMORY = 120;
 const MAX_BACKGROUND_MESSAGES_IN_MEMORY = 24;
 const MAX_IMAGE_PREVIEWS_PER_REFRESH = 4;
 
+
+/** Map engine auth failures to the action the user can take next. */
+function authErrorText(error: unknown, language: AppLanguage): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  if (/INVALID_IDENTITY_CREDENTIAL/i.test(raw)) {
+    return translateText(language, "LINE ไม่รับอีเมลหรือรหัสผ่านนี้ — ตรวจ Email Login ในแอป LINE หรือใช้ QR Code แทน");
+  }
+  if (/NOT_AUTHORIZED_DEVICE/i.test(raw)) {
+    return translateText(language, "เซสชันของอุปกรณ์นี้ถูกยกเลิก — กรุณาเข้าสู่ระบบใหม่ด้วย QR Code");
+  }
+  if (/login already in progress/i.test(raw)) {
+    return translateText(language, "มีขั้นตอนเข้าสู่ระบบค้างอยู่ กรุณาลองอีกครั้ง");
+  }
+  return raw;
+}
+
 function detectPreferredLanguage(): AppLanguage {
   if (typeof navigator === "undefined") return "th";
   const lang = navigator.language.toLowerCase();
@@ -2777,7 +2793,7 @@ function MainApp() {
       .catch((error) => {
         setQrUrl("");
         setPin("");
-        setAuthError(error instanceof Error ? error.message : String(error));
+        setAuthError(authErrorText(error, settingsRef.current.language));
       })
       .finally(() => setAuthBusy(false));
   }
@@ -2812,7 +2828,7 @@ function MainApp() {
       .catch((error) => {
         setQrUrl("");
         setPin("");
-        setAuthError(error instanceof Error ? error.message : String(error));
+        setAuthError(authErrorText(error, settingsRef.current.language));
       })
       .finally(() => setAuthBusy(false));
   }
@@ -2837,7 +2853,7 @@ function MainApp() {
     setAuthPassword("");
     void lineyEngine.request("auth.password.start", { email, password }, 180_000)
       .catch((error) => {
-        setAuthError(error instanceof Error ? error.message : String(error));
+        setAuthError(authErrorText(error, settingsRef.current.language));
       })
       .finally(() => setAuthBusy(false));
   }
