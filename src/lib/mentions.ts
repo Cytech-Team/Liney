@@ -8,7 +8,15 @@ type MentionEntry = { S?: unknown; E?: unknown; M?: unknown };
  * "@All" entries carry no mid and are therefore not clickable.
  */
 export function parseMessageMentions(text: unknown, raw: unknown): MessageMention[] {
-  const contentMetadata = (raw as { contentMetadata?: Record<string, unknown> } | undefined)?.contentMetadata;
+  let source = raw;
+  if (typeof source === "string") {
+    try {
+      source = JSON.parse(source);
+    } catch {
+      return [];
+    }
+  }
+  const contentMetadata = (source as { contentMetadata?: Record<string, unknown> } | undefined)?.contentMetadata;
   const value = contentMetadata?.MENTION ?? contentMetadata?.mention;
   if (!value) return [];
 

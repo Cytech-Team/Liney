@@ -30,6 +30,15 @@ describe("parseMessageMentions", () => {
     expect(parseMessageMentions("@All hi", raw)).toEqual([{ start: 0, end: 4 }]);
   });
 
+  test("accepts a raw payload stored as a JSON string", () => {
+    const raw = JSON.stringify({
+      contentMetadata: { MENTION: JSON.stringify({ MENTIONEES: [{ S: "0", E: "2", M: "p154af4ad93902543508309f37c194637" }] }) },
+    });
+    expect(parseMessageMentions("@x hi", raw)).toEqual([
+      { start: 0, end: 2, mid: "p154af4ad93902543508309f37c194637" },
+    ]);
+  });
+
   test("ignores missing or malformed metadata", () => {
     expect(parseMessageMentions("hi", null)).toEqual([]);
     expect(parseMessageMentions("hi", { contentMetadata: { MENTION: "{oops" } })).toEqual([]);
