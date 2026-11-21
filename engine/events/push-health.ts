@@ -2,6 +2,14 @@
 // had the same bounded window to produce its first sync response.
 export const PUSH_SYNC_RESPONSE_TIMEOUT_MS = 8_000;
 export const PUSH_STARTUP_GRACE_MS = PUSH_SYNC_RESPONSE_TIMEOUT_MS;
+/**
+ * A launch without a persisted Talk sync cursor has to ask LINE for a full
+ * account sync before the PUSH subscription delivers anything. That request
+ * regularly takes longer than the fallback grace window, so the first PUSH
+ * connection is allowed this much extra time to finish it instead of being
+ * torn down and restarted from revision zero.
+ */
+export const PUSH_SYNC_RESPONSE_EXTENDED_TIMEOUT_MS = 60_000;
 
 export type PushConnectionState = {
   healthy: boolean;

@@ -1,4 +1,4 @@
-import { bindClientStorage, createTemporaryQrStorage, getTargetProfiles, LineJsAdapter, parseE2EEKeyData, type LineClient, type LineyPollingSession } from "./linejs/adapter";
+import { bindClientStorage, createTemporaryQrStorage, getTargetProfiles, LineJsAdapter, parseE2EEKeyData, type LineClient, type LineyPollingSession, type TalkSyncCursor } from "./linejs/adapter";
 import { resolveTalkOwnership, reconcileTalkOwnership } from "./talk-ownership";
 import { presentOwnProfile } from "./linejs/profile-display";
 import { resolveFavoriteTime } from "./linejs/favorite-state";
@@ -15,6 +15,10 @@ const {
   fromRawTalk,
   parseCancelCall,
   parseIncomingCallForClient,
+  talkSyncCursor,
+  restoreTalkSyncCursor,
+  resetTalkSyncCursor,
+  isExpiredTalkSyncCursorError,
 } = LineJsAdapter;
 import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
@@ -26,8 +30,9 @@ import { join } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parentPort } from "node:worker_threads";
 import { runFallbackPolling } from "./events/fallback-polling";
+import { olderSquareHistory, squareEventEnvelope, squareEventToken, withSquareEventToken } from "./square-history";
 import { OrderedOperationDispatcher, talkOperationIdentity, squareOperationIdentity } from "./events/ordered-operation-dispatcher";
-import { PUSH_STARTUP_GRACE_MS, PUSH_SYNC_RESPONSE_TIMEOUT_MS, shouldUsePollingFallback } from "./events/push-health";
+import { PUSH_STARTUP_GRACE_MS, PUSH_SYNC_RESPONSE_EXTENDED_TIMEOUT_MS, PUSH_SYNC_RESPONSE_TIMEOUT_MS, shouldUsePollingFallback } from "./events/push-health";
 import {
   SYSTEM_ACCOUNT_EVENT_THROTTLE_MS,
   SYSTEM_ACCOUNT_MISSING_BASELINE_CURSOR,
@@ -606,6 +611,7 @@ async function clearLocalSession() {
   authGeneration += 1;
   listenerAbort?.abort();
   listenerAbort = null;
+  stopTalkSyncCursorTracking();
   // Full sync is cancellable and must not continue writing the previous
   // account's in-memory/cache state after logout or during a new login.
   syncCoordinator?.cancel();
@@ -2654,7 +2660,7 @@ async function fetchOpenChatMessagesNormalized(chatId: string, limit: number): P
         replyToId: relatedMessageId(message),
         rich,
         call: contentType === 6 ? parseCallHistory(message) : undefined,
-        raw: message,
+        raw: withSquareEventToken(message, typeof event?.syncToken === "string" ? event.syncToken : undefined),
       });
     }
     if (!events.length) break;
@@ -2853,6 +2859,161 @@ async function fetchTalkMessagesNormalized(
         isOfficialAccount: sender?.isOfficialAccount,
     };
   }));
+}
+
+const SQUARE_HISTORY_PAGE_SIZE = 100;
+const SQUARE_HISTORY_MAX_PAGES = 8;
+
+function squareHistoryItem(event: any, chatId: string, selfMid: string): any | null {
+  const envelope = squareEventEnvelope(event);
+  if (!envelope) return null;
+  const message = envelope.message as any;
+  const contentType = contentTypeCode(message?.contentType);
+  rememberMessageMedia(message, true);
+  const rich = contentType === 17 ? parseRichMessage(message) : undefined;
+  const from = midString(message?.from);
+  const createdTime = Number(message?.createdTime ?? event?.createdTime ?? 0);
+  if (!Number.isFinite(createdTime) || createdTime <= 0) return null;
+  return {
+    id: String(message?.id ?? ""),
+    text: contentType === 17 ? (rich?.altText || "Rich message") : displayMessageText(message?.text, contentType, message),
+    from,
+    to: String(message?.to ?? chatId),
+    isMine: envelope.isMine || Boolean(selfMid && from === selfMid),
+    senderName: envelope.senderName || squareSenderCache.get(from)?.name || "",
+    createdTime,
+    contentType,
+    readCount: Math.max(0, Number(message?.readCount ?? 0)),
+    filename: mediaFilename(message),
+    stickerUrl: contentType === 7 ? stickerUrlFromRaw(message) : undefined,
+    flex: contentType === 22 ? parseFlexMessage(message) : undefined,
+    reactions: squareReactionSummaries(envelope.reactionStatus, selfMid),
+    replyToId: relatedMessageId(message),
+    rich,
+    call: contentType === 6 ? parseCallHistory(message) : undefined,
+    raw: withSquareEventToken(message, envelope.eventToken),
+  };
+}
+
+async function fetchSquareHistoryPage(
+  chatId: string,
+  token: string | undefined,
+  selfMid: string,
+): Promise<{ items: any[]; nextToken?: string; eventCount: number }> {
+  if (!client) throw new Error("not authenticated");
+  const response: any = await LineJsAdapter.fetchSquareChatEvents(client, {
+    squareChatMid: chatId,
+    ...(token ? { syncToken: token } : {}),
+    limit: SQUARE_HISTORY_PAGE_SIZE,
+    direction: "BACKWARD",
+  });
+  const events: any[] = Array.isArray(response?.events) ? response.events : [];
+  const items = events
+    .map((event: any) => squareHistoryItem(event, chatId, selfMid))
+    .filter(Boolean);
+  const nextToken = typeof response?.syncToken === "string" && response.syncToken
+    ? response.syncToken
+    : undefined;
+  return { items, nextToken, eventCount: events.length };
+}
+
+/**
+ * Older OpenChat history starts at the pivot message's own square event token
+ * and walks backwards with `direction: BACKWARD`. Rooms cached before tokens
+ * existed fall back to walking back from the live tail.
+ */
+async function loadSquareMessagesBefore(
+  chatId: string,
+  before: { messageId: string; createdTime: number },
+  limit: number,
+): Promise<{ messages: any[]; hasMore: boolean }> {
+  const safeLimit = Math.max(1, Math.min(limit, MESSAGE_LIST_RESULT_LIMIT));
+  const cached = database.listMessagesBefore(
+    ACCOUNT_ID,
+    chatId,
+    before.createdTime,
+    before.messageId,
+    safeLimit,
+  );
+  const byId = new Map<string, any>(cached.messages.map((message: any) => [String(message.id), message]));
+  let hasMore = cached.hasMore || cached.messages.length >= safeLimit;
+
+  if (client && byId.size < safeLimit) {
+    const pivotRow: any = database.getMessage(ACCOUNT_ID, chatId, before.messageId);
+    const pivot = {
+      id: String(pivotRow?.id ?? before.messageId),
+      createdTime: Number(pivotRow?.createdTime ?? before.createdTime),
+    };
+    const selfMid = midString(LineJsAdapter.profileMid(client));
+    let token = squareEventToken(pivotRow?.raw);
+    let pages = 0;
+    let collectedFromRemote = 0;
+    let retriedFromTail = false;
+    while (pages < SQUARE_HISTORY_MAX_PAGES && byId.size < safeLimit) {
+      if (!token) {
+        // No stored token yet: start from the oldest event of the live tail.
+        const tail: any = await LineJsAdapter.fetchSquareChatEvents(client, {
+          squareChatMid: chatId,
+          limit: SQUARE_HISTORY_PAGE_SIZE,
+          direction: "FORWARD",
+        });
+        const tailEvents: any[] = Array.isArray(tail?.events) ? tail.events : [];
+        const tailItems = tailEvents
+          .map((event: any) => squareHistoryItem(event, chatId, selfMid))
+          .filter(Boolean);
+        for (const item of olderSquareHistory(tailItems, pivot)) {
+          byId.set(String(item.id), item);
+          collectedFromRemote += 1;
+        }
+        token = typeof tailEvents[0]?.syncToken === "string" && tailEvents[0].syncToken
+          ? tailEvents[0].syncToken
+          : (typeof tail?.syncToken === "string" ? tail.syncToken : undefined);
+        if (!token) {
+          hasMore = false;
+          break;
+        }
+      }
+      let page: Awaited<ReturnType<typeof fetchSquareHistoryPage>>;
+      try {
+        page = await fetchSquareHistoryPage(chatId, token, selfMid);
+      } catch (error) {
+        // LINE can retire an old square sync token. Rewind from the live tail
+        // once instead of failing the whole history request.
+        if (token && !retriedFromTail) {
+          retriedFromTail = true;
+          token = undefined;
+          continue;
+        }
+        throw error;
+      }
+      pages += 1;
+      if (page.eventCount === 0) {
+        hasMore = false;
+        break;
+      }
+      const older = olderSquareHistory(page.items, pivot);
+      if (older.length) {
+        persistNormalizedMessages(chatId, true, older);
+        for (const item of older) byId.set(String(item.id), item);
+        collectedFromRemote += older.length;
+      }
+      token = page.nextToken;
+      if (!token) {
+        hasMore = false;
+        break;
+      }
+      hasMore = collectedFromRemote > 0 || page.eventCount > 0;
+    }
+    if (pages >= SQUARE_HISTORY_MAX_PAGES && byId.size < safeLimit) hasMore = true;
+  }
+
+  const merged = [...byId.values()]
+    .sort((left: any, right: any) => (
+      Number(left.createdTime ?? 0) - Number(right.createdTime ?? 0)
+      || String(left.id).localeCompare(String(right.id))
+    ))
+    .slice(-safeLimit);
+  return { messages: merged, hasMore: hasMore && merged.length > 0 };
 }
 
 async function loadTalkMessagesBefore(
@@ -3638,6 +3799,7 @@ async function handleSquareMessage(
   isMineOverride?: boolean,
   fallbackName = "",
   reactionStatus?: any,
+  eventToken?: string,
 ): Promise<void> {
   if (client !== next) return;
   const envelope = message?.raw ?? {};
@@ -3677,7 +3839,7 @@ async function handleSquareMessage(
     replyToId: relatedMessageId(raw),
     rich,
     call: contentType === 6 ? parseCallHistory(raw) : undefined,
-    raw,
+    raw: withSquareEventToken(raw, eventToken),
   };
   if (!to) return;
   if (database.isMessageHidden(ACCOUNT_ID, to, "openchat", String(raw?.id ?? ""))) return;
@@ -3853,6 +4015,7 @@ async function handleSquareOperation(next: LineClient, operation: any): Promise<
     isMine,
     fallbackName,
     envelope?.messageReactionStatus,
+    typeof operation?.syncToken === "string" ? operation.syncToken : undefined,
   );
 }
 
@@ -3909,6 +4072,90 @@ function needsPollingFallback(): boolean {
   });
 }
 
+// LINEJS keeps the LEGY sync cursor in memory only. Persisting it lets the
+// next launch subscribe to a delta instead of replaying a full account sync.
+const TALK_SYNC_CURSOR_KEY = "talk-sync-cursor";
+const TALK_SYNC_CURSOR_HEARTBEAT_MS = 5_000;
+let talkSyncCursorTimer: ReturnType<typeof setInterval> | undefined;
+let talkSyncCursorOwner: LineClient | null = null;
+let talkSyncCursorWritten = "";
+
+function restoreTalkSyncCursorForClient(next: LineClient): void {
+  let cursor: TalkSyncCursor | null = null;
+  try {
+    const stored = database.getSyncState(ACCOUNT_ID, TALK_SYNC_CURSOR_KEY)?.cursor;
+    cursor = stored ? (JSON.parse(stored) as TalkSyncCursor) : null;
+  } catch {
+    cursor = null;
+  }
+  try {
+    restoreTalkSyncCursor(next, cursor);
+  } catch {
+    return;
+  }
+  talkSyncCursorWritten = cursor ? JSON.stringify({
+    revision: Number(cursor.revision) || 0,
+    globalRev: Number(cursor.globalRev) || 0,
+    individualRev: Number(cursor.individualRev) || 0,
+  }) : "";
+}
+
+function writeTalkSyncCursor(next: LineClient): void {
+  if (client !== next) return;
+  let cursor: ReturnType<typeof talkSyncCursor>;
+  try {
+    cursor = talkSyncCursor(next);
+  } catch {
+    return;
+  }
+  const signature = JSON.stringify(cursor);
+  if (!cursor.revision || signature === talkSyncCursorWritten) return;
+  talkSyncCursorWritten = signature;
+  try {
+    database.setSyncState(ACCOUNT_ID, {
+      key: TALK_SYNC_CURSOR_KEY,
+      cursor: signature,
+      generation: 0,
+      status: "ready",
+    });
+  } catch {
+    /* cursor persistence is best-effort; never break live delivery */
+  }
+}
+
+function clearStoredTalkSyncCursor(): void {
+  talkSyncCursorWritten = "";
+  try {
+    database.setSyncState(ACCOUNT_ID, {
+      key: TALK_SYNC_CURSOR_KEY,
+      cursor: JSON.stringify({ revision: 0, globalRev: 0, individualRev: 0 }),
+      generation: 0,
+      status: "idle",
+    });
+  } catch { /* best-effort */ }
+}
+
+/**
+ * LINEJS advances the Talk cursor inside sync responses that do not always
+ * surface an event, so sample it on a light heartbeat instead of relying on
+ * `update:syncdata`.
+ */
+function startTalkSyncCursorTracking(next: LineClient): void {
+  stopTalkSyncCursorTracking();
+  talkSyncCursorOwner = next;
+  writeTalkSyncCursor(next);
+  talkSyncCursorTimer = setInterval(() => {
+    writeTalkSyncCursor(talkSyncCursorOwner as LineClient);
+  }, TALK_SYNC_CURSOR_HEARTBEAT_MS);
+  (talkSyncCursorTimer as { unref?: () => void }).unref?.();
+}
+
+function stopTalkSyncCursorTracking(): void {
+  if (talkSyncCursorTimer) clearInterval(talkSyncCursorTimer);
+  talkSyncCursorTimer = undefined;
+  talkSyncCursorOwner = null;
+}
+
 async function consumeTalkPolling(next: LineClient, signal: AbortSignal, polling: LineyPollingSession, dispatcher: OrderedOperationDispatcher<any>): Promise<void> {
   await runFallbackPolling({
     signal,
@@ -3933,6 +4180,12 @@ async function consumeTalkPolling(next: LineClient, signal: AbortSignal, polling
       }
     },
     onError: (error) => {
+      // `410 Gone` means LINE no longer accepts this Talk cursor. Retrying the
+      // same revision can never succeed, so fall back to a fresh full sync.
+      if (isExpiredTalkSyncCursorError(error) && client === next) {
+        resetTalkSyncCursor(next);
+        clearStoredTalkSyncCursor();
+      }
       if (!signal.aborted) emit({ type: "event.transport.error", transport: "talk-poll", error: errorInfo(error).message });
     },
   });
@@ -3998,6 +4251,29 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
             readPromise.then(() => "closed" as const),
             waitForSignal(PUSH_SYNC_RESPONSE_TIMEOUT_MS, handshakeTimeout.signal).then(() => "timeout" as const),
           ]);
+
+          // A launch that starts from revision zero has to wait for a full
+          // account sync. Hand the gap to fallback polling, but keep this
+          // PUSH connection: closing it discards the in-flight sync and the
+          // next attempt starts the whole full sync over again.
+          if (startupResult === "timeout") {
+            pushHealthy = false;
+            pushConnectedSince = 0;
+            pushFallbackNotBefore = Date.now();
+            if (!signal.aborted) {
+              emit({
+                type: "event.transport",
+                transport: "line",
+                state: "reconnecting",
+                error: `Talk Sync has not responded yet (${PUSH_SYNC_RESPONSE_TIMEOUT_MS}ms); using fallback polling while it finishes`,
+              });
+            }
+            startupResult = await Promise.race([
+              talkSyncReady.then(() => "ready" as const),
+              readPromise.then(() => "closed" as const),
+              waitForSignal(PUSH_SYNC_RESPONSE_EXTENDED_TIMEOUT_MS, handshakeTimeout.signal).then(() => "timeout" as const),
+            ]);
+          }
         } finally {
           handshakeTimeout.abort();
           stopObserving();
@@ -4059,6 +4335,7 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
 function attachEvents(next: LineClient) {
   listenerAbort?.abort();
   listenerAbort = new AbortController();
+  startTalkSyncCursorTracking(next);
   const signal = listenerAbort.signal;
   const push = LineJsAdapter.push(next) as any;
   // One serial lane per LINE transport family, shared between PUSH and REST
@@ -4120,6 +4397,7 @@ async function finishAuthentication(next: LineClient, restored: boolean) {
   });
   prunePersistentCache(true);
   callManager.attach(next);
+  restoreTalkSyncCursorForClient(next);
   attachEvents(next);
   const credentialStorage = await persistCredential(next);
   emit({
@@ -5857,18 +6135,22 @@ async function handle(request: any) {
     if (method === "message.history") {
       const requestedChatId = String(request?.params?.chatId ?? "").trim();
       const kind = String(request?.params?.kind ?? "talk");
-      if (kind === "openchat") throw new Error("Talk history pagination does not support OpenChat");
-      const chatId = canonicalTalkIdentityMid(requestedChatId);
+      const chatId = kind === "openchat" ? requestedChatId : canonicalTalkIdentityMid(requestedChatId);
       const beforeMessageId = String(request?.params?.beforeMessageId ?? "").trim();
       const beforeCreatedTime = Number(request?.params?.beforeCreatedTime);
       const limit = Math.max(1, Math.min(Number(request?.params?.limit ?? 50), MESSAGE_LIST_RESULT_LIMIT));
       if (!chatId || !beforeMessageId || !Number.isFinite(beforeCreatedTime) || beforeCreatedTime <= 0) {
         throw new Error("chatId, beforeMessageId and beforeCreatedTime are required");
       }
-      const page = await loadTalkMessagesBefore(chatId, {
-        messageId: beforeMessageId,
-        createdTime: beforeCreatedTime,
-      }, limit);
+      const page = kind === "openchat"
+        ? await loadSquareMessagesBefore(chatId, {
+          messageId: beforeMessageId,
+          createdTime: beforeCreatedTime,
+        }, limit)
+        : await loadTalkMessagesBefore(chatId, {
+          messageId: beforeMessageId,
+          createdTime: beforeCreatedTime,
+        }, limit);
       emit({ id, ok: true, result: page });
       return;
     }
@@ -6353,6 +6635,7 @@ const shutdown = async (): Promise<void> => {
   if (shutdownInFlight) return shutdownInFlight;
   shutdownInFlight = (async () => {
     listenerAbort?.abort();
+    stopTalkSyncCursorTracking();
     await callManager.stop("engine-shutdown").catch(() => undefined);
     rl?.close();
   })();

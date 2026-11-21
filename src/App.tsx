@@ -212,6 +212,23 @@ function lineEmojiUrl(emoji: { productId: string; sticonId: string; resourceType
   const suffix = emoji.resourceType === "ANIMATION" ? "_animation" : "";
   return `https://stickershop.line-scdn.net/sticonshop/v1/sticon/${encodeURIComponent(emoji.productId)}/android/${encodeURIComponent(emoji.sticonId)}${suffix}.png`;
 }
+
+// LINE's bundled emoji set is not a Shop product, so it can never show up in
+// the owned catalogue. Keep a local set that works for every account.
+const BASIC_EMOJI_PACK_ID = "__basic__";
+const BASIC_EMOJI = [
+  "😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣", "😊", "😇", "🙂", "🙃", "😉", "😌", "😍", "🥰",
+  "😘", "😗", "😙", "😚", "😋", "😛", "😝", "😜", "🤪", "🤨", "🧐", "🤓", "😎", "🥳", "😏", "😒",
+  "😞", "😔", "😟", "😕", "🙁", "☹️", "😣", "😖", "😫", "😩", "🥺", "😢", "😭", "😤", "😠", "😡",
+  "🤬", "🤯", "😳", "🥵", "🥶", "😱", "😨", "😰", "😥", "😓", "🤗", "🤔", "🤭", "🤫", "🤥", "😶",
+  "😐", "😑", "😬", "🙄", "😯", "😦", "😧", "😮", "😲", "🥱", "😴", "🤤", "😪", "😵", "🤐", "🥴",
+  "🤢", "🤮", "🤧", "😷", "🤒", "🤕", "🤑", "🤠", "😈", "👿", "👹", "👺", "🤡", "💩", "👻", "💀",
+  "☠️", "👽", "👾", "🤖", "🎃", "😺", "😸", "😹", "😻", "😼", "😽", "🙀", "😿", "😾",
+  "👋", "🤚", "🖐️", "✋", "🖖", "👌", "🤏", "✌️", "🤞", "🤟", "🤘", "🤙", "👈", "👉", "👆", "👇",
+  "☝️", "👍", "👎", "✊", "👊", "🤛", "🤜", "👏", "🙌", "👐", "🤲", "🤝", "🙏", "💪",
+  "❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍", "🤎", "💔", "❣️", "💕", "💞", "💓", "💗", "💖",
+  "💘", "💝", "💟", "✨", "⭐", "🌟", "💫", "💥", "💦", "💨", "🔥", "🎉", "🎊", "👑", "💯",
+];
 type SyncProgressState = { visible: boolean; phase: "metadata" | "friends" | "chats" | "history" | "complete" | "error"; done: number; total: number; failed: number; error?: string; summary?: { friends?: number; talkChats?: number; openChats?: number; histories?: number; failedHistories?: number; elapsedMs?: number } };
 type ImageGalleryPayload = { title: string; index: number; loop: boolean; items: Array<{ id: string; src: string; time?: string }> };
 
@@ -2395,10 +2412,10 @@ function MainApp() {
     chat: Chat,
     before: Message,
   ): Promise<{ added: number; hasMore: boolean }> {
-    if (chat.kind === "openchat") return { added: 0, hasMore: false };
+    const kind = chat.kind === "openchat" ? "openchat" : "talk";
     const page = await lineyEngine.request<LiveHistoryPage>("message.history", {
       chatId: chat.id,
-      kind: "talk",
+      kind,
       beforeMessageId: before.id,
       beforeCreatedTime: Number(before.createdTime ?? 0),
       limit: 50,
@@ -2429,8 +2446,10 @@ function MainApp() {
     });
 
     const requestGeneration = messageLoadGenerationRef.current.get(chat.id);
-    if (requestGeneration !== undefined) void refreshTalkReadState(chat.id, mapped, requestGeneration);
-    void hydrateImagePreviews(chat.id, sorted, "talk", requestGeneration);
+    if (requestGeneration !== undefined && chat.kind !== "openchat") {
+      void refreshTalkReadState(chat.id, mapped, requestGeneration);
+    }
+    void hydrateImagePreviews(chat.id, sorted, chat.kind === "openchat" ? "openchat" : "talk", requestGeneration);
     return { added, hasMore: Boolean(page?.hasMore) && added > 0 };
   }
 
@@ -2856,6 +2875,10 @@ function MainApp() {
       setMessageMap((current) => ({ ...current, [chatId]: (current[chatId] ?? []).map((item) => item.id === id ? { ...item, status: uncertain ? "unknown" : "error" } : item) }));
       setAuthError(error instanceof Error ? error.message : String(error));
     }
+  }
+
+  function insertComposerText(text: string) {
+    setComposer((current) => current + text);
   }
 
   async function sendLineEmoji(emoji: RecentEmoji) {
@@ -3619,6 +3642,7 @@ function MainApp() {
         onSend={sendMessage}
         onSendSticker={sendSticker}
         onSendEmoji={sendLineEmoji}
+        onInsertText={insertComposerText}
         onFlexAction={handleFlexAction}
         onViewImage={(src) => void openImageViewer(src)}
         onImage={sendImage}
@@ -4305,6 +4329,7 @@ function Conversation({
   onSend,
   onSendSticker,
   onSendEmoji,
+  onInsertText,
   onFlexAction,
   onViewImage,
   onImage,
@@ -4351,6 +4376,7 @@ function Conversation({
   onSend: () => void | Promise<void>;
   onSendSticker: (sticker: RecentSticker) => void | Promise<void>;
   onSendEmoji: (emoji: RecentEmoji) => void | Promise<void>;
+  onInsertText: (text: string) => void;
   onFlexAction: (action: FlexAction) => void | Promise<void>;
   onViewImage: (src: string) => void;
   onImage: (file: File) => void | Promise<void>;
@@ -4446,7 +4472,7 @@ function Conversation({
   const historyUnavailable = historyState === "unavailable" || missingRecentHistory;
   const unresolvedGroupArchive = isUnresolvedGroupArchive(chat);
   const neverChatted = historyState === "new" && !lineSystemAccount && !sidebarHasRecentActivity;
-  const canLoadOlderHistory = chat.kind !== "openchat" && !lineSystemAccount && !empty;
+  const canLoadOlderHistory = !lineSystemAccount && !empty;
   const [rawMessageIds, setRawMessageIds] = useState<Set<string>>(() => new Set());
   useEffect(() => { if (!developerFlexRaw) setRawMessageIds(new Set()); }, [developerFlexRaw]);
   const toggleRawMessage = (id: string) => setRawMessageIds((previous) => {
@@ -4623,11 +4649,19 @@ function Conversation({
   const activeStickerPackId = stickerPacks.some(([id]) => id === selectedStickerPackId)
     ? selectedStickerPackId
     : stickerPacks[0]?.[0] ?? null;
-  const activeEmojiPackId = emojiPacks.some(([id]) => id === selectedEmojiPackId)
+  const activeEmojiPackId = selectedEmojiPackId === BASIC_EMOJI_PACK_ID || emojiPacks.some(([id]) => id === selectedEmojiPackId)
     ? selectedEmojiPackId
-    : emojiPacks[0]?.[0] ?? null;
+    : emojiPacks[0]?.[0] ?? BASIC_EMOJI_PACK_ID;
   const selectedStickerPack = stickerPacks.find(([id]) => id === activeStickerPackId);
   const selectedEmojiPack = emojiPacks.find(([id]) => id === activeEmojiPackId);
+  const emojiPackTabs = <div className="sticker-pack-tabs" role="tablist" aria-label={t("แพ็ก LINE Emoji")}>
+    <button className={activeEmojiPackId === BASIC_EMOJI_PACK_ID ? "active" : ""} role="tab" aria-selected={activeEmojiPackId === BASIC_EMOJI_PACK_ID} type="button" title={t("LINE Emoji พื้นฐาน")} onClick={() => setSelectedEmojiPackId(BASIC_EMOJI_PACK_ID)}><span className="basic-emoji-tab">😊</span></button>
+    {emojiPacks.map(([productId, items]) => {
+      const first = items[0];
+      const src = first ? lineEmojiUrl(first) : "";
+      return <button key={productId} className={productId === activeEmojiPackId ? "active" : ""} role="tab" aria-selected={productId === activeEmojiPackId} type="button" title={`LINE Emoji #${productId}`} onClick={() => setSelectedEmojiPackId(productId)}>{src ? <img src={src} alt="LINE Emoji" loading="lazy" referrerPolicy="no-referrer" /> : null}</button>;
+    })}
+  </div>;
 
   useLayoutEffect(() => {
     if (!messageMenuId || !activeMenuMessageId || !activeMenuMessageAuthor) return;
@@ -5369,9 +5403,19 @@ function Conversation({
             <div className="sticker-picker-tabs"><button className={pickerTab === "sticker" ? "active" : ""} type="button" onClick={() => setPickerTab("sticker")}>{t("สติกเกอร์")}</button><button className={pickerTab === "emoji" ? "active" : ""} type="button" onClick={() => setPickerTab("emoji")}>LINE Emoji</button></div>
             {stickerPickerLoading ? <div className="sticker-picker-empty">{t("กำลังโหลดคลัง…")}</div> : null}
             {!stickerPickerLoading && pickerTab === "sticker" && stickerPacks.length === 0 ? <div className="sticker-picker-empty">{t("ไม่พบสติกเกอร์ที่บัญชีนี้เป็นเจ้าของ")}</div> : null}
-            {!stickerPickerLoading && pickerTab === "emoji" && emojiPacks.length === 0 ? <div className="sticker-picker-empty">{t("ยังไม่มี LINE Emoji ในประวัติแชต")}</div> : null}
             {!stickerPickerLoading && pickerTab === "sticker" && selectedStickerPack ? <div className="sticker-chooser"><section className="sticker-pack-page"><div className="sticker-pack-label"><span>{t("แพ็ก #{{id}}", { id: selectedStickerPack[0] })}</span><small>{t("{{count}} ตัว · ของคุณ", { count: selectedStickerPack[1].length })}</small></div><div className="sticker-picker-grid">{selectedStickerPack[1].map((sticker) => { const src = `https://stickershop.line-scdn.net/stickershop/v1/sticker/${encodeURIComponent(sticker.stickerId)}/android/${sticker.option === "A" ? "sticker_animation.png" : "sticker.png"}`; return <button key={`${sticker.packageId}:${sticker.stickerId}`} type="button" title={t("ส่งสติกเกอร์ของคุณ")} onClick={() => { setStickerPickerOpen(false); void onSendSticker(sticker); }}><StickerImage src={src} className="sticker-picker-image" fallback={<span className="sticker-picker-unavailable">{t("ไม่พร้อม")}</span>} /></button>; })}</div></section><div className="sticker-pack-tabs" role="tablist" aria-label={t("แพ็กสติกเกอร์")}>{stickerPacks.map(([packageId, stickers]) => { const first = stickers[0]; const fallback = first ? <StickerImage src={`https://stickershop.line-scdn.net/stickershop/v1/sticker/${encodeURIComponent(first.stickerId)}/android/${first.option === "A" ? "sticker_animation.png" : "sticker.png"}`} className="sticker-pack-tab-image" fallback={<span className="sticker-picker-unavailable">{t("ไม่พร้อม")}</span>} /> : <span className="sticker-picker-unavailable">{t("ไม่พร้อม")}</span>; return <button key={packageId} className={packageId === selectedStickerPack[0] ? "active" : ""} role="tab" aria-selected={packageId === selectedStickerPack[0]} type="button" title={`แพ็ก #${packageId}`} onClick={() => setSelectedStickerPackId(packageId)}><StickerPackCover packageId={packageId} fallback={fallback} /></button>; })}</div></div> : null}
-            {!stickerPickerLoading && pickerTab === "emoji" && selectedEmojiPack ? <div className="sticker-chooser"><section className="sticker-pack-page"><div className="sticker-pack-label"><span>LINE Emoji #{selectedEmojiPack[0]}</span><small>{selectedEmojiPack[1].some((item) => item.owned) ? t("ของคุณ") : t("พบในแชต")}</small></div><div className="sticker-picker-grid emoji-picker-grid">{selectedEmojiPack[1].map((item) => { const src = lineEmojiUrl(item); return <button key={`${item.productId}:${item.sticonId}`} type="button" title={`ส่ง LINE Emoji · ${item.owned ? t("ของคุณ") : t("พบในแชต")}`} onClick={() => { setStickerPickerOpen(false); void onSendEmoji(item); }}><img src={src} alt="LINE Emoji" loading="lazy" referrerPolicy="no-referrer" /></button>; })}</div></section><div className="sticker-pack-tabs" role="tablist" aria-label={t("แพ็ก LINE Emoji")}>{emojiPacks.map(([productId, items]) => { const first = items[0]; const src = first ? lineEmojiUrl(first) : ""; return <button key={productId} className={productId === selectedEmojiPack[0] ? "active" : ""} role="tab" aria-selected={productId === selectedEmojiPack[0]} type="button" title={`LINE Emoji #${productId}`} onClick={() => setSelectedEmojiPackId(productId)}>{src ? <img src={src} alt="LINE Emoji" loading="lazy" referrerPolicy="no-referrer" /> : null}</button>; })}</div></div> : null}
+            {!stickerPickerLoading && pickerTab === "emoji" ? <div className="sticker-chooser">
+              <section className="sticker-pack-page">
+                {activeEmojiPackId === BASIC_EMOJI_PACK_ID || !selectedEmojiPack ? <>
+                  <div className="sticker-pack-label"><span>{t("LINE Emoji พื้นฐาน")}</span><small>{t("ใช้ได้ทุกบัญชี")}</small></div>
+                  <div className="sticker-picker-grid emoji-picker-grid basic-emoji-grid">{BASIC_EMOJI.map((emoji) => <button key={emoji} type="button" title={t("แทรก emoji")} onClick={() => onInsertText(emoji)}><span className="basic-emoji-glyph">{emoji}</span></button>)}</div>
+                </> : <>
+                  <div className="sticker-pack-label"><span>LINE Emoji #{selectedEmojiPack[0]}</span><small>{selectedEmojiPack[1].some((item) => item.owned) ? t("ของคุณ") : t("พบในแชต")}</small></div>
+                  <div className="sticker-picker-grid emoji-picker-grid">{selectedEmojiPack[1].map((item) => { const src = lineEmojiUrl(item); return <button key={`${item.productId}:${item.sticonId}`} type="button" title={`ส่ง LINE Emoji · ${item.owned ? t("ของคุณ") : t("พบในแชต")}`} onClick={() => { setStickerPickerOpen(false); void onSendEmoji(item); }}><img src={src} alt="LINE Emoji" loading="lazy" referrerPolicy="no-referrer" /></button>; })}</div>
+                </>}
+              </section>
+              {emojiPackTabs}
+            </div> : null}
           </div>
         ) : null}
       </div>

@@ -114,6 +114,10 @@ export const LineJsAdapter = {
   initializePushConnection,
   readPush,
   observePushTalkSyncResponse,
+  talkSyncCursor,
+  restoreTalkSyncCursor,
+  resetTalkSyncCursor,
+  isExpiredTalkSyncCursorError,
   on,
   sendTalkMessage,
   uploadObjTalk,
@@ -887,6 +891,59 @@ export function observePushTalkSyncResponse(pushClient: any, onResponse: () => v
 
 export function on(client: LineClient, event: string, listener: (...args: any[]) => void): void {
   (client as any).base.on(event, listener);
+}
+
+export type TalkSyncCursor = {
+  revision: number;
+  globalRev: number;
+  individualRev: number;
+};
+
+const EMPTY_TALK_SYNC_CURSOR: TalkSyncCursor = { revision: 0, globalRev: 0, individualRev: 0 };
+
+const finiteCursorPart = (value: unknown): number => {
+  const next = Number(value);
+  return Number.isFinite(next) && next > 0 ? Math.trunc(next) : 0;
+};
+
+/**
+ * Read the LEGY Talk sync cursor that LINEJS keeps on the client.
+ *
+ * The cursor only lives in memory inside LINEJS. Without persisting it, every
+ * app start polls/pushes with `lastRevision: 0`, which forces a full account
+ * sync that routinely takes longer than the PUSH readiness window.
+ */
+export function talkSyncCursor(client: LineClient): TalkSyncCursor {
+  const talk = (client as any)?.base?.poll?.sync?.talk ?? {};
+  return {
+    revision: finiteCursorPart(talk.revision),
+    globalRev: finiteCursorPart(talk.globalRev),
+    individualRev: finiteCursorPart(talk.individualRev),
+  };
+}
+
+/** Restore a cursor captured by `talkSyncCursor` before attaching transports. */
+export function restoreTalkSyncCursor(client: LineClient, cursor: TalkSyncCursor | null | undefined): void {
+  const poll = (client as any)?.base?.poll;
+  if (!poll?.sync?.talk) return;
+  poll.sync.talk.revision = finiteCursorPart(cursor?.revision);
+  poll.sync.talk.globalRev = finiteCursorPart(cursor?.globalRev);
+  poll.sync.talk.individualRev = finiteCursorPart(cursor?.individualRev);
+}
+
+/**
+ * LINE answers a Talk sync with `410 Gone` when the cursor is no longer
+ * accepted (expired, or advanced by another device). The only recovery is a
+ * fresh full sync, which starts again from revision zero.
+ */
+export function isExpiredTalkSyncCursorError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /status=410\b/.test(message);
+}
+
+/** Drop the cursor after an expired-sync response so the next attempt resyncs. */
+export function resetTalkSyncCursor(client: LineClient): void {
+  restoreTalkSyncCursor(client, EMPTY_TALK_SYNC_CURSOR);
 }
 
 const e2eeSenderKeyUpdates = new WeakMap<object, Promise<void>>();
