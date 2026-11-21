@@ -4348,6 +4348,8 @@ const PUSH_RETRY_COOLDOWN_MS = 15 * 60_000;
 async function supervisePush(next: LineClient, signal: AbortSignal, push: any): Promise<void> {
   let backoff = 1_000;
   let consecutiveFailures = 0;
+  let connectedOnce = false;
+  let forceFreshCursor = false;
   let stage: "connect" | "handshake" | "listening" = "connect";
   const pollingEnabled = eventTransportPolicy(process.env).pollingEnabled;
   const initServices = pushInitServices();
@@ -4393,6 +4395,7 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
           pushHealthy = true;
           pushConnectedSince = Date.now();
           consecutiveFailures = 0;
+          connectedOnce = true;
           authDiagnostics.record("push.connected", { revision: talkSyncCursor(next).revision });
           emit({ type: "event.transport", transport: "line", state: "connected" });
           resolveTalkSync();
@@ -4401,6 +4404,12 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
           if (!firstSignOnFrame) firstSignOnFrame = { ...frame, afterMs: Date.now() - handshakeStartedAt };
         });
         const handshakeTimeout = new AbortController();
+        // Polling shares this cursor and its sync responses may advance it to a
+        // revision the PUSH server ignores. Re-apply the cursor we intend to
+        // handshake with right before the request is sent.
+        if (forceFreshCursor) {
+          LineJsAdapter.resetTalkSyncCursor(next);
+        }
         const readPromise = LineJsAdapter.readPush(push, initServices);
         let startupResult: "ready" | "closed" | "timeout";
         try {
@@ -4416,19 +4425,20 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
           // REST polling stays held back during this window because PUSH and
           // polling share one Talk revision cursor.
           if (startupResult === "timeout") {
-            pushFallbackNotBefore = Date.now() + syncResponseWaitMs;
+            const attemptWaitMs = forceFreshCursor ? Math.max(syncResponseWaitMs, 120_000) : syncResponseWaitMs;
+            pushFallbackNotBefore = Date.now() + attemptWaitMs;
             if (!signal.aborted) {
               emit({
                 type: "event.transport",
                 transport: "line",
                 state: "reconnecting",
-                error: `Talk Sync is still starting after ${PUSH_SYNC_RESPONSE_TIMEOUT_MS}ms; waiting up to ${syncResponseWaitMs}ms`,
+                error: `Talk Sync is still starting after ${PUSH_SYNC_RESPONSE_TIMEOUT_MS}ms; waiting up to ${attemptWaitMs}ms`,
               });
             }
             startupResult = await Promise.race([
               talkSyncReady.then(() => "ready" as const),
               readPromise.then(() => "closed" as const),
-              waitForSignal(syncResponseWaitMs, handshakeTimeout.signal).then(() => "timeout" as const),
+              waitForSignal(attemptWaitMs, handshakeTimeout.signal).then(() => "timeout" as const),
             ]);
           }
         } finally {
@@ -4466,6 +4476,15 @@ async function supervisePush(next: LineClient, signal: AbortSignal, push: any): 
           await LineJsAdapter.closePushConnections(push);
           await readPromise.catch(() => undefined);
           pushFallbackNotBefore = Date.now();
+          // A restored or polling-advanced cursor can be silently ignored by
+          // the PUSH server. Retry once from revision zero before giving up.
+          if (!connectedOnce && !forceFreshCursor) {
+            forceFreshCursor = true;
+            const abandonedRevision = talkSyncCursor(next).revision;
+            LineJsAdapter.resetTalkSyncCursor(next);
+            clearStoredTalkSyncCursor();
+            authDiagnostics.record("push.cursor.reset", { abandonedRevision });
+          }
           consecutiveFailures += 1;
           backoff = Math.min(backoff * 2, 30_000);
           if (pollingEnabled && consecutiveFailures >= PUSH_HANDSHAKE_FAILURE_LIMIT) {
