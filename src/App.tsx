@@ -424,6 +424,26 @@ function isUnresolvedGroupResult(chat: LiveChatResult): boolean {
     && ["", "LINE Chat", "LINE User"].includes(chat.name.trim());
 }
 
+const PLACEHOLDER_CHAT_SUBTITLES = new Set([
+  "",
+  "ยังไม่เคยแชท",
+  "ประวัติเก่าอ่านไม่ได้ · Live mode",
+  "เพื่อน · LINE",
+  "กลุ่ม · LINE",
+  "OpenChat",
+  "LINE ไม่ส่งข้อมูลกลุ่มและประวัติเก่ากลับมา",
+  "บัญชีระบบ LINE · อ่าน payload ผ่าน Talk API ไม่ได้",
+]);
+
+function hasReadableChatHistory(chat: Pick<Chat, "id" | "historyState" | "lastMessageTime" | "subtitle" | "unread">): boolean {
+  if (chat.id === LINE_SYSTEM_ACCOUNT_MID) return false;
+  if (chat.historyState === "unavailable" || chat.historyState === "new") return false;
+  const hasTimestamp = Number(chat.lastMessageTime ?? 0) > 0;
+  const hasRealPreview = !PLACEHOLDER_CHAT_SUBTITLES.has(String(chat.subtitle ?? "").trim());
+  if (!hasTimestamp && !hasRealPreview && !chat.unread) return false;
+  return true;
+}
+
 function mapLiveChatResult(item: LiveChatResult, index: number): Chat {
   const lineSystemAccount = item.id === LINE_SYSTEM_ACCOUNT_MID;
   const profile = liveProfileMetadata(item);
@@ -1188,7 +1208,7 @@ function MainApp() {
           setActiveChatId((current) => next.some((chat) => chat.id === current)
             || Boolean(liveFriendsRef.current?.some((chat) => chat.id === current))
             ? current
-            : (next[0]?.id ?? ""));
+            : (next.find(hasReadableChatHistory)?.id ?? ""));
         }
       }
       if (event.type === "sync.start") {
@@ -1858,6 +1878,7 @@ function MainApp() {
       ? (settings.openchat ? (liveChats ?? []) : (liveChats ?? []).filter((chat) => chat.kind !== "openchat"))
       : seedChats;
     return mergeFriendProfilesIntoChats(base, allFriends)
+      .filter((chat) => chat.id === activeChatId || hasReadableChatHistory(chat))
       .map((chat) => {
         const localPinTimestamp = localPins[chat.id] ?? 0;
         const remotePinTimestamp = chat.favoriteTimestamp ?? 0;
@@ -1875,7 +1896,7 @@ function MainApp() {
         if ((a.lastMessageTime ?? 0) !== (b.lastMessageTime ?? 0)) return (b.lastMessageTime ?? 0) - (a.lastMessageTime ?? 0);
         return (b.favoriteTimestamp ?? 0) - (a.favoriteTimestamp ?? 0);
       });
-  }, [liveChats, allFriends, favoriteFriendMap, localPins, settings.openchat, usesEngineRuntime]);
+  }, [liveChats, allFriends, favoriteFriendMap, localPins, settings.openchat, usesEngineRuntime, activeChatId]);
   const totalUnread = useMemo(
     () => allChats.reduce((sum, chat) => sum + Math.max(0, chat.unread ?? 0), 0),
     [allChats],
@@ -2514,7 +2535,7 @@ function MainApp() {
     setActiveChatId((current) => mapped.some((chat) => chat.id === current)
       || Boolean(liveFriendsRef.current?.some((chat) => chat.id === current))
       ? current
-      : (mapped[0]?.id ?? ""));
+      : (mapped.find(hasReadableChatHistory)?.id ?? ""));
     if (!talkSucceeded && !squareSucceeded) {
       const reason = talkResult.status === "rejected" ? String(talkResult.reason) : "ผลลัพธ์จาก LINE ไม่ถูกต้อง";
       setAuthError(`โหลดรายการแชตไม่สำเร็จ: ${reason}`);
