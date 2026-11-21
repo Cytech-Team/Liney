@@ -4619,6 +4619,55 @@ function Conversation({
     };
   }, [chat.id, jumpToMessageId, jumpNonce, messages, messageVirtualizer]);
 
+  // Clicking a quoted reply jumps to the original message. If it is older than
+  // the loaded window, page backwards a bounded number of times to find it.
+  const [pendingReplyJump, setPendingReplyJump] = useState<{ id: string; attempts: number; nonce: number } | null>(null);
+  const replyJumpLoadingRef = useRef(false);
+  const replyHighlightTimerRef = useRef<number | null>(null);
+  const requestReplyJump = (id: string | undefined) => {
+    if (!id) return;
+    setPendingReplyJump({ id, attempts: 0, nonce: Date.now() });
+  };
+  useEffect(() => {
+    if (!pendingReplyJump || !messages?.length || chat.id === "__liney__") return;
+    const index = messages.findIndex((item) => item.id === pendingReplyJump.id);
+    if (index >= 0) {
+      const targetId = pendingReplyJump.id;
+      stopFollowingBottom();
+      messageVirtualizer.scrollToIndex(index, { align: "center" });
+      setHighlightedMessageId(null);
+      const frame = requestAnimationFrame(() => {
+        setHighlightedMessageId(targetId);
+        if (replyHighlightTimerRef.current !== null) window.clearTimeout(replyHighlightTimerRef.current);
+        replyHighlightTimerRef.current = window.setTimeout(() => {
+          setHighlightedMessageId((current) => current === targetId ? null : current);
+          replyHighlightTimerRef.current = null;
+        }, 2_600);
+      });
+      setPendingReplyJump(null);
+      return () => cancelAnimationFrame(frame);
+    }
+    if (replyJumpLoadingRef.current) return;
+    if (pendingReplyJump.attempts >= 6 || !canLoadOlderHistory) {
+      setPendingReplyJump(null);
+      return;
+    }
+    replyJumpLoadingRef.current = true;
+    void onLoadOlder(messages[0]!)
+      .then((result) => {
+        replyJumpLoadingRef.current = false;
+        setPendingReplyJump((current) => current && current.id === pendingReplyJump.id
+          ? (result.added > 0 && result.hasMore ? { ...current, attempts: current.attempts + 1 } : null)
+          : current);
+      })
+      .catch(() => {
+        replyJumpLoadingRef.current = false;
+        setPendingReplyJump(null);
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingReplyJump, messages, chat.id, canLoadOlderHistory]);
+  useEffect(() => { setPendingReplyJump(null); }, [chat.id]);
+
   useEffect(() => {
     if (!messageMenuId && !reactionMenuId) return;
     const closeMenus = () => {
@@ -5155,7 +5204,19 @@ function Conversation({
                     }}
                   >
                     {message.replyTo ? (
-                      <div className="reply-reference">
+                      <div
+                        className={`reply-reference${message.replyTo.id || message.replyToId ? " is-clickable" : ""}`}
+                        role={message.replyTo.id || message.replyToId ? "button" : undefined}
+                        tabIndex={message.replyTo.id || message.replyToId ? 0 : undefined}
+                        title={message.replyTo.id || message.replyToId ? t("ไปยังข้อความต้นฉบับ") : undefined}
+                        onClick={() => requestReplyJump(message.replyTo?.id || message.replyToId)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            requestReplyJump(message.replyTo?.id || message.replyToId);
+                          }
+                        }}
+                      >
                         <Reply size={14} />
                         <div>
                           <strong>{message.replyTo.author === "me" ? t("คุณ") : message.replyTo.senderName || t("ข้อความที่ตอบกลับ")}</strong>
