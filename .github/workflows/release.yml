@@ -48,17 +48,20 @@ jobs:
           INPUT_CHANNEL: ${{ inputs.channel }}
           INPUT_REF: ${{ inputs.ref }}
           EVENT_NAME: ${{ github.event_name }}
-          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          channel=preview
-          if [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$EVENT_NAME" = "workflow_call" ]; then
-            channel="${INPUT_CHANNEL:-preview}"
-          elif [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            channel=stable
-          fi
           ref="${INPUT_REF:-${GITHUB_REF}}"
           tag=""
+          # A stable tag always builds stable, even if a manual dispatcher
+          # leaves the channel input at its preview default.
+          channel=preview
+          if [[ "$ref" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            channel=stable
+          elif [[ "$ref" == refs/tags/v* ]]; then
+            channel=preview
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$EVENT_NAME" = "workflow_call" ]; then
+            channel="${INPUT_CHANNEL:-preview}"
+          fi
           if [[ "$ref" == refs/tags/v* ]]; then
             tag="${ref#refs/tags/}"
           fi
@@ -213,7 +216,7 @@ jobs:
 
   publish-release:
     name: Publish GitHub Release
-    if: ${{ !cancelled() && needs.verify.outputs.tag != '' && needs.release-linux.result == 'success' }}
+    if: ${{ !cancelled() && needs.verify.outputs.tag != '' && needs.release-linux.result == 'success' && (needs.flatpak.result == 'success' || needs.flatpak.result == 'skipped') }}
     needs:
       - verify
       - release-linux

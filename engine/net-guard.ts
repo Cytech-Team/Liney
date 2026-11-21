@@ -74,10 +74,16 @@ export function isPrivateAddress(address: string): boolean {
   if (hextets.slice(0, 5).every((value) => value === 0) && (hextets[5] === 0xffff || hextets[5] === 0)) {
     if (isPrivateIpv4(embedded(hextets[6], hextets[7]))) return true;
   }
+  // ::ffff:0:0/96 (IPv4-translated) also carries the address in the last 32 bits.
+  if (hextets.slice(0, 4).every((value) => value === 0) && hextets[4] === 0xffff && hextets[5] === 0) {
+    if (isPrivateIpv4(embedded(hextets[6], hextets[7]))) return true;
+  }
   // 64:ff9b::/96 (NAT64).
   if (hextets[0] === 0x0064 && hextets[1] === 0xff9b && hextets.slice(2, 6).every((value) => value === 0)) {
     if (isPrivateIpv4(embedded(hextets[6], hextets[7]))) return true;
   }
+  // 64:ff9b:1::/48 is the private-use NAT64 prefix; never route to it.
+  if (hextets[0] === 0x0064 && hextets[1] === 0xff9b && hextets[2] === 0x0001) return true;
   // 2002::/16 (6to4) embeds IPv4 in the second and third hextets.
   if (hextets[0] === 0x2002 && isPrivateIpv4(embedded(hextets[1], hextets[2]))) return true;
 

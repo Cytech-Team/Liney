@@ -32,8 +32,11 @@ function packagedBuildChannel() {
   try {
     const manifest = JSON.parse(readFileSync(path.join(app.getAppPath(), "package.json"), "utf8"));
     return channelFromManifest(manifest);
-  } catch {
-    return "preview";
+  } catch (error) {
+    // A packaged build with an unreadable manifest must not fall back to the
+    // preview directory, which may hold another install's refresh token.
+    console.error("Liney manifest is unreadable; using the isolated stable channel:", error?.message || error);
+    return "stable";
   }
 }
 const runtime = resolveRuntimePaths({

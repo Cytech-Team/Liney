@@ -1572,9 +1572,15 @@ export class LineyDatabase {
       this.db.query("DELETE FROM link_previews WHERE account_id = ?").run(accountId);
       this.db.query("DELETE FROM protocol_events WHERE account_id = ?").run(accountId);
     });
-    // Deleted rows must not remain readable in free pages. This is an explicit
-    // user action, so the compaction cost belongs to the clear operation.
-    this.db.exec("VACUUM");
+    // Deleted rows must not remain readable in free pages or in the WAL.
+    // This is an explicit user action, so the compaction cost belongs here;
+    // the rows are already gone even if compaction fails (e.g. disk full).
+    try {
+      this.db.exec("VACUUM");
+      this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    } catch {
+      // Best effort: never report failure after the delete committed.
+    }
   }
 
   clearAccount(accountId: string): void {

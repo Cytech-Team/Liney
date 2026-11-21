@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { channelFromManifest, resolveRuntimePaths } from "./runtime-paths.mjs";
 
@@ -83,6 +85,42 @@ describe("resolveRuntimePaths", () => {
 
     expect(paths.channel).toBe("dev");
     expect(paths.credentialNamespace).toBe("dev");
+  });
+
+  test("lets a packaged preview manifest win over the debug env flag", () => {
+    const paths = resolveRuntimePaths({
+      isPackaged: true,
+      buildChannel: "preview",
+      env: { LINEY_ELECTRON_STABLE: "1" },
+      home: "/home/liney",
+      xdgDataHome: undefined,
+    });
+
+    expect(paths.channel).toBe("preview");
+    expect(paths.credentialNamespace).toBe("");
+  });
+
+  test("treats symlinked data-dir parents as one namespace", () => {
+    const root = mkdtempSync(join(tmpdir(), "liney-paths-test-"));
+    const realParent = join(root, "real");
+    const linkParent = join(root, "link");
+    mkdirSync(realParent);
+    symlinkSync(realParent, linkParent);
+
+    const direct = resolveRuntimePaths({
+      isPackaged: true,
+      env: { LINEY_DATA_DIR: join(realParent, "data") },
+      home: "/home/liney",
+      xdgDataHome: undefined,
+    });
+    const linked = resolveRuntimePaths({
+      isPackaged: true,
+      env: { LINEY_DATA_DIR: join(linkParent, "data") },
+      home: "/home/liney",
+      xdgDataHome: undefined,
+    });
+
+    expect(linked.credentialNamespace).toBe(direct.credentialNamespace);
   });
 
   test("ignores the stable flag in unpackaged builds", () => {

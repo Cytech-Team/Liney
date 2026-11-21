@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { join, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 
 const CHANNEL_DIRS = {
   stable: "liney",
@@ -7,8 +8,22 @@ const CHANNEL_DIRS = {
   dev: "liney-electron-dev",
 };
 
+/**
+ * Canonicalise the parent directory (which normally already exists) and keep
+ * the final component. This is stable whether or not Liney has created the
+ * data directory yet, and it folds symlinked home/data roots together.
+ */
+function canonicalPath(value) {
+  const absolute = resolve(value);
+  try {
+    return join(realpathSync(dirname(absolute)), basename(absolute));
+  } catch {
+    return absolute;
+  }
+}
+
 function customNamespace(explicitDataDir) {
-  return "custom-" + createHash("sha256").update(resolve(explicitDataDir)).digest("hex").slice(0, 12);
+  return "custom-" + createHash("sha256").update(canonicalPath(explicitDataDir)).digest("hex").slice(0, 12);
 }
 
 /**
@@ -28,7 +43,14 @@ export function channelFromManifest(manifest) {
  */
 export function resolveRuntimePaths({ isPackaged, env = {}, home, xdgDataHome, buildChannel }) {
   const explicitDataDir = String(env.LINEY_DATA_DIR || "").trim();
-  const stable = env.LINEY_ELECTRON_STABLE === "1" || buildChannel === "stable";
+  // A packaged manifest decides the channel. The environment flag is only a
+  // fallback for builds that predate the embedded marker; otherwise a preview
+  // AppImage launched with the flag would take the stable dir and lock.
+  const stable = !isPackaged
+    ? false
+    : buildChannel === undefined
+      ? env.LINEY_ELECTRON_STABLE === "1"
+      : buildChannel === "stable";
   const channel = !isPackaged ? "dev" : stable ? "stable" : "preview";
   const dataRoot = xdgDataHome || join(home, ".local/share");
   const stateDir = explicitDataDir || join(dataRoot, CHANNEL_DIRS[channel]);

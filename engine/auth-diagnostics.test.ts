@@ -21,6 +21,8 @@ describe("auth diagnostics", () => {
       cookie: "session=secret-cookie",
       nested: { refresh_token: "nested-secret", safe: "kept" },
       error: "failed for u0123456789abcdef0123456789abcdef token=abc123 email=user@example.com",
+      opaque: "value 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef end",
+      bearerish: "value AbCdEf0123456789AbCdEf0123456789AbCdEf01 end",
       reason: "SESSION_REJECTED",
     });
 
@@ -37,6 +39,8 @@ describe("auth diagnostics", () => {
     expect(text).not.toContain("abc123");
     expect(text).not.toContain("user@example.com");
     expect(text).not.toContain("u0123456789abcdef0123456789abcdef");
+    expect(text).not.toContain("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+    expect(text).not.toContain("AbCdEf0123456789AbCdEf0123456789AbCdEf01");
   });
 
   test("returns the newest entries from tail", () => {
@@ -52,8 +56,8 @@ describe("auth diagnostics", () => {
   test("rotates the file when it grows past the configured limit", () => {
     const path = tempPath();
     const diagnostics = new AuthDiagnostics(path, undefined, { maxBytes: 240 });
-    diagnostics.record("first", { detail: "x".repeat(120) });
-    diagnostics.record("second", { detail: "y".repeat(120) });
+    diagnostics.record("first", { detail: "alpha ".repeat(24) });
+    diagnostics.record("second", { detail: "bravo ".repeat(24) });
 
     const text = readFileSync(path, "utf8");
     expect(text).not.toContain('"event":"first"');

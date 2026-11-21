@@ -40,8 +40,10 @@ describe("private address guard", () => {
       "::127.0.0.1",
       "64:ff9b::7f00:1",
       "64:ff9b::a00:1",
+      "64:ff9b:1::7f00:1",
       "2002:7f00:0001::1",
       "2002:c0a8:0101::1",
+      "::ffff:0:7f00:1",
     ]) {
       expect(isPrivateAddress(address)).toBe(true);
     }
@@ -53,6 +55,7 @@ describe("private address guard", () => {
       "2001:4860:4860::8888",
       "::ffff:8.8.8.8",
       "::ffff:808:808",
+      "::ffff:0:808:808",
       "64:ff9b::808:808",
       "2002:0808:0808::1",
     ]) {

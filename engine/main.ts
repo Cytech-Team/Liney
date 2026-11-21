@@ -457,7 +457,8 @@ const keyring = new LineyKeyring(undefined, undefined, credentialNamespace);
 const credentialFallback = new LineyEncryptedFallback(dataPath(), configPath(), credentialNamespace);
 const authDiagnostics = new AuthDiagnostics(join(dataPath(), "auth-diagnostics.jsonl"));
 const fallbackMigration = migrateFallbackCredentialToWallet(keyring, credentialFallback);
-const legacyMigration = migrateLegacyCredentials(dataPath(), keyring, credentialFallback);
+let migratedWalletCredential: AuthCredential | null = fallbackMigration.credential;
+let legacyCredential: AuthCredential | null = migrateLegacyCredentials(dataPath(), keyring, credentialFallback).credential;
 authDiagnostics.record("auth.storage.probe", {
   channel: credentialNamespace || "legacy",
   keyring: keyring.available,
@@ -584,17 +585,30 @@ function normalize(value: any): any {
 }
 
 let lastPersistenceMode: CredentialPersistenceMode | "" = "";
+let credentialMutation: Promise<void> = Promise.resolve();
 
-async function persistCredential(next: LineClient): Promise<CredentialPersistenceMode> {
-  // A keyring locked during autostart must not pin the process to the
-  // fallback forever; re-probe (throttled inside LineyKeyring) before writing.
+/**
+ * Serialize credential writes. Token rotations arrive in order; writing them
+ * out of order could leave an already-invalidated token in the keyring.
+ */
+function persistCredential(next: LineClient): Promise<CredentialPersistenceMode> {
+  const generation = authGeneration;
+  const run = credentialMutation.then(() => writeCredential(next, generation));
+  credentialMutation = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+async function writeCredential(next: LineClient, generation: number): Promise<CredentialPersistenceMode> {
+  // If the session ended or the user logged out while this write was queued,
+  // never resurrect the dead credential.
+  if (generation !== authGeneration) return credentialPersistenceStatus(store);
   keyring.refreshAvailability();
   const refreshToken = await store.get("refreshToken");
   const expireValue = await store.get("expire");
   const accessToken = LineJsAdapter.authToken(next);
   // LINEJS deletes `client.authToken` before emitting `end`, so a late
   // rotation can reach us with no token. Never persist that empty record.
-  if (!accessToken) return credentialPersistenceStatus(store);
+  if (!accessToken || generation !== authGeneration) return credentialPersistenceStatus(store);
   const credential: AuthCredential = {
     accessToken,
     ...(typeof refreshToken === "string" ? { refreshToken } : {}),
@@ -635,8 +649,8 @@ function credentialCandidate(): { credential: AuthCredential | null; source: Cre
   return selectCredential({
     wallet: readCredentialFromWallet(keyring),
     fallback: readCredentialFromFallback(credentialFallback),
-    migratedWallet: fallbackMigration.credential,
-    legacy: legacyMigration.credential,
+    migratedWallet: migratedWalletCredential,
+    legacy: legacyCredential,
   });
 }
 
@@ -650,6 +664,7 @@ function readCredential(): AuthCredential | null {
  */
 async function resetSessionState(reason: string): Promise<void> {
   authGeneration += 1;
+  cancelCredentialRetry();
   listenerAbort?.abort();
   listenerAbort = null;
   // Full sync is cancellable and must not continue writing the previous
@@ -4467,16 +4482,50 @@ async function restoreToken(id: string, token: unknown) {
   }
 }
 
+let credentialRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let credentialRetryAttempts = 0;
+
+function cancelCredentialRetry() {
+  if (!credentialRetryTimer) return;
+  clearTimeout(credentialRetryTimer);
+  credentialRetryTimer = null;
+}
+
+/**
+ * Autostart often happens before the desktop keyring is unlocked. Without a
+ * retry the engine silently shows the login screen and never restores the
+ * session that is sitting in the wallet.
+ */
+function scheduleCredentialRetry() {
+  if (credentialRetryTimer || credentialRetryAttempts >= 6) return;
+  credentialRetryTimer = setTimeout(() => {
+    credentialRetryTimer = null;
+    credentialRetryAttempts += 1;
+    if (client || loginInFlight) return;
+    keyring.refreshAvailability(true);
+    if (credentialCandidate().credential) {
+      void autoRestore();
+      return;
+    }
+    if (!keyring.available) scheduleCredentialRetry();
+  }, 10_000);
+}
+
 async function autoRestore() {
-  // The desktop keyring may have been locked when the engine started. Probe
-  // again before choosing where to read the session from.
-  keyring.refreshAvailability();
+  cancelCredentialRetry();
+  // The desktop keyring may have been locked when the module probed it. A
+  // throttled call would reuse that stale negative probe, so force this one.
+  keyring.refreshAvailability(true);
   const candidate = credentialCandidate();
   const credential = candidate.credential;
   if (!credential) {
-    authDiagnostics.record("auth.restore.skipped", { reason: "no-credential" });
+    authDiagnostics.record("auth.restore.skipped", {
+      reason: keyring.available ? "no-credential" : "keyring-unavailable",
+    });
+    if (!keyring.available) scheduleCredentialRetry();
     return;
   }
+  credentialRetryAttempts = 0;
   const generation = authGeneration;
   authDiagnostics.record("auth.restore.start", {
     source: candidate.source,
@@ -4504,6 +4553,14 @@ async function autoRestore() {
     if (isDefinitiveAuthFailure(error)) {
       clearCredentialFromWallet(keyring);
       clearCredentialFromFallback(credentialFallback);
+      // Module-scope migrations would otherwise resurrect this credential.
+      migratedWalletCredential = null;
+      legacyCredential = null;
+      try {
+        await store.clear();
+      } catch {
+        // Best effort: the keyring may be locked or gone.
+      }
     }
     emit({
       type: "auth.restore_failed",

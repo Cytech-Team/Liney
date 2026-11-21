@@ -41,6 +41,14 @@ Both preview and stable take a `requestSingleInstanceLock()` scoped to their
 own `userData` directory, so a second copy of the same channel focuses the first
 instead of rotating the same session.
 
+The DEB and RPM keep the same package name (`liney`) and `/opt/Liney` path, so
+installing stable replaces preview and vice versa. Use the AppImage if you need
+both channels installed at the same time.
+
+If the desktop keyring is still locked at autostart, the engine retries the
+credential restore for up to a minute instead of leaving the login screen up
+permanently.
+
 ## Release gate
 
 A tag (`v*`) or a manual dispatch runs `.github/workflows/release.yml`:

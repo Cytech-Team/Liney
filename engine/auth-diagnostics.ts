@@ -11,6 +11,8 @@ const SECRET_KEY = /(?:token|secret|password|passwd|authorization|cookie|credent
 const JWT = /\b[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g;
 const BEARER = /\b(?:Bearer\s+)?(?:accessToken|refreshToken|authToken|authorization|token)\s*[:=]\s*[^\s,;]+/gi;
 const PASSWORD = /\b(?:password|passwd)\s*[:=]\s*[^\s,;]+/gi;
+// Opaque credentials (base64url / long hex) that are not in a keyed field.
+const OPAQUE_TOKEN = /\b[A-Za-z0-9_-]{40,}\b/g;
 const MID = /\bu[0-9a-f]{32}\b/gi;
 const EMAIL = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
 const MAX_STRING = 500;
@@ -20,6 +22,7 @@ export function redactDiagnosticString(value: string): string {
     .replace(JWT, "[redacted]")
     .replace(BEARER, "[redacted]")
     .replace(PASSWORD, "password=[redacted]")
+    .replace(OPAQUE_TOKEN, "[redacted]")
     .replace(MID, "[mid]")
     .replace(EMAIL, "[email]")
     .slice(0, MAX_STRING);

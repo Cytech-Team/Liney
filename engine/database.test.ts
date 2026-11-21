@@ -233,9 +233,13 @@ describe("LineyDatabase", () => {
     });
 
     database.clearHistory("default");
-    database.close();
 
     let raw = readFileSync(path).toString("latin1");
+    if (existsSync(`${path}-wal`)) raw += readFileSync(`${path}-wal`).toString("latin1");
+    expect(raw).not.toContain("SENTINEL-PRIVATE-MESSAGE");
+
+    database.close();
+    raw = readFileSync(path).toString("latin1");
     if (existsSync(`${path}-wal`)) raw += readFileSync(`${path}-wal`).toString("latin1");
     expect(raw).not.toContain("SENTINEL-PRIVATE-MESSAGE");
   });
