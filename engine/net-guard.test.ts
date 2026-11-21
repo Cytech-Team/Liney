@@ -27,7 +27,7 @@ describe("private address guard", () => {
   });
 
   test("rejects IPv6 loopback, ULA, link-local and multicast", () => {
-    for (const address of ["::", "::1", "fc00::1", "fd12:3456::1", "fe80::1", "ff02::1"]) {
+    for (const address of ["::", "::1", "fc00::1", "fd12:3456::1", "fe80::1", "fec0::1", "ff02::1", "100::1"]) {
       expect(isPrivateAddress(address)).toBe(true);
     }
   });

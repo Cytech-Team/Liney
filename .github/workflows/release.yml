@@ -39,12 +39,14 @@ jobs:
     timeout-minutes: 25
     outputs:
       channel: ${{ steps.channel.outputs.channel }}
+      tag: ${{ steps.channel.outputs.tag }}
     steps:
       - name: Resolve release channel
         id: channel
         shell: bash
         env:
           INPUT_CHANNEL: ${{ inputs.channel }}
+          INPUT_REF: ${{ inputs.ref }}
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
         run: |
@@ -55,7 +57,13 @@ jobs:
           elif [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             channel=stable
           fi
+          ref="${INPUT_REF:-${GITHUB_REF}}"
+          tag=""
+          if [[ "$ref" == refs/tags/v* ]]; then
+            tag="${ref#refs/tags/}"
+          fi
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.ref || github.ref }}
@@ -71,9 +79,11 @@ jobs:
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
       - name: Verify tag version
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.channel.outputs.tag != ''
         shell: bash
-        run: test "${GITHUB_REF_NAME#v}" = "$(node -p 'require("./package.json").version')"
+        env:
+          TAG: ${{ steps.channel.outputs.tag }}
+        run: test "${TAG#v}" = "$(node -p 'require("./package.json").version')"
       # A release must never publish artifacts that skipped tests, lint, the
       # Electron engine bundle or the React production build.
       - name: Release gate (tests, lint, builds, diff check)
@@ -100,9 +110,11 @@ jobs:
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
       - name: Verify tag version
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: needs.verify.outputs.tag != ''
         shell: bash
-        run: test "${GITHUB_REF_NAME#v}" = "$(node -p 'require("./package.json").version')"
+        env:
+          TAG: ${{ needs.verify.outputs.tag }}
+        run: test "${TAG#v}" = "$(node -p 'require("./package.json").version')"
       - name: Build engine and desktop packages
         env:
           CHANNEL: ${{ needs.verify.outputs.channel }}
@@ -201,7 +213,7 @@ jobs:
 
   publish-release:
     name: Publish GitHub Release
-    if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() }}
+    if: ${{ needs.verify.outputs.tag != '' && !cancelled() }}
     needs:
       - verify
       - release-linux

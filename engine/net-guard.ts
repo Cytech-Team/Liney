@@ -62,9 +62,10 @@ export function isPrivateAddress(address: string): boolean {
   if (hextets.slice(0, 7).every((value) => value === 0) && hextets[7] === 1) return true;
   if ((hextets[0] & 0xfe00) === 0xfc00) return true;
   if ((hextets[0] & 0xffc0) === 0xfe80) return true;
+  if ((hextets[0] & 0xffc0) === 0xfec0) return true;
   if ((hextets[0] & 0xff00) === 0xff00) return true;
   if (hextets[0] === 0x2001 && hextets[1] === 0x0db8) return true;
-  if (hextets[0] === 0x0100 && hextets.slice(1).every((value) => value === 0)) return true;
+  if (hextets[0] === 0x0100 && hextets.slice(1, 4).every((value) => value === 0)) return true;
 
   const embedded = (high: number, low: number): string =>
     `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
