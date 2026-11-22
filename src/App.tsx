@@ -53,6 +53,7 @@ import {
   Users,
   UserPlus,
   Video,
+  UserRoundPlus,
   Volume2,
   X,
 } from "lucide-react";
@@ -2028,6 +2029,13 @@ function MainApp() {
   };
   const activePool = [...allChats, ...allFriends, ...callChats];
   const activeChat = activePool.find((chat) => chat.id === activeChatId) ?? visibleChats[0] ?? activePool[0] ?? placeholderChat;
+  const profileIsFriend = profileTarget ? (liveFriends ?? []).some((friend) => friend.id === profileTarget.mid) : false;
+  const profileCanCall = Boolean(
+    profileTarget
+    && /^u[a-f0-9]{32}$/i.test(profileTarget.mid)
+    && callAvailable
+    && (profileIsFriend || (liveChats ?? []).some((chat) => chat.kind === "dm" && chat.id === profileTarget.mid)),
+  );
   const callBaseChat = activePool.find((chat) => chat.id === callPeer);
   const callResolvedIdentity = callIdentity?.peer === callPeer ? callIdentity : null;
   const callDisplayName = (
@@ -2749,6 +2757,18 @@ function MainApp() {
     return friend;
   }
 
+  async function addFriendByMid(mid: string): Promise<Chat> {
+    const result = await lineyEngine.request<LiveChatResult>("friend.add_by_mid", { mid }, 45_000);
+    const friend = mapLiveFriendResult(result, liveFriendsRef.current?.length ?? 0);
+    setLiveFriends((current) => {
+      const existing = current ?? [];
+      const next = sortLiveFriends([friend, ...existing.filter((item) => item.id !== friend.id)]);
+      liveFriendsRef.current = next;
+      return next;
+    });
+    return friend;
+  }
+
   async function createGroupChat(name: string, memberMids: string[]): Promise<Chat> {
     const result = await lineyEngine.request<LiveChatResult>("chat.create_group", { name, memberMids }, 60_000);
     if (!result?.id) throw new Error(translateText(settingsRef.current.language, "LINE ไม่ส่งรหัสกลุ่มกลับมา"));
@@ -3321,19 +3341,23 @@ function MainApp() {
     }
   }
 
-  async function startCall(kind: "AUDIO" | "VIDEO" = "AUDIO") {
-    if (!authenticated || activeChat.id === "__liney__") {
+  async function startCall(kind: "AUDIO" | "VIDEO" = "AUDIO", peerId: string = activeChat.id) {
+    if (!authenticated || peerId === "__liney__") {
       setAuthOpen(true);
       return;
     }
-    if (!callAvailable || activeChat.kind !== "dm") {
-      setCallPeer(activeChat.id);
+    const peerChat = [...(liveChatsRef.current ?? []), ...(liveFriendsRef.current ?? [])]
+      .find((chat) => chat.id === peerId);
+    const peerIsDirect = peerChat ? peerChat.kind === "dm" : /^u[a-f0-9]{32}$/i.test(peerId);
+    if (!callAvailable || !peerIsDirect) {
+      setCallPeer(peerId);
       setCallState("failed");
       setCallError(callReason || translateText(settingsRef.current.language, "สายเสียง 1:1 ยังไม่พร้อมบนระบบนี้"));
       setCallOpen(true);
       return;
     }
-    setCallPeer(activeChat.id);
+    if (peerChat) setCallIdentity({ peer: peerId, name: peerChat.name, avatarUrl: peerChat.avatarUrl });
+    setCallPeer(peerId);
     setCallMode(kind);
     setCallDirection("outgoing");
     setCallState("acquiring");
@@ -3347,7 +3371,7 @@ function MainApp() {
     try {
       const result = await lineyEngine.request<{ callId?: string; state?: CallState; videoCapable?: boolean }>(
         "call.start",
-        { peer: activeChat.id, kind },
+        { peer: peerId, kind },
         80_000,
       );
       setCallId(String(result?.callId ?? ""));
@@ -3872,7 +3896,19 @@ function MainApp() {
         )}
         {imageViewerSrc && <ImageViewerOverlay src={imageViewerSrc} onClose={() => setImageViewerSrc(null)} />}
         {albumsOpen && <LineAlbumsModal initialAlbum={albumTarget ?? undefined} onClose={() => { setAlbumsOpen(false); setAlbumTarget(null); }} />}
-        {profileTarget && <UserProfileModal mid={profileTarget.mid} fallbackName={profileTarget.fallbackName} fallbackAvatarUrl={profileTarget.fallbackAvatarUrl} onClose={() => setProfileTarget(null)} />}
+        {profileTarget && (
+          <UserProfileModal
+            mid={profileTarget.mid}
+            fallbackName={profileTarget.fallbackName}
+            fallbackAvatarUrl={profileTarget.fallbackAvatarUrl}
+            isFriend={profileIsFriend}
+            canCall={profileCanCall}
+            onCall={() => { const peer = profileTarget.mid; setProfileTarget(null); void startCall("AUDIO", peer); }}
+            onVideoCall={() => { const peer = profileTarget.mid; setProfileTarget(null); void startCall("VIDEO", peer); }}
+            onAddFriend={() => addFriendByMid(profileTarget.mid)}
+            onClose={() => setProfileTarget(null)}
+          />
+        )}
         {notesRoom && <LineNotesModal homeId={notesRoom.id} title={notesRoom.title} onClose={() => setNotesRoom(null)} />}
         {managedChat && (managedChat.kind === "dm" || managedChat.kind === "group") && <LineChatManageModal room={{ id: managedChat.id, kind: managedChat.kind, name: managedChat.name }} friends={allFriends} onUpdated={() => loadLiveFriends()} onClose={() => setManagedChat(null)} />}
         {settingsOpen && <SettingsModal initialTab={settingsInitialTab} themeMode={themeMode} dark={dark} settings={settings} callAvailable={callAvailable} onLanguageChange={(value) => updateSetting("language", value)} onThemeMode={setThemeMode} onSetting={updateAppSettings} onDensity={(value) => updateSetting("density", value)} onRadius={(value) => updateSetting("radius", value)} onClearHistory={() => void clearLocalHistory()} onClearStickerCache={() => void clearStickerCache()} onFullSync={() => void startFullSync()} onProfileChange={setProfile} onClose={() => setSettingsOpen(false)} />}
@@ -5817,11 +5853,21 @@ function UserProfileModal({
   mid,
   fallbackName,
   fallbackAvatarUrl,
+  isFriend = false,
+  canCall = false,
+  onCall,
+  onVideoCall,
+  onAddFriend,
   onClose,
 }: {
   mid: string;
   fallbackName?: string;
   fallbackAvatarUrl?: string;
+  isFriend?: boolean;
+  canCall?: boolean;
+  onCall?: () => void;
+  onVideoCall?: () => void;
+  onAddFriend?: () => Promise<unknown>;
   onClose: () => void;
 }) {
   const { t } = useAppTranslation();
@@ -5829,6 +5875,9 @@ function UserProfileModal({
   const [error, setError] = useState("");
   const [avatarFailed, setAvatarFailed] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [friendBusy, setFriendBusy] = useState(false);
+  const [friendAdded, setFriendAdded] = useState(false);
+  const [actionError, setActionError] = useState("");
 
   useEffect(() => {
     let valid = true;
@@ -5848,6 +5897,21 @@ function UserProfileModal({
   }, [mid]);
 
   const name = profile?.name || fallbackName || "LINE User";
+  const canAddFriend = Boolean(onAddFriend) && !isFriend && /^u[a-f0-9]{32}$/i.test(mid);
+
+  async function addFriend() {
+    if (!onAddFriend || friendBusy || friendAdded) return;
+    setFriendBusy(true);
+    setActionError("");
+    try {
+      await onAddFriend();
+      setFriendAdded(true);
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setFriendBusy(false);
+    }
+  }
 
   async function copyMid() {
     try {
@@ -5873,7 +5937,19 @@ function UserProfileModal({
         <h2 id="user-profile-title">{name}</h2>
         {profile?.isOfficialAccount ? <span className="user-profile-badge">{t("บัญชีทางการ")}</span> : null}
         <p className="user-profile-mid">{mid}</p>
-        {error ? <p className="user-profile-error" role="alert">{error}</p> : null}
+        {error || actionError ? <p className="user-profile-error" role="alert">{error || actionError}</p> : null}
+        {canCall || canAddFriend ? (
+          <div className="user-profile-actions user-profile-primary-actions">
+            {canCall ? <button type="button" className="liney-button liney-button-primary" onClick={() => onCall?.()}><Phone size={15} /> {t("โทรเสียง")}</button> : null}
+            {canCall ? <button type="button" className="liney-button liney-button-secondary" onClick={() => onVideoCall?.()}><Video size={16} /> {t("วิดีโอคอล")}</button> : null}
+            {canAddFriend ? (
+              <button type="button" className="liney-button liney-button-secondary" disabled={friendBusy || friendAdded} onClick={() => void addFriend()}>
+                {friendBusy ? <LoaderCircle size={15} className="spin" /> : <UserRoundPlus size={15} />}
+                {friendAdded ? t("เพิ่มเพื่อนแล้ว") : friendBusy ? t("กำลังเพิ่ม…") : t("เพิ่มเพื่อน")}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         <div className="user-profile-actions">
           <button type="button" className="liney-button liney-button-secondary" onClick={() => void copyMid()}>
             <Copy size={15} /> {copied ? t("คัดลอกแล้ว") : t("คัดลอก MID")}

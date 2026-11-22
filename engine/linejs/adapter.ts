@@ -73,6 +73,7 @@ export const LineJsAdapter = {
   getChatMetadataBatch,
   findContactBySearchIdOrTicketV3,
   addFriendByUserId,
+  addFriendByMid,
   createTalkChat,
   createSquare,
   getSquareChat,
@@ -240,6 +241,10 @@ export function findContactBySearchIdOrTicketV3(client: LineClient, searchId: st
 
 export function addFriendByUserId(client: LineClient, userId: string) {
   return (client as any).base.relation.addFriendByUserId({ userId });
+}
+
+export function addFriendByMid(client: LineClient, mid: string) {
+  return (client as any).base.relation.addFriendByMid({ mid });
 }
 
 export async function createTalkChat(client: LineClient, name: string, targetUserMids: string[]) {

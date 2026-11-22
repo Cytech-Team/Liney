@@ -5929,6 +5929,17 @@ async function handle(request: any) {
           ? await LineJsAdapter.leaveSquareChat(client, String(params.chatId ?? ""))
           : await LineJsAdapter.leaveGroup(client, params.chatId);
           break;
+        case "friend.add_by_mid": {
+          const mid = String(params.mid ?? "").trim();
+          if (!/^u[a-f0-9]{32}$/i.test(mid)) throw new Error("valid user mid is required");
+          await LineJsAdapter.addFriendByMid(client, mid);
+          const friends = await loadFriendsList(true);
+          const friend = friends.find((item: any) => String(item?.id ?? "") === mid)
+            ?? { id: mid, name: "LINE User", kind: "dm", avatarUrl: "" };
+          emit({ type: "event.chats.updated", kind: "friends", chats: friends });
+          result = friend;
+          break;
+        }
         case "friend.rename": result = await LineJsAdapter.renameFriend(client, params.mid, params.name); break;
         case "friend.favorite": result = await LineJsAdapter.setFriendFavorite(client, params.mid, params.favorite); break;
         case "friend.mute": result = await LineJsAdapter.setFriendMuted(client, params.mid, params.muted); break;

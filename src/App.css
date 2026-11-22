@@ -1549,4 +1549,4 @@ button.message-mention:focus-visible { outline: 2px solid color-mix(in srgb, #16
 .user-profile-badge { padding: 3px 9px; border-radius: 999px; background: var(--green-soft); color: var(--green-strong); font-size: 10px; font-weight: 700; }
 .user-profile-mid { max-width: 100%; margin: 0; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
 .user-profile-error { margin: 0; color: #e06464; font-size: 11px; line-height: 1.5; }
-.user-profile-actions { display: flex; gap: 8px; margin-top: 10px; }
+.user-profile-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 10px; }
