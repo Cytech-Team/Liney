@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 460" width="560" height="460" role="img" aria-labelledby="parcel-title parcel-desc">
+  <title id="parcel-title">Liney release package</title>
+  <desc id="parcel-desc">An illustrated package with green Liney tape, surrounded by package-format chips.</desc>
+  <defs>
+    <linearGradient id="top" x1="70" y1="200" x2="470" y2="120" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FBFAF1"/>
+      <stop offset="1" stop-color="#EFEDDC"/>
+    </linearGradient>
+    <linearGradient id="left" x1="70" y1="210" x2="230" y2="370" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E8E5D2"/>
+      <stop offset="1" stop-color="#D8D4BD"/>
+    </linearGradient>
+    <linearGradient id="right" x1="240" y1="260" x2="470" y2="320" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F4F2E4"/>
+      <stop offset="1" stop-color="#E2DFCB"/>
+    </linearGradient>
+    <linearGradient id="tape" x1="210" y1="120" x2="250" y2="380" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#18E57E"/>
+      <stop offset="1" stop-color="#04A246"/>
+    </linearGradient>
+    <filter id="soft" x="-30%" y="-30%" width="170%" height="180%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="16" flood-color="#08251A" flood-opacity=".18"/>
+    </filter>
+  </defs>
+
+  <ellipse cx="280" cy="404" rx="190" ry="26" fill="#0B3021" opacity=".12"/>
+
+  <g fill="#0B3021" opacity=".45">
+    <path d="M78 116l5 12 12 5-12 5-5 12-5-12-12-5 12-5 5-12Z"/>
+    <path d="M486 92l4 9 9 4-9 4-4 9-4-9-9-4 9-4 4-9Z" opacity=".7"/>
+    <path d="M474 342l4 9 9 4-9 4-4 9-4-9-9-4 9-4 4-9Z" opacity=".5"/>
+  </g>
+
+  <!-- format chips -->
+  <g font-family="'IBM Plex Mono','SFMono-Regular',Consolas,monospace" font-size="12" font-weight="600" letter-spacing="1.4">
+    <g filter="url(#soft)">
+      <rect x="52" y="44" width="112" height="34" rx="17" fill="#FFFFFF" stroke="#0B3021" stroke-width="2"/>
+      <text x="108" y="66" text-anchor="middle" fill="#0B3021">APPIMAGE</text>
+    </g>
+    <g filter="url(#soft)">
+      <rect x="176" y="22" width="70" height="34" rx="17" fill="#0B3021"/>
+      <text x="211" y="44" text-anchor="middle" fill="#EAF7EE">DEB</text>
+    </g>
+    <g filter="url(#soft)">
+      <rect x="258" y="44" width="70" height="34" rx="17" fill="#FFFFFF" stroke="#0B3021" stroke-width="2"/>
+      <text x="293" y="66" text-anchor="middle" fill="#0B3021">RPM</text>
+    </g>
+    <g filter="url(#soft)">
+      <rect x="340" y="22" width="108" height="34" rx="17" fill="#DFF8CE" stroke="#0B3021" stroke-width="2"/>
+      <text x="394" y="44" text-anchor="middle" fill="#0B3021">FLATPAK</text>
+    </g>
+  </g>
+
+  <g filter="url(#soft)">
+    <!-- box -->
+    <path d="M58 204 218 128l242 78-160 82Z" fill="url(#top)" stroke="#0B3021" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M58 204v112l242 86V288Z" fill="url(#left)" stroke="#0B3021" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M300 288v114l160-82V206Z" fill="url(#right)" stroke="#0B3021" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M170 152 300 194l-68 34-130-42Z" fill="#F7F5E8" opacity=".55"/>
+
+    <!-- green tape over the lid and down the front-left face -->
+    <path d="M232 136l58 20-24 12-58-20Z" fill="url(#tape)" stroke="#0B3021" stroke-width="2.5" stroke-linejoin="round"/>
+    <path d="M208 148l58 20v114l-58-22Z" fill="url(#tape)" stroke="#0B3021" stroke-width="2.5" stroke-linejoin="round"/>
+    <path d="M208 148l58 20v114l-58-22Z" fill="none" stroke="#B9FFD7" stroke-opacity=".35" stroke-width="3"/>
+  </g>
+
+  <!-- label -->
+  <g transform="translate(318 236) rotate(4)">
+    <rect x="0" y="0" width="126" height="76" rx="10" fill="#FBFAF1" stroke="#0B3021" stroke-width="2.5"/>
+    <text x="14" y="30" font-family="'IBM Plex Sans Thai','Noto Sans Thai',sans-serif" font-size="24" font-weight="800" fill="#0B3021">liney<tspan fill="#06C755">.</tspan></text>
+    <text x="14" y="50" font-family="'IBM Plex Mono','SFMono-Regular',Consolas,monospace" font-size="9" letter-spacing="1" fill="#57705F">FOR LINUX</text>
+    <circle cx="104" cy="56" r="8" fill="#06C755"/>
+    <path d="M101 56l2 2 4-4" fill="none" stroke="#08351F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <g transform="translate(214 340)">
+    <circle cx="0" cy="0" r="22" fill="#06C755" stroke="#0B3021" stroke-width="3"/>
+    <path d="M-8 0h16M0-8v16" stroke="#08351F" stroke-width="3" stroke-linecap="round"/>
+  </g>
+</svg>

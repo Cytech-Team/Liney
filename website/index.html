@@ -1,19 +1,25 @@
 <!doctype html>
-<html lang="th">
+<html lang="th" data-type="software">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f6f7f2">
-  <meta name="description" content="Liney — LINE สำหรับ Linux ที่สร้างมาเพื่อเดสก์ท็อป ดาวน์โหลด AppImage, DEB, RPM และ Flatpak จาก GitHub Release จริง พร้อมข้อมูลฟีเจอร์และสถานะการพัฒนา">
-  <meta property="og:title" content="Liney — LINE on Linux, your way">
-  <meta property="og:description" content="คุยต่อบน Linux แบบไม่ต้องอ้อม ผ่านแอปเดสก์ท็อปอิสระที่พัฒนาด้วย Electron และ LINEJS">
+  <meta name="theme-color" content="#f4f4ec">
+  <meta name="description" content="Liney — LINE client สำหรับ Linux ที่เก็บข้อมูลในเครื่อง เปิดแล้วเห็นแชตทันที พร้อม PUSH เป็นหลักและ polling สำรอง ดาวน์โหลด AppImage, DEB, RPM หรือ Flatpak จาก GitHub Releases จริง">
+  <meta name="page-type" content="software">
+  <meta name="site-kind" content="software">
+  <meta property="og:title" content="Liney — LINE บน Linux ที่ไม่ต้องอ้อม">
+  <meta property="og:description" content="เดสก์ท็อป LINE client สำหรับ Linux ที่ออกแบบจากคนใช้ Linux จริง — local-first, push-first และติดตั้งได้จริง">
   <meta property="og:type" content="website">
   <meta property="og:image" content="https://liney.namnarak.in.th/assets/liney-logo.png">
-  <title>Liney — LINE on Linux, your way.</title>
+  <title>Liney — LINE บน Linux ที่ไม่ต้องอ้อม</title>
   <link rel="icon" type="image/svg+xml" href="assets/liney-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap">
   <script src="theme-init.js"></script>
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="home.css">
   <script src="site-config.js"></script>
   <script src="site.js" defer></script>
   <script src="release.js" defer></script>
@@ -34,85 +40,264 @@
 </header>
 
 <main id="main-content">
-  <section class="hero">
-    <div class="container hero-content">
-      <div class="hero-copy">
-        <p class="kicker"><span class="kicker-dot"></span> MADE FOR LINUX, BUILT WITH CARE</p>
-        <h1>ชีวิตอยู่บน <em>Linux</em><br>แชตก็ต้องอยู่ด้วย<span class="headline-period">.</span></h1>
-        <p class="hero-subtitle">ไม่ต้องเปิด Windows เพื่ออ่านข้อความอีกต่อไป Liney คือ LINE client แบบอิสระสำหรับ Linux ที่ออกแบบโดยคนใช้ Linux จริง ๆ</p>
-        <div class="hero-actions">
-          <a href="download.html" class="button button-dark">ดาวน์โหลด Liney <span aria-hidden="true">↗</span></a>
-          <a href="features.html" class="button button-outline">รู้จัก Liney <span aria-hidden="true">↗</span></a>
+  <section class="hp-hero">
+    <div class="container hp-hero-grid">
+      <div class="hp-hero-copy">
+        <p class="hp-kicker"><span class="hp-kicker-dot"></span> LINUX-FIRST · UNOFFICIAL CLIENT</p>
+        <h1>LINE บน Linux<br>ที่ไม่ต้อง<span class="hp-underline">อ้อม<svg viewBox="0 0 220 26" aria-hidden="true" preserveAspectRatio="none"><path d="M4 18c46-10 126-14 212-7" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round"/></svg></span></h1>
+        <p class="hp-hero-sub">เดสก์ท็อป LINE client ที่เก็บแชตไว้ในเครื่อง เปิดแล้วเห็นทันที รับข้อความผ่าน push เป็นหลัก และติดตั้งได้จริงบน Linux ที่คุณใช้อยู่</p>
+        <div class="hp-actions">
+          <a href="download.html" class="button button-dark">ดาวน์โหลดสำหรับ Linux <span aria-hidden="true">↗</span></a>
+          <a href="features.html" class="button button-outline">ดูฟีเจอร์ <span aria-hidden="true">→</span></a>
         </div>
-        <div class="hero-footnote"><span class="mini-avatar">L</span><span><strong>Linux Desktop · รุ่นทดลอง</strong><small>ปัจจุบัน <span data-release-version>ตรวจสอบ Release…</span> · ไม่ใช่แอปจาก LINE อย่างเป็นทางการ</small></span></div>
+        <div class="hp-facts">
+          <span><i class="hp-dot"></i> รุ่นล่าสุด <b data-release-version>กำลังตรวจสอบ…</b></span>
+          <span class="hp-fact-sep" aria-hidden="true"></span>
+          <span>AppImage · DEB · RPM · Flatpak</span>
+          <span class="hp-fact-sep" aria-hidden="true"></span>
+          <span>TLL-1.0</span>
+        </div>
       </div>
 
-      <div class="showcase" aria-label="ตัวอย่างภาพจำลองหน้าต่างแชตของ Liney">
-        <div class="showcase-disc show-disc-one"></div>
-        <div class="showcase-disc show-disc-two"></div>
-        <div class="mock-app">
-          <div class="mock-toolbar"><div class="mock-dots"><i></i><i></i><i></i></div><span>Liney · Linux desktop</span><div class="mock-search">⌕</div></div>
-          <div class="mock-body">
-            <aside class="mock-sidebar">
-              <div class="mock-sidebar-brand"><img src="assets/liney-mark.svg" alt=""><span>Chats</span><b>+</b></div>
-              <div class="mock-filter">ค้นหาการสนทนา...</div>
-              <div class="mock-chat active"><span class="mock-avatar green">T</span><span><b>Team</b><small>เดี๋ยวเจอกัน!</small></span><time>10:24</time></div>
-              <div class="mock-chat"><span class="mock-avatar peach">F</span><span><b>Family</b><small>ส่งรูปให้แล้วนะ</small></span></div>
-              <div class="mock-chat"><span class="mock-avatar lilac">N</span><span><b>Notes</b><small>รายการที่บันทึกไว้</small></span></div>
-              <div class="mock-sidebar-bottom">⌂ <span>Chats</span><span>◉</span><span>⚙</span></div>
-            </aside>
-            <div class="mock-thread">
-              <div class="mock-thread-head"><span class="mock-avatar green">T</span><div><b>Team</b><small>แชตกลุ่ม</small></div><span class="mock-thread-controls">⌕　♧</span></div>
-              <div class="mock-messages"><span class="mock-date">วันนี้</span><div class="mock-bubble incoming">ใช้ Linux อยู่ไหม?</div><div class="mock-bubble outgoing">อยู่สิ ใช้ Liney แล้วนะ ✨</div><div class="mock-bubble incoming">งั้นคุยกันต่อได้เลย!</div><div class="mock-time">10:24 · อ่านแล้ว</div></div>
-              <div class="mock-compose"><span>＋</span><span>ส่งข้อความ…</span><b>↗</b></div>
+      <div class="hp-hero-stage">
+        <svg class="hp-orbit" viewBox="0 0 620 620" aria-hidden="true">
+          <circle cx="310" cy="310" r="286" fill="none" stroke="currentColor" stroke-opacity=".18" stroke-width="1.5" stroke-dasharray="2 12"/>
+          <circle cx="310" cy="310" r="216" fill="none" stroke="currentColor" stroke-opacity=".1" stroke-width="1.5"/>
+          <path d="M82 420c58 52 130 84 210 90" fill="none" stroke="currentColor" stroke-opacity=".22" stroke-width="1.5" stroke-dasharray="3 10"/>
+        </svg>
+
+        <div class="hp-app" aria-hidden="true">
+          <div class="hp-app-bar">
+            <span class="hp-dots"><i></i><i></i><i></i></span>
+            <span class="hp-app-title">Liney</span>
+            <span class="hp-app-status"><i></i> PUSH connected</span>
+          </div>
+          <div class="hp-app-body">
+            <div class="hp-rail">
+              <span class="hp-rail-logo"><img src="assets/liney-mark.svg" alt=""></span>
+              <span class="hp-rail-item active" title="แชต"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v10H9l-5 4v-14Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg></span>
+              <span class="hp-rail-item" title="เพื่อน"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M3.5 19c.5-3.4 2.6-5 5.5-5s5 1.6 5.5 5M16 6.5a3 3 0 0 1 0 5.8M17 14.2c2.1.4 3.3 1.9 3.6 4.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+              <span class="hp-rail-item" title="OpenChat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></span>
+              <span class="hp-rail-item" title="โทร"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5 9.5 9 7.7 10.8c.8 1.9 2.6 3.7 4.5 4.5L14 13.5l4.5 2.5-1 3c-4 .6-9.9-4.3-10.5-8.5l1-3Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></span>
+              <span class="hp-rail-spacer"></span>
+              <span class="hp-rail-item" title="ตั้งค่า"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+            </div>
+            <div class="hp-sidebar">
+              <div class="hp-side-head"><strong>แชต</strong><span>＋</span></div>
+              <div class="hp-search">ค้นหาแชตหรือเพื่อน</div>
+              <div class="hp-chip-row"><span class="active">ทั้งหมด</span><span>ยังไม่อ่าน</span></div>
+              <div class="hp-chat active">
+                <span class="hp-avatar hp-avatar-a">5/10</span>
+                <span class="hp-chat-copy"><b>กลุ่ม 5/10 ปี 2569</b><small><mark>@คุณ</mark> ฝากดูไฟล์ด้วยนะ</small></span>
+                <time>12:40</time>
+              </div>
+              <div class="hp-chat">
+                <span class="hp-avatar hp-avatar-b">นัท</span>
+                <span class="hp-chat-copy"><b>นัท</b><small>เดี๋ยวส่งรูปให้</small></span>
+                <time>12:32</time>
+              </div>
+              <div class="hp-chat">
+                <span class="hp-avatar hp-avatar-c">ครู</span>
+                <span class="hp-chat-copy"><b>ครูอร</b><small>ขอบคุณค่ะ</small></span>
+                <time>11:58</time>
+              </div>
+              <div class="hp-chat">
+                <span class="hp-avatar hp-avatar-d">H</span>
+                <span class="hp-chat-copy"><b>Homework</b><small>สรุปบทที่ 4 แล้ว</small></span>
+                <time>เมื่อวาน</time>
+              </div>
+              <div class="hp-side-foot"><span>SQLite</span><b>local-first</b></div>
+            </div>
+            <div class="hp-thread">
+              <div class="hp-thread-head">
+                <span class="hp-avatar hp-avatar-a">5/10</span>
+                <span class="hp-thread-title"><b>กลุ่ม 5/10 ปี 2569</b><small>5 คน · กำลังใช้งาน</small></span>
+                <span class="hp-thread-tools"><i>⌕</i><i>⋯</i></span>
+              </div>
+              <div class="hp-messages">
+                <div class="hp-day">วันนี้</div>
+                <div class="hp-msg them">
+                  <span class="hp-avatar hp-avatar-b sm">น</span>
+                  <div class="hp-msg-body"><b>นัท</b><p>สรุปงานไว้ใน <mark>@คุณ</mark> แล้วนะ</p><time>12:38</time></div>
+                </div>
+                <div class="hp-msg me"><div class="hp-msg-body"><p>เห็นแล้ว ขอบคุณ!</p><time>12:39 · อ่านแล้ว</time></div></div>
+                <div class="hp-msg them">
+                  <span class="hp-avatar hp-avatar-c sm">ป</span>
+                  <div class="hp-msg-body"><b>ปอ</b><p>ส่งรูปให้แล้ว</p>
+                    <span class="hp-photo" aria-hidden="true">
+                      <svg viewBox="0 0 180 110" preserveAspectRatio="none"><defs><linearGradient id="hp-sky" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#BEEFD0"/><stop offset="1" stop-color="#E9F8DE"/></linearGradient><linearGradient id="hp-hill" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0B7A48"/><stop offset="1" stop-color="#06552F"/></linearGradient></defs><rect width="180" height="110" fill="url(#hp-sky)"/><circle cx="139" cy="30" r="15" fill="#FFE7A8"/><path d="M0 84c28-26 48-34 72-20 22 13 34 9 52-8 17-16 32-17 56 2v52H0Z" fill="url(#hp-hill)"/><path d="M0 96c32-18 56-18 84-6 30 13 58 8 96-8v28H0Z" fill="#05452A" opacity=".8"/></svg>
+                      <small>2 รูป</small>
+                    </span>
+                    <time>12:40</time>
+                  </div>
+                </div>
+              </div>
+              <div class="hp-composer"><span>＋</span><span class="hp-composer-text">ส่งข้อความ…</span><b>↗</b></div>
             </div>
           </div>
         </div>
-        <div class="floating-chip chip-top"><span class="chip-icon">✓</span> Made for your desktop</div>
-        <div class="floating-chip chip-bottom"><span class="chip-icon">↯</span> Powered by LINEJS</div>
-        <p class="mock-caption">ภาพจำลองเพื่อสื่อแนวคิดการออกแบบ · ไม่ใช่ภาพหน้าจอจากโปรแกรมจริง</p>
+
+        <img class="hp-penguin" src="assets/hero-penguin.svg" alt="" width="900" height="900">
+        <span class="hp-float-chip"><span class="hp-chip-check">✓</span> ข้อมูลอยู่ในเครื่อง</span>
       </div>
     </div>
-    <div class="hero-edge"><div class="container edge-inner"><span>LESS FRICTION. MORE CONNECTION.</span><span>scroll to explore <span aria-hidden="true">↓</span></span></div></div>
   </section>
 
-  <section class="ticker" aria-label="เทคโนโลยีที่ใช้"><div class="ticker-track"><span>BUILT FOR LINUX</span><i>✳</i><span>ELECTRON</span><i>✳</i><span>LINEJS</span><i>✳</i><span>LOCAL SQLITE</span><i>✳</i><span>WAYLAND + X11</span><i>✳</i><span>BUILT FOR LINUX</span><i>✳</i><span>ELECTRON</span><i>✳</i><span>LINEJS</span><i>✳</i></div></section>
-
-  <section id="features" class="section home-preview-section">
-  <div class="container">
-    <div class="section-heading"><div><span class="section-index">01 / THE FEATURES</span><h2>คุยได้เหมือนเดิม<br><em>บน Linux ที่ชอบ</em></h2></div><div class="section-action"><p>รวมฟีเจอร์ที่มีอยู่จริง และสถานะสิ่งที่ยังทดลองอย่างชัดเจน</p><a class="button button-outline" href="features.html">ดูฟีเจอร์ทั้งหมด ↗</a></div></div>
-    <div class="home-teaser-grid">
-      <a class="home-teaser teal" href="features.html#messaging"><span>01 / MESSAGING</span><strong>Chat &amp; Media</strong><p>ข้อความ รูปภาพ ไฟล์ และการซิงก์</p><b>↗</b></a>
-      <a class="home-teaser blue" href="features.html#official"><span>02 / OFFICIAL</span><strong>Official Account</strong><p>Flex / Rich Message และข้อความ OA</p><b>↗</b></a>
-      <a class="home-teaser sand" href="features.html#calling"><span>03 / EXPERIMENTAL</span><strong>Calls &amp; Audio</strong><p>ระบบโทรเสียงที่ยังอยู่ระหว่างทดสอบ</p><b>↗</b></a>
+  <section class="hp-section hp-why">
+    <div class="container">
+      <div class="hp-section-head">
+        <div>
+          <span class="hp-index">01 / ทำไม Liney</span>
+          <h2>แชตที่อยู่กับคุณ<br>ไม่ใช่แค่แท็บในเบราว์เซอร์</h2>
+        </div>
+        <p>Liney เป็นเดสก์ท็อปแอปจริง ไม่ใช่เว็บห่อหน้าต่าง — และเลือกเส้นทางข้อมูลที่ทำให้แชตเปิดได้เร็วทุกครั้ง</p>
+      </div>
+      <div class="hp-card-grid">
+        <article class="hp-card">
+          <span class="hp-card-num">01</span>
+          <span class="hp-card-glyph" aria-hidden="true">
+            <svg viewBox="0 0 48 48"><ellipse cx="24" cy="11" rx="14" ry="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M10 11v12c0 3.3 6.3 6 14 6s14-2.7 14-6V11M10 23v12c0 3.3 6.3 6 14 6s14-2.7 14-6V23" fill="none" stroke="currentColor" stroke-width="2"/><path d="M17 29.5c2 2 4.3 3 7 3 2.8 0 5.2-1 7.2-3" fill="none" stroke="var(--hp-green)" stroke-width="2.4" stroke-linecap="round"/></svg>
+          </span>
+          <span class="hp-card-tag">LOCAL-FIRST</span>
+          <h3>ข้อมูลอยู่กับเครื่องคุณ</h3>
+          <p>แชต ประวัติ และมีเดียถูกแคชใน SQLite เปิดแอปแล้วเห็นทันที ไม่ต้องรอโหลดใหม่จากศูนย์ทุกครั้ง</p>
+          <span class="hp-card-fact">SQLite · cache-first startup</span>
+        </article>
+        <article class="hp-card">
+          <span class="hp-card-num">02</span>
+          <span class="hp-card-glyph" aria-hidden="true">
+            <svg viewBox="0 0 48 48"><rect x="5" y="8" width="38" height="27" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 14h38M10 11h.01M14 11h.01M18 11h.01" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M18 41h12M24 35v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="m17 25 4 4 10-11" fill="none" stroke="var(--hp-green)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="hp-card-tag">DESKTOP UI</span>
+          <h3>หน้าตาแบบเดสก์ท็อปจริง</h3>
+          <p>คีย์บอร์ด เมนูคลิกขวา ลากไฟล์ และหน้าต่างดูภาพแยก — ใช้เมาส์และคีย์บอร์ดได้เต็มที่เหมือนแอปอื่นบนเดสก์ท็อป</p>
+          <span class="hp-card-fact">Electron · React</span>
+        </article>
+        <article class="hp-card">
+          <span class="hp-card-num">03</span>
+          <span class="hp-card-glyph" aria-hidden="true">
+            <svg viewBox="0 0 48 48"><path d="M9 35c3.5 0 3.5-6 7-6s3.5 6 7 6 3.5-10 7-10 3.5 12 9 12" fill="none" stroke="var(--hp-green)" stroke-width="2.6" stroke-linecap="round"/><rect x="6" y="40" width="36" height="3" rx="1.5" fill="currentColor" opacity=".22"/><circle cx="35" cy="11" r="5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M35 6V3M35 19v-3M40 11h3M27 11h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </span>
+          <span class="hp-card-tag">TRANSPORT</span>
+          <h3>Push ก่อน polling สำรอง</h3>
+          <p>รับข้อความผ่าน LINE push เป็นหลัก ถ้า transport สะดุดจะสลับไป polling ให้เอง โดยไม่ปล่อยให้แชตหยุดนิ่ง</p>
+          <span class="hp-card-fact">PUSH · polling fallback</span>
+        </article>
+      </div>
     </div>
-  </div>
-</section>
-
-  <section id="how-it-works" class="section home-technology-preview">
-  <div class="container home-technology-layout">
-    <div><span class="section-index">02 / UNDER THE HOOD</span><h2>เกิดมาเพื่อ<br><em>Linux Desktop</em></h2><p>แยก UI, Engine และข้อมูลในเครื่องออกจากกัน ใช้ React + Electron, Bun + LINEJS และ SQLite เพื่อดูแลส่วนต่าง ๆ ได้ชัดเจน</p><a class="button button-light" href="technology.html">ดูเบื้องหลัง Liney ↗</a></div>
-    <a class="technology-preview-visual" href="technology.html" aria-label="อ่านรายละเอียดสถาปัตยกรรม Liney">
-      <span>DESKTOP UI <small>React · Electron</small></span><i>↓ LOCAL IPC ↓</i><span>LINEY ENGINE <small>Bun · LINEJS · SQLite</small></span><i>↓ NETWORK ↓</i><span>LINE SERVICES <small>Unofficial protocol</small></span>
-    </a>
-  </div>
-</section>
-
-  <section id="download" class="section download-promo">
-    <div class="container download-promo-layout"><div><span class="section-index">03 / GET LINEY</span><h2>พร้อมคุยต่อ<br>บน <em>Linux</em> แล้วหรือยัง?</h2><p>AppImage · DEB · RPM · Flatpak bundle · TAR.GZ จากไฟล์ Release ที่มีอยู่จริงบน GitHub</p><a class="button button-dark" href="download.html">เลือกไฟล์สำหรับเครื่องคุณ ↗</a></div><div class="download-promo-art"><span class="download-glyph">↙</span><div class="version-sticker"><span>PUBLIC RELEASE</span><b data-release-version>ตรวจสอบรุ่นล่าสุด…</b><small>ตรวจจาก GitHub Releases</small></div></div></div>
   </section>
 
-  <section id="roadmap" class="section home-roadmap-preview">
-  <div class="container">
-    <div class="section-heading"><div><span class="section-index">04 / NEXT UP</span><h2>ไปต่อแบบ<br><em>ไม่รับปากเกินจริง</em></h2></div><div class="section-action"><p>โฟกัส Linux ก่อน ส่วน Liney Lite และแพลตฟอร์มอื่นยังเป็นไอเดีย</p><a class="button button-outline" href="roadmap.html">เปิด Roadmap ↗</a></div></div>
-    <div class="home-roadmap-strip"><span>NOW</span><strong>ปรับความเสถียรบน Linux</strong><span class="status ready">กำลังพัฒนา</span><a href="roadmap.html" aria-label="ดู Roadmap">↗</a></div>
-  </div>
-</section>
+  <section class="hp-section hp-under">
+    <div class="container hp-under-grid">
+      <div class="hp-under-copy">
+        <span class="hp-index">02 / เบื้องหลัง</span>
+        <h2>แยกชั้นให้ชัด<br>เพื่อให้ซ่อมได้จริง</h2>
+        <p>UI, engine และข้อมูลในเครื่องแยกจากกันชัดเจน ทำให้เปลี่ยนหรือซ่อมส่วนใดส่วนหนึ่งได้โดยไม่ลากทั้งแอปไปด้วย</p>
+        <ul class="hp-list">
+          <li><b>Electron + React</b><span>หน้าต่างเดสก์ท็อปและ UI ที่ใช้ร่วมกับเว็บ build เดิม</span></li>
+          <li><b>Node Worker + LINEJS</b><span>engine ทำงานในโปรเซสแยก พร้อม adapter กัน LINEJS หลุดออกมาที่ UI</span></li>
+          <li><b>SQLite ในเครื่อง</b><span>แหล่งข้อมูลหลักของแชตที่แคชไว้ เปิดแล้วอ่านได้แม้เน็ตไม่พร้อม</span></li>
+        </ul>
+        <a class="hp-text-link" href="technology.html">อ่านสถาปัตยกรรมทั้งหมด <span aria-hidden="true">↗</span></a>
+      </div>
+      <div class="hp-under-art">
+        <svg class="hp-arch" viewBox="0 0 640 440" role="img" aria-labelledby="arch-title">
+          <title id="arch-title">Liney architecture: LINE services, liney-engine and local SQLite, with the React UI above</title>
+          <defs>
+            <marker id="hp-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="currentColor"/></marker>
+          </defs>
+          <g class="hp-arch-line" fill="none" stroke="currentColor" stroke-opacity=".36" stroke-width="1.8" marker-end="url(#hp-arrow)">
+            <path d="M170 220h30" stroke-dasharray="5 6"/>
+            <path d="M440 220h30" stroke-dasharray="5 6"/>
+            <path d="M320 92v68" stroke-dasharray="5 6" marker-start="url(#hp-arrow)"/>
+          </g>
+          <g class="hp-arch-pulse" fill="none" stroke="var(--hp-green)" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="9 110">
+            <path d="M170 220h30"/>
+            <path d="M440 220h30"/>
+            <path d="M320 92v68"/>
+          </g>
+          <g class="hp-arch-node">
+            <rect x="20" y="176" width="150" height="88" rx="16"/>
+            <text x="95" y="214" text-anchor="middle" class="hp-arch-label">LINE Services</text>
+            <text x="95" y="236" text-anchor="middle" class="hp-arch-note">unofficial protocol</text>
+          </g>
+          <g class="hp-arch-node hp-arch-node-main">
+            <rect x="200" y="160" width="240" height="124" rx="20"/>
+            <text x="320" y="198" text-anchor="middle" class="hp-arch-label">liney-engine</text>
+            <text x="320" y="220" text-anchor="middle" class="hp-arch-note">Node Worker · LINEJS</text>
+            <rect x="224" y="240" width="106" height="24" rx="12" class="hp-arch-pill"/>
+            <text x="277" y="256" text-anchor="middle" class="hp-arch-pill-text">sync</text>
+            <rect x="338" y="240" width="78" height="24" rx="12" class="hp-arch-pill"/>
+            <text x="377" y="256" text-anchor="middle" class="hp-arch-pill-text">outbox</text>
+          </g>
+          <g class="hp-arch-node">
+            <rect x="470" y="176" width="150" height="88" rx="16"/>
+            <text x="545" y="214" text-anchor="middle" class="hp-arch-label">SQLite</text>
+            <text x="545" y="236" text-anchor="middle" class="hp-arch-note">source of truth</text>
+          </g>
+          <g class="hp-arch-node hp-arch-node-ui">
+            <rect x="200" y="16" width="240" height="76" rx="16"/>
+            <text x="320" y="48" text-anchor="middle" class="hp-arch-label">React UI</text>
+            <text x="320" y="70" text-anchor="middle" class="hp-arch-note">Electron · preload bridge</text>
+          </g>
+          <text x="336" y="130" class="hp-arch-note">local IPC</text>
+          <text x="95" y="286" text-anchor="middle" class="hp-arch-note">push / REST</text>
+          <text x="545" y="286" text-anchor="middle" class="hp-arch-note">read / write</text>
+        </svg>
+      </div>
+    </div>
+  </section>
 
-  <section class="section final-cta"><div class="container final-cta-inner"><img src="assets/liney-mark.svg" alt="" aria-hidden="true"><div><span class="section-index">COME SAY HELLO</span><h2>มี Linux ก็มี Liney<span>.</span></h2><p>ลองใช้ แชร์ความคิดเห็น และช่วยกันทำให้การแชตบน Linux ดีขึ้น</p></div><div class="final-actions"><a class="button button-dark" href="download.html">ดาวน์โหลดเลย ↗</a><a class="button button-outline" href="https://github.com/Cytech-Team/Liney/issues" target="_blank" rel="noopener noreferrer">แจ้งปัญหา / เสนอไอเดีย</a></div></div></section>
-  <section class="disclaimer-band"><div class="container"><b>ควรรู้ก่อนใช้งาน</b><p>Liney เป็นไคลเอนต์อิสระ ไม่เกี่ยวข้องกับหรือได้รับการรับรองจาก LY Corporation การใช้โปรโตคอลที่ไม่เป็นทางการอาจขัดกับข้อกำหนดของ LINE และมีความเสี่ยงต่อบัญชี</p><a href="notice.html">อ่าน Safety Notice ↗</a></div></section>
+  <section class="hp-download">
+    <div class="container hp-download-grid">
+      <div class="hp-download-copy">
+        <span class="hp-index hp-index-light">03 / ติดตั้ง</span>
+        <h2>ติดตั้งในไม่กี่นาที<br>บน Linux ที่คุณใช้</h2>
+        <p>เลือกแพ็กเกจที่ตรงกับระบบของคุณ ไฟล์ทุกตัวมาจาก GitHub Releases ที่ลงนามและตรวจสอบแล้ว ไม่ต้องติดตั้ง Node.js หรือ LINEJS เอง</p>
+        <div class="hp-download-meta">
+          <span class="hp-version"><i></i> รุ่นล่าสุด <b data-release-version>กำลังตรวจสอบ…</b></span>
+          <a class="hp-text-link hp-text-link-light" href="https://github.com/Cytech-Team/Liney/releases" target="_blank" rel="noopener noreferrer">ดู Releases ทั้งหมด <span aria-hidden="true">↗</span></a>
+        </div>
+        <div class="hp-download-actions">
+          <a href="download.html" class="button button-light">ดาวน์โหลด Liney <span aria-hidden="true">↓</span></a>
+          <a href="features.html" class="button hp-button-ghost">ดูก่อนว่ามีอะไรบ้าง</a>
+        </div>
+      </div>
+      <div class="hp-download-art">
+        <img src="assets/release-parcel.svg" alt="แพ็กเกจ Liney พร้อมตัวเลือก AppImage, DEB, RPM และ Flatpak" width="560" height="460">
+      </div>
+    </div>
+  </section>
+
+  <section class="hp-final">
+    <div class="container hp-final-inner">
+      <span class="hp-index">04 / เริ่มใช้งาน</span>
+      <h2>มี Linux ก็มี Liney<span>.</span></h2>
+      <p>ลองใช้ แชร์ความคิดเห็น และช่วยกันทำให้การแชตบน Linux ดีขึ้น<br>โปรเจกต์อิสระ เปิดซอร์สให้ตรวจสอบได้</p>
+      <div class="hp-final-actions">
+        <a href="download.html" class="button button-dark">ดาวน์โหลดเลย <span aria-hidden="true">↗</span></a>
+        <a href="https://github.com/Cytech-Team/Liney/issues" target="_blank" rel="noopener noreferrer" class="button button-outline">แจ้งปัญหา / เสนอไอเดีย</a>
+      </div>
+    </div>
+    <div class="container hp-disclaimer">
+      <b>ควรรู้ก่อนใช้งาน</b>
+      <p>Liney เป็นไคลเอนต์อิสระ ไม่เกี่ยวข้องกับหรือได้รับการรับรองจาก LY Corporation การใช้โปรโตคอลที่ไม่เป็นทางการอาจขัดกับข้อกำหนดของ LINE และมีความเสี่ยงต่อบัญชี</p>
+      <a href="notice.html">อ่าน Safety Notice ↗</a>
+    </div>
+  </section>
 </main>
 
-<footer class="site-footer"><div class="container footer-layout"><div class="footer-identity"><a class="brand" href="index.html"><img src="assets/liney-mark.svg" alt=""><span class="brand-name">liney<span class="brand-dot">.</span></span></a><p>LINE on Linux, your way.<br>Independent desktop client by Cytech Team Development.</p></div><div class="footer-column"><b>สำรวจ</b><a href="features.html">ฟีเจอร์</a><a href="technology.html">เบื้องหลังระบบ</a><a href="roadmap.html">Roadmap</a><a href="download.html">ดาวน์โหลด</a><a href="https://github.com/Cytech-Team/Liney" target="_blank" rel="noopener noreferrer">GitHub</a></div><div class="footer-column"><b>ข้อควรรู้</b><a href="notice.html">Safety Notice</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="license.html">TLL-1.0 License</a></div><div class="footer-column"><b>ติดต่อ</b><a data-contact-email href="mailto:namnarak@namnarak.in.th">namnarak@namnarak.in.th</a><a href="https://github.com/Cytech-Team/Liney/issues" target="_blank" rel="noopener noreferrer">GitHub Issues ↗</a></div></div><div class="container footer-bottom"><span>© <span data-current-year></span> Cytech Team Development · ไม่ใช่ผลิตภัณฑ์จาก LINE / LY Corporation</span><span>Made for the penguins.</span></div></footer>
+<footer class="site-footer">
+  <div class="container footer-layout">
+    <div class="footer-identity">
+      <a class="brand" href="index.html"><img src="assets/liney-mark.svg" alt=""><span class="brand-name">liney<span class="brand-dot">.</span></span></a>
+      <p>LINE on Linux, your way.<br>Independent desktop client by Cytech Team Development.</p>
+    </div>
+    <div class="footer-column"><b>สำรวจ</b><a href="features.html">ฟีเจอร์</a><a href="technology.html">เบื้องหลังระบบ</a><a href="roadmap.html">Roadmap</a><a href="download.html">ดาวน์โหลด</a><a href="https://github.com/Cytech-Team/Liney" target="_blank" rel="noopener noreferrer">GitHub</a></div>
+    <div class="footer-column"><b>ข้อควรรู้</b><a href="notice.html">Safety Notice</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a><a href="license.html">TLL-1.0 License</a></div>
+    <div class="footer-column"><b>ติดต่อ</b><a data-contact-email href="mailto:namnarak@namnarak.in.th">namnarak@namnarak.in.th</a><a href="https://github.com/Cytech-Team/Liney/issues" target="_blank" rel="noopener noreferrer">GitHub Issues ↗</a></div>
+  </div>
+  <div class="container footer-bottom"><span>© <span data-current-year></span> Cytech Team Development · ไม่ใช่ผลิตภัณฑ์จาก LINE / LY Corporation</span><span>Made for the penguins.</span></div>
+</footer>
 </body>
 </html>

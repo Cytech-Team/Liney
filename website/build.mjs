@@ -10,13 +10,13 @@ const files = [
   "features.html", "technology.html", "roadmap.html", "license.html",
   "LICENSE.txt", "notice.html", "privacy.html", "robots.txt", "sitemap.xml", "_redirects",
   "site-config.js", "site.js", "theme-init.js", "release.js",
-  "styles.css", "theme.css", "liney-app-sw.js", "terms.html", "favicon.svg",
+  "styles.css", "theme.css", "home.css", "liney-app-sw.js", "terms.html", "favicon.svg",
   "icons.svg", "liney-logo.png", "liney-mark.svg",
 ];
 const directories = ["assets"];
 const versioned = [
   "site-config.js", "site.js", "theme-init.js", "release.js",
-  "styles.css", "theme.css",
+  "styles.css", "theme.css", "home.css",
 ];
 
 rmSync(dist, { recursive: true, force: true });

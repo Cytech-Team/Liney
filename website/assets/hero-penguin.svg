@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 900" width="900" height="900" role="img" aria-labelledby="penguin-title penguin-desc">
+  <title id="penguin-title">Liney penguin with chat bubbles</title>
+  <desc id="penguin-desc">An original penguin mascot wearing a green Liney scarf, waving beside two floating chat bubbles.</desc>
+  <defs>
+    <linearGradient id="body" x1="326" y1="270" x2="574" y2="800" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#12442F"/>
+      <stop offset=".58" stop-color="#0B3021"/>
+      <stop offset="1" stop-color="#072117"/>
+    </linearGradient>
+    <linearGradient id="belly" x1="380" y1="336" x2="520" y2="760" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FCFBF2"/>
+      <stop offset="1" stop-color="#E2E9DA"/>
+    </linearGradient>
+    <linearGradient id="scarf" x1="372" y1="402" x2="536" y2="520" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#16E07B"/>
+      <stop offset="1" stop-color="#04A246"/>
+    </linearGradient>
+    <linearGradient id="beak" x1="430" y1="378" x2="470" y2="414" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFBB92"/>
+      <stop offset="1" stop-color="#FF7A50"/>
+    </linearGradient>
+    <linearGradient id="bubble" x1="92" y1="100" x2="340" y2="280" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#F6F9EF"/>
+    </linearGradient>
+    <radialGradient id="glow" cx=".5" cy=".5" r=".5">
+      <stop stop-color="#7DF0AE" stop-opacity=".36"/>
+      <stop offset="1" stop-color="#7DF0AE" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-30%" y="-30%" width="170%" height="180%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="24" stdDeviation="20" flood-color="#071F15" flood-opacity=".22"/>
+    </filter>
+    <filter id="bubble-shadow" x="-40%" y="-40%" width="190%" height="200%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="16" stdDeviation="14" flood-color="#0B3021" flood-opacity=".16"/>
+    </filter>
+  </defs>
+
+  <ellipse cx="452" cy="822" rx="250" ry="38" fill="#0B3021" opacity=".13"/>
+  <circle cx="452" cy="500" r="340" fill="url(#glow)"/>
+
+  <g fill="none" stroke="#0B3021" stroke-opacity=".15" stroke-width="2" stroke-dasharray="1 13" stroke-linecap="round">
+    <path d="M126 654c88-54 138-152 124-258"/>
+    <path d="M770 612c-62-60-92-146-82-232"/>
+    <circle cx="452" cy="500" r="356"/>
+  </g>
+
+  <g fill="#0B3021" opacity=".5">
+    <path d="M170 222l7 17 17 7-17 7-7 17-7-17-17-7 17-7 7-17Z"/>
+    <path d="M752 384l5 12 12 5-12 5-5 12-5-12-12-5 12-5 5-12Z" opacity=".65"/>
+    <path d="M690 150l4 10 10 4-10 4-4 10-4-10-10-4 10-4 4-10Z" opacity=".45"/>
+  </g>
+
+  <!-- typing bubble -->
+  <g filter="url(#bubble-shadow)">
+    <path d="M124 240l-10 50 50-30" fill="#FFFFFF" stroke="#0B3021" stroke-width="3" stroke-linejoin="round"/>
+    <rect x="76" y="92" width="284" height="158" rx="38" fill="url(#bubble)" stroke="#0B3021" stroke-width="3"/>
+    <circle cx="166" cy="171" r="11" fill="#06C755"/>
+    <circle cx="218" cy="171" r="11" fill="#06C755" opacity=".62"/>
+    <circle cx="270" cy="171" r="11" fill="#06C755" opacity=".32"/>
+    <circle cx="326" cy="128" r="8" fill="#FF8A63"/>
+  </g>
+
+  <!-- reaction bubble -->
+  <g filter="url(#bubble-shadow)">
+    <path d="M690 282l34 34 20-44" fill="#FFFFFF" stroke="#0B3021" stroke-width="3" stroke-linejoin="round"/>
+    <rect x="648" y="188" width="150" height="104" rx="30" fill="url(#bubble)" stroke="#0B3021" stroke-width="3"/>
+    <path d="M723 262c-3-15-24-31-33-15-7 12 10 27 33 39 23-12 40-27 33-39-9-16-30 0-33 15Z" fill="#FF8A63" stroke="#0B3021" stroke-width="3" stroke-linejoin="round"/>
+  </g>
+
+  <!-- scarf tail behind the body -->
+  <path d="M512 430c42 16 64 58 56 108-4 26-30 28-37 4-8-28-18-56-39-76Z" fill="url(#scarf)" stroke="#07251A" stroke-width="3"/>
+  <path d="M516 446c26 20 40 48 38 82" fill="none" stroke="#B7FFD6" stroke-opacity=".38" stroke-width="4" stroke-linecap="round"/>
+
+  <g filter="url(#soft)">
+    <!-- body -->
+    <path d="M450 252c-78 0-120 60-124 150-4 98 4 238 30 318 18 56 52 80 94 80 46 0 82-28 100-86 24-78 30-198 24-290-6-98-46-172-124-172Z" fill="url(#body)" stroke="#07251A" stroke-width="4"/>
+    <!-- belly -->
+    <path d="M450 330c-50 0-74 52-76 128-2 94 10 204 34 266 16 40 42 54 66 40 26-16 40-76 44-146 5-90-1-186-22-238-14-36-28-50-46-50Z" fill="url(#belly)"/>
+    <path d="M384 500c-1 74 7 152 24 202" fill="none" stroke="#FFFFFF" stroke-opacity=".55" stroke-width="6" stroke-linecap="round"/>
+    <!-- face -->
+    <path d="M372 356c-6-50 30-80 78-80 49 0 84 30 78 82-4 34-34 52-78 52-45 0-74-20-78-54Z" fill="url(#belly)"/>
+    <!-- eyes -->
+    <circle cx="414" cy="352" r="11" fill="#071F15"/>
+    <circle cx="486" cy="352" r="11" fill="#071F15"/>
+    <circle cx="418" cy="348" r="4" fill="#FFFFFF"/>
+    <circle cx="490" cy="348" r="4" fill="#FFFFFF"/>
+    <!-- beak -->
+    <path d="M432 384c12-5 24-5 36 0 6 3 5 10-4 16-8 5-19 8-28 5-8-2-12-7-12-11 0-4 3-8 8-10Z" fill="url(#beak)" stroke="#8A3A20" stroke-width="2.5"/>
+    <!-- cheeks -->
+    <ellipse cx="380" cy="388" rx="16" ry="7" fill="#FF9C78" opacity=".34"/>
+    <ellipse cx="520" cy="388" rx="16" ry="7" fill="#FF9C78" opacity=".34"/>
+    <!-- raised flipper -->
+    <path d="M330 450c-32-28-62-90-74-146-6-24 18-32 31-11 25 40 51 78 79 110Z" fill="url(#body)" stroke="#07251A" stroke-width="4"/>
+    <path d="M276 314c20 38 44 70 68 94" fill="none" stroke="#2D6B50" stroke-opacity=".55" stroke-width="4" stroke-linecap="round"/>
+    <!-- resting flipper -->
+    <path d="M556 446c38 32 60 88 52 140-5 25-28 27-38 4-13-32-27-64-44-92Z" fill="url(#body)" stroke="#07251A" stroke-width="4"/>
+    <!-- scarf -->
+    <path d="M378 404c22 28 130 28 156-2 12 16 6 42-18 54-42 21-100 21-138 0-24-14-26-37-10-52Z" fill="url(#scarf)" stroke="#07251A" stroke-width="3.5"/>
+    <path d="M396 422c32 18 92 19 126 0" fill="none" stroke="#D2FFE2" stroke-opacity=".55" stroke-width="5" stroke-linecap="round"/>
+    <path d="M484 426l3.4 7.6 7.6 3.4-7.6 3.4-3.4 7.6-3.4-7.6-7.6-3.4 7.6-3.4 3.4-7.6Z" fill="#F7FBEE" stroke="#07251A" stroke-width="2" stroke-linejoin="round"/>
+    <!-- feet -->
+    <path d="M368 788c-30 4-52 24-46 44 6 20 44 22 74 8 22-10 28-30 15-42-11-10-27-12-43-10Z" fill="url(#beak)" stroke="#8A3A20" stroke-width="3"/>
+    <path d="M532 788c30 4 52 24 46 44-6 20-44 22-74 8-22-10-28-30-15-42 11-10 27-12 43-10Z" fill="url(#beak)" stroke="#8A3A20" stroke-width="3"/>
+  </g>
+</svg>
