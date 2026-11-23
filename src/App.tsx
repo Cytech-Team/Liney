@@ -4481,11 +4481,12 @@ function MessageAvatar({ message, chat, onOpenProfile }: { message: Message; cha
   );
 }
 
-function MessageSenderLabel({ message, chat, onOpenOfficialMessage, onMention }: {
+function MessageSenderLabel({ message, chat, onOpenOfficialMessage, onMention, onOpenProfile }: {
   message: Message;
   chat: Chat;
   onOpenOfficialMessage: (message: Message) => void;
   onMention?: (mid: string, name: string) => void;
+  onOpenProfile?: (mid: string, fallbackName?: string, fallbackAvatarUrl?: string) => void;
 }) {
   const { t } = useAppTranslation();
   if (message.author !== "them" || chat.kind === "dm") return null;
@@ -4498,28 +4499,32 @@ function MessageSenderLabel({ message, chat, onOpenOfficialMessage, onMention }:
     );
   }
   const mid = String(message.senderId ?? "");
-  const canMention = Boolean(onMention) && chat.kind === "group" && /^[up][a-f0-9]{32}$/i.test(mid);
+  const validMid = /^[up][a-f0-9]{32}$/i.test(mid);
+  const canMention = Boolean(onMention) && chat.kind === "group" && validMid;
+  const canOpenProfile = Boolean(onOpenProfile) && validMid;
+  if (!canMention && !canOpenProfile) {
+    return <div className="message-sender-name">{name}</div>;
+  }
   return (
-    <div className={`message-sender-name${canMention ? " is-mentionable" : ""}`}>
-      {canMention ? (
-        <button
-          className="message-sender-link"
-          type="button"
-          tabIndex={-1}
-          title={t("กด Shift + คลิกเพื่อแท็กชื่อนี้")}
-          onMouseDown={(event) => {
-            // Keep the composer focused and stop Shift+click from selecting
-            // page text; the click handler still fires.
-            if (event.shiftKey) event.preventDefault();
-          }}
-          onClick={(event) => {
-            // Shift+click is the tag gesture; keyboard activation (detail = 0)
-            // works without the modifier.
-            if (!event.shiftKey && event.detail !== 0) return;
+    <div className="message-sender-name is-actionable">
+      <button
+        className="message-sender-link"
+        type="button"
+        tabIndex={-1}
+        title={canMention ? t("คลิกเพื่อดูโปรไฟล์ · Shift + คลิกเพื่อแท็ก") : t("ดูโปรไฟล์")}
+        onMouseDown={(event) => {
+          // Shift+click tags without stealing focus from the composer or
+          // selecting page text; a plain click follows the normal button path.
+          if (event.shiftKey && canMention) event.preventDefault();
+        }}
+        onClick={(event) => {
+          if (event.shiftKey && canMention) {
             onMention!(mid, name);
-          }}
-        >{name}</button>
-      ) : name}
+            return;
+          }
+          onOpenProfile?.(mid, name, message.senderAvatarUrl);
+        }}
+      >{name}</button>
     </div>
   );
 }
@@ -5698,7 +5703,7 @@ function Conversation({
               >
                 {message.author === "them" ? <MessageAvatar message={message} chat={chat} onOpenProfile={onOpenProfile} /> : null}
                 <div className="message-cluster">
-                  <MessageSenderLabel message={message} chat={chat} onOpenOfficialMessage={onOpenOfficialMessage} onMention={tagSender} />
+                  <MessageSenderLabel message={message} chat={chat} onOpenOfficialMessage={onOpenOfficialMessage} onMention={tagSender} onOpenProfile={onOpenProfile} />
                   <div
                     className="message-action-anchor"
                     ref={(element) => {
