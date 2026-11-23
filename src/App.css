@@ -231,8 +231,9 @@ button { border: 0; background: none; cursor: pointer; }
 .message-sender-link, .official-message-link { padding: 0; color: var(--link); font: inherit; text-align: left; }
 .message-sender-link:hover, .message-sender-link:focus-visible, .official-message-link:hover, .official-message-link:focus-visible { text-decoration: underline; text-underline-offset: 2px; }
 /* Shift+click (or keyboard) tags the sender in a group chat. */
-.message-sender-name.is-mentionable .message-sender-link { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 4px; cursor: pointer; }
-.message-sender-name.is-mentionable .message-sender-link:hover { color: var(--green-strong); }
+.message-sender-name.is-mentionable .message-sender-link { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 4px; cursor: pointer; color: var(--text); text-decoration: none; }
+.message-sender-name.is-mentionable .message-sender-link:hover,
+.message-sender-name.is-mentionable .message-sender-link:focus-visible { color: var(--text); text-decoration: none; }
 .official-message-link { align-self: flex-start; margin-top: 7px; font-size: 11px; line-height: 1.35; }
 .message-cluster { min-width: 0; display: flex; flex-direction: column; max-width: min(520px, 70%); }
 .message-row.mine .message-cluster { align-items: flex-end; }
