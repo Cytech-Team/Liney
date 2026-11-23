@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  formatMediaDuration,
   isPlaceholderSenderName,
   liveMessagePreview,
   notificationSenderName,
@@ -21,6 +22,14 @@ describe("message presentation helpers", () => {
     })).toBe("โทรสำเร็จ · 11 วินาที");
     expect(liveMessagePreview({ contentType: 6, text: "Call History : 11000 millisecs, Result: 16" })).toBe("การโทร");
     expect(liveMessagePreview({})).toBe("ข้อความใหม่");
+  });
+
+  test("formats media duration as a compact clock", () => {
+    expect(formatMediaDuration(0)).toBe("");
+    expect(formatMediaDuration(7_000)).toBe("0:07");
+    expect(formatMediaDuration(65_000)).toBe("1:05");
+    expect(formatMediaDuration(3_723_000)).toBe("1:02:03");
+    expect(formatMediaDuration("not-a-number")).toBe("");
   });
 
   test("recognizes only known placeholder sender labels", () => {

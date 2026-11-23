@@ -46,8 +46,10 @@ import {
 } from "./events/system-account-policy";
 import { eventTransportPolicy } from "./events/transport-policy";
 import { CallManager } from "./call-manager";
-import { LineyDatabase, type DatabaseChat, type DatabaseMessage, type OutboxRecord } from "./database";
+import { LineyDatabase, type DatabaseChat, type DatabaseMessage, type OfficialAccountRow, type OutboxRecord } from "./database";
 import { LineyMediaCache } from "./media-cache";
+import { LineyVideoCache, MAX_VIDEO_ENTRY_BYTES, videoCacheToken } from "./video-cache";
+import { mediaDurationMs } from "./media-duration";
 import { decodeMediaBase64, MediaWorker } from "./media-worker";
 import { detectImageMime, normalizeImageBlob } from "./media-format";
 import {
@@ -81,6 +83,8 @@ import {
 } from "./talk-history";
 import { flexAltText, parseFlexMessage } from "./flex";
 import { parseRichMessage } from "./rich";
+import { chatEventMids, chatEventText, parseChatEvent } from "./chat-event";
+import { isLikelyBotChat } from "../src/lib/chat-bot";
 import { richAssetAuthHeaders } from "./rich-asset";
 import { callHistoryPreview, parseCallHistory } from "./call-history";
 import { canonicalTalkOperationType, isLineServiceChatOperation } from "./talk-operation";
@@ -531,6 +535,7 @@ function prunePersistentCache(force = false): void {
 }
 prunePersistentCache(true);
 const mediaDiskCache = new LineyMediaCache(join(dataPath(), "media"));
+const videoCache = new LineyVideoCache(join(dataPath(), "video-cache"));
 const mediaUploadTempDir = join(dataPath(), "media-upload-tmp");
 let syncCoordinator: SyncCoordinator | null = null;
 function getSyncCoordinator(): SyncCoordinator {
@@ -741,6 +746,7 @@ async function clearLocalSession() {
   await resetSessionState("logged-out");
   database.clearAccount(ACCOUNT_ID);
   await mediaDiskCache.clear();
+  await videoCache.clear();
   ownedStickerCache = null;
   stickerCatalogCache.clear();
   ACCOUNT_ID = "default";
@@ -797,6 +803,7 @@ async function activateAccount(profile: any): Promise<{ changed: boolean; migrat
     mediaWorker.cancelAll();
     await callManager.stop("account-switched").catch(() => undefined);
     mediaPreviewCache.clear();
+    await videoCache.clear();
     messageMediaSourceCache.clear();
     preSyncedMessages.clear();
     liveMessageOverlayKeys.clear();
@@ -1034,8 +1041,12 @@ async function tryImageSource(
   }
 }
 
-async function fetchMessageMediaBlob(messageId: string, isSquare: boolean, chatId?: string, full = false): Promise<{ blob: Blob; cacheable: boolean }> {
-  if (!client) throw new Error("not authenticated");
+/**
+ * Resolve the raw LINE payload for a media message, recovering it from the
+ * room when an older database did not persist raw_json. Shared by image and
+ * video downloads so their E2EE/OBS behaviour cannot drift apart.
+ */
+async function resolveMessageMediaRaw(messageId: string, isSquare: boolean, chatId?: string): Promise<any> {
   const source = messageMediaSourceCache.get(`${isSquare ? "square" : "talk"}:${messageId}`);
   const persisted = database.getMessageSource(
     ACCOUNT_ID,
@@ -1049,7 +1060,7 @@ async function fetchMessageMediaBlob(messageId: string, isSquare: boolean, chatI
   if (!source?.raw && !persisted?.raw && chatId) {
     // Older databases did not persist the raw LINE payload. Recover the
     // message once from the room so its OBS/E2EE metadata can be cached for
-    // subsequent restarts instead of leaving an image permanently blank.
+    // subsequent restarts instead of leaving media permanently blank.
     try {
       const recovered = isSquare
         ? await fetchOpenChatMessagesNormalized(chatId, 100)
@@ -1064,6 +1075,12 @@ async function fetchMessageMediaBlob(messageId: string, isSquare: boolean, chatI
       // Continue with the normal message-id based OBS fallbacks below.
     }
   }
+  return raw;
+}
+
+async function fetchMessageMediaBlob(messageId: string, isSquare: boolean, chatId?: string, full = false): Promise<{ blob: Blob; cacheable: boolean }> {
+  if (!client) throw new Error("not authenticated");
+  const raw = await resolveMessageMediaRaw(messageId, isSquare, chatId);
   const metadata = messageContentMetadata(raw);
   const contentType = contentTypeCode(raw?.contentType);
 
@@ -1158,6 +1175,58 @@ async function fetchMessageMediaBlob(messageId: string, isSquare: boolean, chatI
   }
 
   throw new Error(`LINE media object ${messageId} is unavailable`);
+}
+
+async function fetchMessageVideoBlob(messageId: string, isSquare: boolean, chatId?: string): Promise<{ blob: Blob; durationMs?: number }> {
+  if (!client) throw new Error("not authenticated");
+  const raw = await resolveMessageMediaRaw(messageId, isSquare, chatId);
+  const metadata = messageContentMetadata(raw);
+  const durationMs = mediaDurationMs(raw);
+  let blob: Blob | undefined;
+
+  // Letter Sealing media: the full object is only available after decrypting
+  // its chunk list. Never fall through to the plaintext OBS probes for an
+  // encrypted video: that would cache ciphertext as a playable file.
+  if (!isSquare && Array.isArray(raw?.chunks) && raw.chunks.length) {
+    try {
+      blob = await LineJsAdapter.downloadMediaByE2EE(client, raw);
+    } catch {
+      throw new Error("ถอดรหัสวิดีโอ E2EE ไม่สำเร็จ · เชื่อมบัญชี LINE ใหม่แล้วลองอีกครั้ง");
+    }
+  } else {
+    try {
+      blob = await downloadObsMessageData(messageId, false, isSquare);
+    } catch {
+      // Fall through to the SDK helper; older gateways only expose that path.
+    }
+
+    if (!blob?.size) {
+      try {
+        blob = await LineJsAdapter.downloadMessageData(client, {
+          messageId,
+          isPreview: false,
+          isSquare,
+        });
+      } catch {
+        // The signed DOWNLOAD_URL below is the last compatibility path.
+      }
+    }
+
+    if (!blob?.size) {
+      const downloadUrl = httpsUrl(metadata.DOWNLOAD_URL);
+      if (downloadUrl) {
+        try {
+          blob = await fetchMessageAsset(client, downloadUrl);
+        } catch {
+          blob = undefined;
+        }
+      }
+    }
+  }
+
+  if (!blob?.size) throw new Error("LINE ไม่ส่งไฟล์วิดีโอกลับมา (อาจหมดอายุแล้ว)");
+  if (blob.size > MAX_VIDEO_ENTRY_BYTES) throw new Error("วิดีโอใหญ่เกิน 250 MB จึงเล่นใน Liney ไม่ได้");
+  return { blob, durationMs };
 }
 
 async function getImagePreviewDataUrl(messageId: string, isSquare: boolean, chatId?: string, forceRefresh = false, full = false): Promise<string> {
@@ -1371,7 +1440,11 @@ function midTypeName(value: unknown): string {
 }
 
 function isBotTargetProfile(profile: any): boolean {
-  const userType = profile?.userType;
+  const detail = profile?.targetProfileDetail
+    ?? profile?.contact?.targetProfileDetail
+    ?? profile?.contact
+    ?? profile;
+  const userType = profile?.userType ?? profile?.type ?? detail?.userType ?? detail?.type;
   const normalized = String(userType ?? "").trim().toUpperCase();
   return userType === 2 || normalized === "2" || normalized === "BOT";
 }
@@ -1695,10 +1768,28 @@ async function resolveIdentities(
   return result;
 }
 
+function chatEventNameFor(mid: string): string {
+  return talkSenderCache.get(mid)?.name || squareSenderCache.get(mid)?.name || "";
+}
+
+function chatEventPreview(rawMessage: unknown): string {
+  const raw = rawMessage && typeof rawMessage === "object"
+    ? rawMessage as Record<string, unknown>
+    : {};
+  const from = String(raw.from ?? "");
+  const selfMid = client ? String(LineJsAdapter.profileMid(client) ?? "") : "";
+  return chatEventText(raw, chatEventNameFor, {
+    selfMid,
+    senderMid: from,
+    senderName: talkSenderCache.get(from)?.name || squareSenderCache.get(from)?.name || "",
+  });
+}
+
 function displayMessageText(text: unknown, contentType: unknown, rawMessage?: unknown) {
   const raw = String(text ?? "").replace(/\r\n?/g, "\n").trim();
   const code = contentTypeCode(contentType);
   if (code === 6) return callHistoryPreview(parseCallHistory(rawMessage ?? { contentType, text }));
+  if (code === 18) return chatEventPreview(rawMessage);
   if (code === 22) return flexAltText(rawMessage) || "การ์ดข้อความ";
   const internalTokens = new Set([
     "IMAGE", "VIDEO", "AUDIO", "CALL", "STICKER", "FILE", "LOCATION",
@@ -1720,6 +1811,7 @@ function compactPreview(text: unknown, contentType: unknown, rawMessage?: unknow
   const clean = String(text ?? "").replace(/\s+/g, " ").trim();
   const code = contentTypeCode(contentType);
   if (code === 6) return callHistoryPreview(parseCallHistory(rawMessage ?? { contentType, text }));
+  if (code === 18) return chatEventPreview(rawMessage);
   if (code === 22) return flexAltText(rawMessage) || "การ์ดข้อความ";
   // LINEJS may surface the enum token itself as message.text for non-text
   // messages (for example POSTNOTIFICATION). Never show that internal token
@@ -1739,7 +1831,7 @@ function mediaSourceKey(messageId: string, isSquare: boolean) {
 
 function rememberMessageMedia(raw: any, isSquare: boolean) {
   const id = String(raw?.id ?? "");
-  if (!id || ![1, 17].includes(contentTypeCode(raw?.contentType))) return;
+  if (!id || ![1, 2, 17].includes(contentTypeCode(raw?.contentType))) return;
   messageMediaSourceCache.delete(mediaSourceKey(id, isSquare));
   messageMediaSourceCache.set(mediaSourceKey(id, isSquare), { raw, isSquare });
   trimMapOldest(messageMediaSourceCache, MESSAGE_MEDIA_SOURCE_LIMIT);
@@ -2162,6 +2254,9 @@ async function normalizeTalkChat(chat: any, box: any, historyState = talkMessage
   const cachedPeerName = isDm && !hasUsefulIdentityName && !hasUsefulChatName
     ? database.getLatestPeerName(ACCOUNT_ID, mid)
     : undefined;
+  const cachedChatName = isDm && !hasUsefulIdentityName && !hasUsefulChatName
+    ? database.getChatName(ACCOUNT_ID, mid)
+    : "";
   const rawLast = box?.lastMessages?.[0];
   if (rawLast) rememberMessageMedia(rawLast, false);
 
@@ -2200,12 +2295,29 @@ async function normalizeTalkChat(chat: any, box: any, historyState = talkMessage
         ...(identity.profileFetchedAt ? { profileFetchedAt: identity.profileFetchedAt } : {}),
       }
     : normalizedRaw;
+  // LINE's target-profile API does not consistently mark brand Official
+  // Accounts as BOT. Keep the profile/DB signals first, then cover the
+  // LINE-branded and common Thai OA names until the service exposes a
+  // reliable chat-level OA type.
+  const displayName = chatName || identityName || cachedChatName;
+  const looksOfficialAccount = isDm && (
+    /^LINE\b/i.test(displayName)
+    || /^(Thailand Post|Krungthai|Krungsri|บิงช์\s*TODAY|KBank|Service Messages|MyCall|Gamestore)\b/i.test(displayName)
+  );
+  // MessageBox.midType is LINE's chat-level identity type. BOT (6) is the
+  // reliable signal for Official Accounts; the profile userType is USER for
+  // several brand OAs.
+  const boxMidType = String((box as any)?.midType ?? "").trim().toUpperCase();
+  const boxIsBot = (box as any)?.midType === 6 || boxMidType === "6" || boxMidType === "BOT";
+  const isOfficialAccount = Boolean(identity?.isOfficialAccount)
+    || (isDm && (database.chatHasOfficialMessages(ACCOUNT_ID, mid) || boxIsBot || looksOfficialAccount));
   return {
     id: mid,
     name: isDm
-      ? (hasUsefulIdentityName ? identityName : hasUsefulChatName ? chatName : cachedPeerName || String(identity?.name || "LINE Chat"))
+      ? (hasUsefulIdentityName ? identityName : hasUsefulChatName ? chatName : cachedChatName || cachedPeerName || String(identity?.name || "LINE Chat"))
       : (hasUsefulChatName ? chatName : String(identity?.name || "LINE Chat")),
     kind: isDm ? "dm" : "group",
+    isOfficialAccount,
     avatarUrl,
     preview,
     unread: Number(box?.unreadCount ?? 0),
@@ -2590,6 +2702,136 @@ async function loadChatsList(persist = true, canPersist: () => boolean = () => t
   return result;
 }
 
+/**
+ * LINE's Official Account directory is separate from chat message boxes: it
+ * includes accounts the user follows even when no chat history exists. The
+ * list is cached in SQLite so offline startup still separates bots correctly.
+ */
+let officialAccountDirectoryCache: { at: number; chats: any[] } | null = null;
+let officialAccountLookupWarned = false;
+const OFFICIAL_ACCOUNT_DIRECTORY_TTL = 6 * 60 * 60 * 1000;
+
+function officialAccountChatFromRow(row: OfficialAccountRow, cached?: DatabaseChat): any {
+  const name = String(row.name || cached?.name || "").trim() || "บัญชีทางการ";
+  // Directory-only accounts have no chats row; derive the preview/time from
+  // the messages that were loaded when the user opened the OA so the list
+  // never claims "ยังไม่เคยแชท" after a real history fetch.
+  const latest = cached ? null : database.latestMessage(ACCOUNT_ID, row.mid);
+  const preview = cached?.preview
+    || (latest ? compactPreview(latest.text, latest.contentType, latest.raw) : "");
+  const lastMessageTime = cached?.lastMessageTime || latest?.createdTime || 0;
+  return {
+    id: row.mid,
+    kind: "dm",
+    name,
+    avatarUrl: row.avatarUrl || cached?.avatarUrl || talkProfileImageUrl(row.mid, talkProfileRefreshVersion()),
+    preview,
+    unread: cached?.unread ?? 0,
+    lastMessageTime,
+    memberCount: cached?.memberCount ?? 0,
+    pinned: cached?.pinned ?? false,
+    favoriteTimestamp: cached?.favoriteTimestamp ?? 0,
+    statusMessage: cached?.statusMessage ?? "",
+    isFavorite: cached?.isFavorite ?? false,
+    favoriteTime: cached?.favoriteTime ?? 0,
+    historyState: cached?.historyState ?? (lastMessageTime ? "available" : "new"),
+    isOfficialAccount: true,
+    raw: { officialAccount: true, businessAccount: row.businessAccount, botType: row.botType },
+  };
+}
+
+function cachedOfficialAccountChats(): any[] {
+  const known = new Map(database.listChats(ACCOUNT_ID, "dm").map((chat) => [chat.id, chat]));
+  const byId = new Map<string, any>();
+  for (const chat of known.values()) {
+    if (isLikelyBotChat(chat) || database.chatHasOfficialMessages(ACCOUNT_ID, chat.id)) {
+      byId.set(chat.id, { ...chat, isOfficialAccount: true });
+    }
+  }
+  for (const row of database.listOfficialAccounts(ACCOUNT_ID)) {
+    if (!/^u[0-9a-f]{32}$/i.test(row.mid)) continue;
+    const chat = officialAccountChatFromRow(row, known.get(row.mid));
+    byId.set(chat.id, { ...byId.get(chat.id), ...chat, isOfficialAccount: true });
+  }
+  return [...byId.values()].sort(
+    (left, right) => Number(right.lastMessageTime ?? 0) - Number(left.lastMessageTime ?? 0),
+  );
+}
+
+async function loadOfficialAccountDirectory(force = false): Promise<any[]> {
+  const cached = officialAccountDirectoryCache;
+  if (!force && cached && Date.now() - cached.at < OFFICIAL_ACCOUNT_DIRECTORY_TTL) {
+    return cached.chats;
+  }
+  if (!client) {
+    const local = cachedOfficialAccountChats();
+    if (local.length) return local;
+    throw new Error("not authenticated");
+  }
+  let contactMids: string[] = [];
+  try {
+    contactMids = (await LineJsAdapter.getAllContactIds(client)).slice(0, 3000);
+  } catch (error) {
+    // One diagnostic line per session; never include the response payload.
+    if (!officialAccountLookupWarned) {
+      officialAccountLookupWarned = true;
+      console.warn("[liney] official account directory unavailable:", error instanceof Error ? error.message : String(error));
+    }
+  }
+  const rows: OfficialAccountRow[] = [];
+  const seen = new Set<string>();
+  let firstError = "";
+  for (let offset = 0; offset < contactMids.length; offset += 50) {
+    const batch = contactMids.slice(offset, offset + 50);
+    let contacts: Record<string, any> = {};
+    try {
+      const response: any = await LineJsAdapter.getContactsV2(client, { mids: batch });
+      contacts = response?.contacts ?? {};
+    } catch (error) {
+      firstError ||= error instanceof Error ? error.message : String(error);
+    }
+    for (const [rawMid, entry] of Object.entries(contacts)) {
+      const mid = String(rawMid ?? "").trim();
+      if (!/^u[0-9a-f]{32}$/i.test(mid) || seen.has(mid)) continue;
+      const contact = entry?.contact ?? entry ?? {};
+      const type = Number(contact?.type);
+      // ContactType.PROMOTION_BOT (8) marks an Official Account contact even
+      // when the profile-level userType is USER.
+      const isOfficial = type === 8 || String(contact?.type ?? "").trim().toUpperCase() === "PROMOTION_BOT";
+      if (!isOfficial) continue;
+      seen.add(mid);
+      rows.push({
+        mid,
+        name: String(contact?.displayName ?? "").trim(),
+        avatarUrl: talkProfileImageUrl(
+          mid,
+          contact?.pictureStatus || talkProfileRefreshVersion(),
+          contact?.picturePath,
+        ),
+        businessAccount: true,
+        botType: "OFFICIAL",
+      });
+    }
+  }
+  if (!rows.length) {
+    if (firstError && !officialAccountLookupWarned) {
+      officialAccountLookupWarned = true;
+      console.warn("[liney] official account directory unavailable:", firstError);
+    }
+    return cachedOfficialAccountChats();
+  }
+  database.replaceOfficialAccounts(ACCOUNT_ID, rows);
+  const known = new Map(database.listChats(ACCOUNT_ID, "dm").map((chat) => [chat.id, chat]));
+  const chats = rows
+    .map((row) => officialAccountChatFromRow(
+      { ...row, avatarUrl: row.avatarUrl || known.get(row.mid)?.avatarUrl || "" },
+      known.get(row.mid),
+    ))
+    .sort((left, right) => Number(right.lastMessageTime ?? 0) - Number(left.lastMessageTime ?? 0));
+  officialAccountDirectoryCache = { at: Date.now(), chats };
+  return chats;
+}
+
 async function loadFriendsList(persist = true, canPersist: () => boolean = () => true, retryOnly = false): Promise<any[]> {
   if (!client) throw new Error("not authenticated");
   const users: any[] = retryOnly
@@ -2960,6 +3202,7 @@ async function fetchTalkMessagesNormalized(
       edited: editState.edited || undefined,
       updatedTime: editState.updatedTime,
       filename: mediaFilename(raw),
+      durationMs: contentType === 2 ? mediaDurationMs(raw) : undefined,
       stickerUrl: contentType === 7 ? stickerUrlFromRaw(raw) : undefined,
       flex: contentType === 22 ? parseFlexMessage(raw) : undefined,
       reactions: reactionSummaries(raw?.reactions, selfMid),
@@ -2971,13 +3214,18 @@ async function fetchTalkMessagesNormalized(
     };
   });
   const uniqueRows = [...new Map(rows.map((item: any) => [String(item.id), item])).values()];
-  const identities = await resolveTalkIdentities(
-    uniqueRows.filter((item: any) => !item.isMine).map((item: any) => item.from),
-  );
+  const eventMids = uniqueRows.flatMap((item: any) =>
+    Number(item.contentType) === 18 ? chatEventMids(parseChatEvent(item.raw)) : []);
+  const identities = await resolveTalkIdentities([
+    ...uniqueRows.filter((item: any) => !item.isMine).map((item: any) => item.from),
+    ...eventMids,
+  ]);
   return decorateReplyReferences(uniqueRows.map((item: any) => {
     const sender = item.isMine ? null : identities.get(item.from);
+    const text = Number(item.contentType) === 18 ? chatEventPreview(item.raw) : item.text;
     return {
       ...item,
+      text,
       senderId: sender?.id ?? item.from,
       senderName: sender?.name ?? "",
       senderAvatarUrl: sender?.avatarUrl ?? "",
@@ -3011,6 +3259,7 @@ function squareHistoryItem(event: any, chatId: string, selfMid: string): any | n
     contentType,
     readCount: Math.max(0, Number(message?.readCount ?? 0)),
     filename: mediaFilename(message),
+    durationMs: contentType === 2 ? mediaDurationMs(message) : undefined,
     stickerUrl: contentType === 7 ? stickerUrlFromRaw(message) : undefined,
     flex: contentType === 22 ? parseFlexMessage(message) : undefined,
     reactions: squareReactionSummaries(envelope.reactionStatus, selfMid),
@@ -3281,7 +3530,9 @@ function decorateStoredMessages(messages: DatabaseMessage[]): any[] {
     const call = Number(message.contentType ?? 0) === 6 ? parseCallHistory(message.raw) : undefined;
     const readCount = Math.max(0, Number((message.raw as any)?.readCount ?? 0));
     const editState = LineJsAdapter.talkMessageEditState(message.raw);
-    return stickerUrl || flex || rich || call || readCount > 0 || editState.edited
+    const durationMs = Number(message.contentType ?? 0) === 2 ? mediaDurationMs(message.raw) : undefined;
+    const chatEvent = Number(message.contentType ?? 0) === 18 ? chatEventPreview(message.raw) : undefined;
+    return stickerUrl || flex || rich || call || readCount > 0 || editState.edited || durationMs || chatEvent
       ? {
         ...message,
         ...(readCount > 0 ? { readCount } : {}),
@@ -3290,6 +3541,8 @@ function decorateStoredMessages(messages: DatabaseMessage[]): any[] {
         ...(flex ? { flex } : {}),
         ...(rich ? { rich } : {}),
         ...(call ? { call, text: callHistoryPreview(call) } : {}),
+        ...(durationMs ? { durationMs } : {}),
+        ...(chatEvent ? { text: chatEvent } : {}),
       }
       : message;
   });
@@ -5152,6 +5405,19 @@ function serverIdFromResult(value: unknown): string | undefined {
   return undefined;
 }
 
+function mentionContentMetadata(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const mention = (value as Record<string, unknown>).MENTION;
+  if (typeof mention !== "string" || mention.length > 8_000) return undefined;
+  try {
+    const parsed = JSON.parse(mention) as { MENTIONEES?: unknown };
+    if (!Array.isArray(parsed.MENTIONEES) || parsed.MENTIONEES.length === 0 || parsed.MENTIONEES.length > 50) return undefined;
+  } catch {
+    return undefined;
+  }
+  return { MENTION: mention };
+}
+
 async function sendRemoteMessage(record: OutboxRecord): Promise<unknown> {
   if (!client || (!record.text && record.contentType === 0)) throw new Error("not authenticated");
   const options = {
@@ -5744,6 +6010,7 @@ async function fetchLinkPreview(rawUrl: string): Promise<Record<string, unknown>
 function isCacheReadMethod(method: string): boolean {
   return method === "chat.list"
     || method === "chats.list"
+    || method === "chat.bots"
     || method === "friends.list"
     || method === "openchat.list"
     || method === "call.history"
@@ -5756,6 +6023,11 @@ async function serveCachedRequest(id: string, method: string, request: any): Pro
     const result = listCallHistory(Math.max(1, Math.min(Number(request?.params?.limit ?? 200), 500)));
     if (!result.length) return false;
     emit({ id, ok: true, result });
+    return true;
+  }
+
+  if (method === "chat.bots") {
+    emit({ id, ok: true, result: { chats: cachedOfficialAccountChats() } });
     return true;
   }
 
@@ -6213,6 +6485,16 @@ async function handle(request: any) {
       return;
     }
 
+    if (method === "chat.bots") {
+      emit({ id, ok: true, result: { chats: cachedOfficialAccountChats() } });
+      return;
+    }
+
+    if (method === "chat.official_accounts") {
+      emit({ id, ok: true, result: { chats: await loadOfficialAccountDirectory() } });
+      return;
+    }
+
     if (method === "chat.list" || method === "chats.list") {
       if (preSyncedChats) {
         const synced = preSyncedChats;
@@ -6643,6 +6925,57 @@ async function handle(request: any) {
       return;
     }
 
+    if (method === "media.video") {
+      if (!client) throw new Error("not authenticated");
+      const params = request?.params ?? {};
+      const messageId = String(params.messageId ?? "").trim();
+      const requestedChatId = String(params.chatId ?? "").trim();
+      const kind = String(params.kind ?? "talk") === "openchat" ? "openchat" : "talk";
+      if (!messageId) throw new Error("messageId is required");
+      const chatId = requestedChatId ? canonicalTalkChatId(requestedChatId, kind) : undefined;
+      const isSquare = kind === "openchat";
+      const cacheKey = `${ACCOUNT_ID}:${kind}:${messageId}`;
+      const url = `liney-media://video/${videoCacheToken(cacheKey)}`;
+      const stored = database.getMessageSource(
+        ACCOUNT_ID,
+        messageId,
+        chatId,
+        isSquare ? "openchat" : undefined,
+      );
+      if (stored && Number(stored.contentType) !== 2) throw new Error("ข้อความนี้ไม่ใช่วิดีโอ");
+
+      if (!params.refresh) {
+        const cached = await videoCache.get(cacheKey);
+        if (cached) {
+          emit({
+            id,
+            ok: true,
+            result: {
+              url,
+              size: cached.size,
+              durationMs: mediaDurationMs(stored?.raw),
+              cached: true,
+            },
+          });
+          return;
+        }
+      }
+
+      const fetched = await fetchMessageVideoBlob(messageId, isSquare, chatId);
+      const saved = await videoCache.put(cacheKey, fetched.blob);
+      emit({
+        id,
+        ok: true,
+        result: {
+          url,
+          size: saved.size,
+          durationMs: fetched.durationMs,
+          cached: false,
+        },
+      });
+      return;
+    }
+
     if (method === "media.file.download") {
       if (!client) throw new Error("not authenticated");
       const params = request?.params ?? {};
@@ -6731,6 +7064,7 @@ async function handle(request: any) {
       const localId = String(request?.params?.localId ?? crypto.randomUUID());
       const createdAt = Number(request?.params?.createdAt ?? Date.now());
       const relatedMessageId = String(request?.params?.relatedMessageId ?? "").trim() || undefined;
+      const contentMetadata = mentionContentMetadata(request?.params?.contentMetadata);
       if (!chatId || !text) throw new Error("chatId and text are required");
       if (database.getOutbox(ACCOUNT_ID, localId)) throw new Error("a message with this localId already exists");
       const record: OutboxRecord = {
@@ -6739,6 +7073,7 @@ async function handle(request: any) {
         kind,
         contentType: 0,
         text,
+        ...(contentMetadata ? { contentMetadata } : {}),
         fingerprint: messageFingerprint({
           chatId,
           kind,
@@ -6764,6 +7099,7 @@ async function handle(request: any) {
         createdTime: createdAt,
         contentType: 0,
         replyToId: relatedMessageId,
+        ...(contentMetadata ? { raw: { contentMetadata } } : {}),
         status: "sending",
       });
       const result = await sendOutbox(record);
@@ -7022,6 +7358,7 @@ async function handle(request: any) {
     if (method === "history.clear") {
       database.deleteHistory(ACCOUNT_ID);
       await mediaDiskCache.clear();
+      await videoCache.clear();
       await clearMediaUploadTemp();
       preSyncedMessages.clear();
       mediaPreviewCache.clear();

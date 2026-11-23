@@ -47,6 +47,73 @@ describe("parseRichMessage", () => {
     })?.actions).toBeUndefined();
   });
 
+  test("reads a Rich video URI, cover and clickable button", () => {
+    const result = parseRichMessage({
+      contentMetadata: {
+        DOWNLOAD_URL: "https://cdn.example.test/cover.jpg",
+        ALT_TEXT: "โปรโมชัน",
+        MARKUP_JSON: JSON.stringify({
+          canvas: { width: 1040, height: 1848, initialScene: "scene1" },
+          scenes: {
+            scene1: {
+              video: {
+                videoUri: "https://cdn.example.test/promo.mp4",
+                previewUri: "https://cdn.example.test/poster.jpg",
+                button: { label: "ติดต่อสอบถาม", linkUri: "https://line.me/R/ti/p/@test" },
+              },
+            },
+          },
+        }),
+      },
+    });
+
+    expect(result).toEqual({
+      imageUrl: "https://cdn.example.test/cover.jpg",
+      altText: "โปรโมชัน",
+      width: 1040,
+      height: 1848,
+      videoUrl: "https://cdn.example.test/promo.mp4",
+      videoPosterUrl: "https://cdn.example.test/poster.jpg",
+      videoButton: { label: "ติดต่อสอบถาม", link: "https://line.me/R/ti/p/@test" },
+    });
+  });
+
+  test("drops unsafe Rich video URLs and buttons", () => {
+    expect(parseRichMessage({
+      contentMetadata: {
+        DOWNLOAD_URL: "https://cdn.example.test/cover.jpg",
+        MARKUP_JSON: JSON.stringify({
+          canvas: { width: 100, height: 100 },
+          scenes: {
+            scene1: {
+              video: {
+                videoUri: "javascript:alert(1)",
+                button: { label: "เปิด", linkUri: "http://example.test/insecure" },
+              },
+            },
+          },
+        }),
+      },
+    })?.videoUrl).toBeUndefined();
+
+    expect(parseRichMessage({
+      contentMetadata: {
+        DOWNLOAD_URL: "https://cdn.example.test/cover.jpg",
+        MARKUP_JSON: JSON.stringify({
+          canvas: { width: 100, height: 100 },
+          scenes: {
+            scene1: {
+              video: {
+                videoUri: "https://cdn.example.test/promo.mp4",
+                button: { label: "เปิด", linkUri: "http://example.test/insecure" },
+              },
+            },
+          },
+        }),
+      },
+    })?.videoButton).toBeUndefined();
+  });
+
   test("accepts a wrapped message with JSON metadata", () => {
     const result = parseRichMessage({
       raw: {

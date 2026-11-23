@@ -19,9 +19,11 @@ import { isPermittedNavigation } from "./navigation.mjs";
 import { CONTENT_SECURITY_POLICY } from "./csp.mjs";
 import { normalizeExternalUrl } from "./external-links.mjs";
 import { autostartEntry } from "./autostart.mjs";
+import { handleLineyMediaRequest } from "./media-protocol.mjs";
 
 protocol.registerSchemesAsPrivileged([
-  {scheme:"lineyapp",privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}
+  {scheme:"lineyapp",privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}},
+  {scheme:"liney-media",privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}
 ]);
 const base = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(base, "..");
@@ -642,6 +644,12 @@ app.whenReady().then(async()=>{
       headers.set("Content-Security-Policy",CONTENT_SECURITY_POLICY);
     return new Response(response.body,{status:response.status,statusText:response.statusText,headers});
   });
+  // Locally cached chat videos. The engine writes <stateDir>/video-cache and
+  // hands the renderer only an opaque token, never a filesystem path.
+  protocol.handle("liney-media",(request)=>handleLineyMediaRequest({
+    request,
+    folder:path.join(stateDir,"video-cache"),
+  }));
   handleIpc("liney:engine:start",async()=>{await ensureEngine();return true;});
   handleIpc("liney:engine:request",async(_event,method,params,timeout)=>{
     await ensureEngine();

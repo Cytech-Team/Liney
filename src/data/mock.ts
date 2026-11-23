@@ -15,6 +15,7 @@ export type Chat = {
   accent: string;
   detail?: string;
   lastMessageTime?: number;
+  isOfficialAccount?: boolean;
   muted?: boolean;
   pinned?: boolean;
   favoriteTimestamp?: number;
@@ -72,12 +73,20 @@ export type RichMessageAction = {
   link: string;
 };
 
+export type RichMessageVideoButton = {
+  label: string;
+  link: string;
+};
+
 export type RichMessageData = {
   imageUrl: string;
   altText?: string;
   width?: number;
   height?: number;
   actions?: RichMessageAction[];
+  videoUrl?: string;
+  videoPosterUrl?: string;
+  videoButton?: RichMessageVideoButton;
 };
 
 export type Message = {
@@ -105,6 +114,7 @@ export type Message = {
   sendError?: string;
   createdTime?: number;
   contentType?: number;
+  durationMs?: number;
   senderId?: string;
   senderName?: string;
   senderAvatarUrl?: string;

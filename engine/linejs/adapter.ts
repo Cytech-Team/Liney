@@ -89,6 +89,7 @@ export const LineJsAdapter = {
   downloadMessageData,
   getContactsV2,
   getContacts,
+  getAllContactIds,
   fetchUsers,
   getFriendSyncDiagnostics,
   retryMissingFriendProfiles,
@@ -1520,4 +1521,16 @@ export async function getTargetProfiles(client: LineClient, mids: string[]) {
     },
   });
   return Array.isArray(response?.responses) ? response.responses : [];
+}
+
+/**
+ * Every contact MID on the account, including Official Accounts added as
+ * friends that have no chat box yet.
+ */
+export async function getAllContactIds(client: LineClient): Promise<string[]> {
+  const result = await (client as any).base.talk.getAllContactIds();
+  if (!Array.isArray(result)) return [];
+  return [...new Set(result
+    .map((mid: unknown) => String(mid ?? "").trim())
+    .filter((mid: string) => /^u[0-9a-f]{32}$/i.test(mid)))];
 }

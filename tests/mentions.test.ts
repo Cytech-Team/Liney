@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseMessageMentions } from "../src/lib/mentions";
+import { buildMentionMetadata, mentionQueryAt, parseMessageMentions } from "../src/lib/mentions";
 
 describe("parseMessageMentions", () => {
   test("parses user mentions from a JSON string", () => {
@@ -43,5 +43,73 @@ describe("parseMessageMentions", () => {
     expect(parseMessageMentions("hi", null)).toEqual([]);
     expect(parseMessageMentions("hi", { contentMetadata: { MENTION: "{oops" } })).toEqual([]);
     expect(parseMessageMentions("hi", { contentMetadata: { MENTION: { MENTIONEES: "nope" } } })).toEqual([]);
+  });
+});
+
+describe("buildMentionMetadata", () => {
+  const alice = "ub46aa22432a3b1193799b77c8e3bcd38";
+  const anna = "u294b828c79c5fa249e323313c97acd92";
+
+  test("resolves @Name tokens in an outgoing message to member mids", () => {
+    const metadata = buildMentionMetadata("hey @Alice how are you", [{ mid: alice, name: "Alice" }]);
+    expect(metadata).toBeDefined();
+    const raw = { contentMetadata: metadata };
+    expect(parseMessageMentions("hey @Alice how are you", raw)).toEqual([
+      { start: 4, end: 10, mid: alice },
+    ]);
+  });
+
+  test("prefers the longest name and ignores partial matches", () => {
+    const metadata = buildMentionMetadata("@Anna and @Ann", [
+      { mid: alice, name: "Ann" },
+      { mid: anna, name: "Anna" },
+    ]);
+    expect(parseMessageMentions("@Anna and @Ann", { contentMetadata: metadata })).toEqual([
+      { start: 0, end: 5, mid: anna },
+      { start: 10, end: 14, mid: alice },
+    ]);
+  });
+
+  test("tags every occurrence and supports UTF-16 offsets", () => {
+    const metadata = buildMentionMetadata("👍 @นัท @นัท", [{ mid: alice, name: "นัท" }]);
+    expect(parseMessageMentions("👍 @นัท @นัท", { contentMetadata: metadata })).toEqual([
+      { start: 3, end: 7, mid: alice },
+      { start: 8, end: 12, mid: alice },
+    ]);
+  });
+
+  test("tags Thai text typed without a space before @", () => {
+    const text = "สวัสดี@นัท";
+    const metadata = buildMentionMetadata(text, [{ mid: alice, name: "นัท" }]);
+    expect(parseMessageMentions(text, { contentMetadata: metadata })).toEqual([
+      { start: 6, end: 10, mid: alice },
+    ]);
+  });
+
+  test("ignores names that are missing, glued to other words, or not members", () => {
+    expect(buildMentionMetadata("hello", [{ mid: alice, name: "Alice" }])).toBeUndefined();
+    expect(buildMentionMetadata("email@Alice", [{ mid: alice, name: "Alice" }])).toBeUndefined();
+    expect(buildMentionMetadata("@Alice2", [{ mid: alice, name: "Alice" }])).toBeUndefined();
+    expect(buildMentionMetadata("@Alice", [{ mid: "invalid", name: "Alice" }])).toBeUndefined();
+    expect(buildMentionMetadata("@Alice", [])).toBeUndefined();
+  });
+});
+
+describe("mentionQueryAt", () => {
+  test("opens on @ and keeps the query while typing", () => {
+    expect(mentionQueryAt("@", 1)).toEqual({ start: 0, query: "" });
+    expect(mentionQueryAt("hi @Som", 7)).toEqual({ start: 3, query: "Som" });
+    expect(mentionQueryAt("hi @Som there", 7)).toEqual({ start: 3, query: "Som" });
+    expect(mentionQueryAt("(@Som", 5)).toEqual({ start: 1, query: "Som" });
+    expect(mentionQueryAt("สวัสดี @นัท", 11)).toEqual({ start: 7, query: "นัท" });
+    expect(mentionQueryAt("สวัสดี@นัท", 10)).toEqual({ start: 6, query: "นัท" });
+  });
+
+  test("stops at spaces, double @ and behind the caret", () => {
+    expect(mentionQueryAt("a@b", 3)).toEqual({ start: 1, query: "b" });
+    expect(mentionQueryAt("hi @Som chai", 12)).toBeNull();
+    expect(mentionQueryAt("hi @Som", 3)).toBeNull();
+    expect(mentionQueryAt("hello", 5)).toBeNull();
+    expect(mentionQueryAt("@@", 2)).toBeNull();
   });
 });

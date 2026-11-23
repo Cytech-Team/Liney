@@ -37,6 +37,18 @@ export function liveMessagePreview(message: MessagePreviewLike): string {
   }
 }
 
+/** Compact clock for video/audio badges: 0:07, 1:05, 1:02:03. */
+export function formatMediaDuration(durationMs: unknown): string {
+  const totalSeconds = Math.max(0, Math.round(Number(durationMs ?? 0) / 1_000));
+  if (!totalSeconds) return "";
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  const paddedSeconds = String(seconds).padStart(2, "0");
+  if (hours) return `${hours}:${String(minutes).padStart(2, "0")}:${paddedSeconds}`;
+  return `${minutes}:${paddedSeconds}`;
+}
+
 function formatCallDuration(durationMs: unknown): string {
   const totalSeconds = Math.max(0, Math.round(Number(durationMs ?? 0) / 1_000));
   if (!totalSeconds) return "";

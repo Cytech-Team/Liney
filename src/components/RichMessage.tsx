@@ -24,14 +24,23 @@ export function RichMessage({ data, onAction, messageId, chatId, kind, onOpenOri
   const { t } = useAppTranslation();
   const [imageStatus, setImageStatus] = useState<RemoteImageStatus>("loading");
   const [retry, setRetry] = useState(0);
+  const [videoFailed, setVideoFailed] = useState(false);
   const width = data.width && data.width > 0 ? data.width : undefined;
   const height = data.height && data.height > 0 ? data.height : undefined;
   const imageUrl = safeHttpsUrl(data.imageUrl);
+  const videoUrl = safeHttpsUrl(data.videoUrl ?? "");
+  const videoPosterUrl = safeHttpsUrl(data.videoPosterUrl ?? "") ?? imageUrl;
+  const videoButton = data.videoButton && safeHttpsUrl(data.videoButton.link)
+    ? { label: data.videoButton.label, link: safeHttpsUrl(data.videoButton.link)! }
+    : undefined;
+  const playingVideo = Boolean(videoUrl) && !videoFailed;
   const actions = (data.actions ?? []).filter((action) => (
     action.width > 0 && action.height > 0 && safeHttpsUrl(action.link)
   ));
   const artworkUnavailable = imageStatus === "failed" || !imageUrl;
-  const style = width && height && !artworkUnavailable ? { aspectRatio: `${width} / ${height}` } : undefined;
+  const style = width && height && !artworkUnavailable && !playingVideo
+    ? { aspectRatio: `${width} / ${height}` }
+    : undefined;
   const fallback = (
     <div className={`rich-message-fallback ${artworkUnavailable ? "rich-message-fallback-error" : ""}`}>
       <span>{artworkUnavailable ? t("ไม่สามารถโหลดภาพจาก LINE ได้") : t("กำลังโหลดรูปจาก LINE…")}</span>
@@ -48,8 +57,19 @@ export function RichMessage({ data, onAction, messageId, chatId, kind, onOpenOri
   );
 
   return (
-    <div className={`rich-message ${width && height && !artworkUnavailable ? "rich-message-canvas" : ""}`} style={style}>
-      {imageUrl ? (
+    <div className={`rich-message ${width && height && !artworkUnavailable && !playingVideo ? "rich-message-canvas" : ""}`} style={style}>
+      {playingVideo && videoUrl ? (
+        <video
+          className="rich-message-video"
+          src={videoUrl}
+          poster={videoPosterUrl}
+          controls
+          playsInline
+          preload="metadata"
+          aria-label={data.altText || "Rich video"}
+          onError={() => setVideoFailed(true)}
+        />
+      ) : imageUrl ? (
         <RemoteImage
           key={`${imageUrl}:${retry}`}
           src={imageUrl}
@@ -61,7 +81,27 @@ export function RichMessage({ data, onAction, messageId, chatId, kind, onOpenOri
           onStatus={setImageStatus}
         />
       ) : fallback}
-      {imageStatus === "loaded" && imageUrl ? actions.map((action, index) => {
+      {videoButton ? (
+        <button
+          type="button"
+          className="rich-message-video-button"
+          onClick={(event) => {
+            event.stopPropagation();
+            void onAction?.({ type: "uri", uri: videoButton.link });
+          }}
+        >{videoButton.label}</button>
+      ) : null}
+      {videoFailed && videoUrl ? (
+        <button
+          type="button"
+          className="rich-message-video-retry"
+          onClick={(event) => {
+            event.stopPropagation();
+            setVideoFailed(false);
+          }}
+        >{t("เล่นวิดีโออีกครั้ง")}</button>
+      ) : null}
+      {!playingVideo && imageStatus === "loaded" && imageUrl ? actions.map((action, index) => {
         const link = safeHttpsUrl(action.link);
         if (!link) return null;
         const regionStyle = width && height ? {

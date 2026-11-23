@@ -9,7 +9,7 @@ export const CONTENT_SECURITY_POLICY = [
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
-  "media-src 'self' data: blob: https:",
+  "media-src 'self' data: blob: https: liney-media:",
   "font-src 'self' data:",
   "connect-src 'self' https:",
   "worker-src 'self' blob:",

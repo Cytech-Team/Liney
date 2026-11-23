@@ -6,12 +6,20 @@ export type RichMessageAction = {
   link: string;
 };
 
+export type RichMessageVideoButton = {
+  label: string;
+  link: string;
+};
+
 export type RichMessageData = {
   imageUrl: string;
   altText?: string;
   width?: number;
   height?: number;
   actions?: RichMessageAction[];
+  videoUrl?: string;
+  videoPosterUrl?: string;
+  videoButton?: RichMessageVideoButton;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -110,6 +118,27 @@ export function parseRichMessage(raw: any): RichMessageData | undefined {
     actions.push({ x, y, width: actionWidth, height: actionHeight, link });
   }
 
+  // LINE OA video cards keep the playable MP4 outside `listeners`, under
+  // scenes[initialScene].video. The image above is only the cover artwork.
+  const video = asRecord(scene?.video);
+  const videoUrl = safeHttpsUrl(
+    video?.videoUri
+      ?? video?.videoUrl
+      ?? video?.uri,
+  );
+  const videoPosterUrl = safeHttpsUrl(
+    video?.previewUri
+      ?? video?.previewUrl,
+  );
+  const button = asRecord(video?.button);
+  const buttonLabel = stringValue(button?.label);
+  const buttonLink = safeHttpsUrl(
+    button?.linkUri
+      ?? button?.uri
+      ?? button?.url,
+  );
+  const videoButton = buttonLabel && buttonLink ? { label: buttonLabel, link: buttonLink } : undefined;
+
   const altText = stringValue(metadata.ALT_TEXT ?? metadata.altText);
   return {
     imageUrl,
@@ -117,5 +146,8 @@ export function parseRichMessage(raw: any): RichMessageData | undefined {
     ...(width ? { width } : {}),
     ...(height ? { height } : {}),
     ...(actions.length ? { actions } : {}),
+    ...(videoUrl ? { videoUrl } : {}),
+    ...(videoUrl && videoPosterUrl ? { videoPosterUrl } : {}),
+    ...(videoUrl && videoButton ? { videoButton } : {}),
   };
 }

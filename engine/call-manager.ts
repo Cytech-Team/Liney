@@ -48,6 +48,7 @@ type AudioDevice = {
   name: string;
   description: string;
   kind: "input" | "output";
+  isDefault: boolean;
 };
 
 // Route acquisition and the peer's ringing window are both part of
@@ -363,7 +364,7 @@ function listNativeAudioDevices(): { inputs: AudioDevice[]; outputs: AudioDevice
         const name = typeof record.name === "string" ? record.name : "";
         const description = typeof record.description === "string" ? record.description : name;
         if (!id || !name || !new RegExp("^" + kind + ":\\d+$").test(id)) return [];
-        return [{ id, name, description, kind }];
+        return [{ id, name, description, kind, isDefault: record.isDefault === true }];
       });
     };
     return {
@@ -586,6 +587,7 @@ class NativeAudioSink {
         targetMs: this.targetMs,
         bufferedMs: Math.round(this.queuedDurationMs),
         frameMs: Math.round(frameDurationMs),
+        device: this.target ?? "system-default",
       });
       this.playoutLoop = this.runPlayoutLoop().catch((error) => {
         this.playoutError = error instanceof Error ? error : new Error(String(error));
@@ -1928,6 +1930,7 @@ export class CallManager {
       }
     }
     this.outputTarget = target;
+    writeCallDiagnostic({ type: "audio_output_selected", device: target ?? "system-default" });
     await this.output?.setTarget(target);
     return target ? { target } : {};
   }
@@ -2002,7 +2005,7 @@ export class CallManager {
       },
     };
 
-    writeCallDiagnostic({ type: "audio_pipeline_start" });
+    writeCallDiagnostic({ type: "audio_pipeline_start", device: this.outputTarget ?? "system-default" });
     void session.sendStream(source, { signal: audioAbort.signal }).catch(fail);
     void session.receiveInto(output).catch(fail);
   }
@@ -2050,7 +2053,7 @@ export class CallManager {
       void this.stop("audio-failed");
     };
 
-    writeCallDiagnostic({ type: "audio_pipeline_start", result: "incoming-planet-rtp-clock" });
+    writeCallDiagnostic({ type: "audio_pipeline_start", result: "incoming-planet-rtp-clock", device: this.outputTarget ?? "system-default" });
 
     void (async () => {
       try {

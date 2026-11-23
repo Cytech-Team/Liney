@@ -27,6 +27,15 @@ export type DatabaseChat = {
   raw?: unknown;
 };
 
+export type OfficialAccountRow = {
+  mid: string;
+  name: string;
+  avatarUrl: string;
+  businessAccount: boolean;
+  botType: string;
+  updatedAt?: number;
+};
+
 export type DatabaseMessage = {
   id: string;
   chatId: string;
@@ -158,6 +167,16 @@ export class LineyDatabase {
         avatar_url TEXT NOT NULL DEFAULT '',
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (account_id, chat_id, member_id)
+      );
+      CREATE TABLE IF NOT EXISTS official_accounts (
+        account_id TEXT NOT NULL,
+        mid TEXT NOT NULL,
+        name TEXT NOT NULL DEFAULT '',
+        avatar_url TEXT NOT NULL DEFAULT '',
+        business_account INTEGER NOT NULL DEFAULT 0,
+        bot_type TEXT NOT NULL DEFAULT '',
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (account_id, mid)
       );
       CREATE TABLE IF NOT EXISTS messages (
         account_id TEXT NOT NULL,
@@ -1142,6 +1161,94 @@ export class LineyDatabase {
       sendError: row.send_error ? String(row.send_error) : undefined,
       raw: fromMessageJson(row.raw_json),
     };
+  }
+
+  getChatName(accountId: string, chatId: string): string {
+    const row = this.db.query(`
+      SELECT name FROM chats WHERE account_id = ? AND chat_id = ? LIMIT 1
+    `).get(accountId, chatId) as { name?: unknown } | null;
+    return String(row?.name ?? "").trim();
+  }
+
+  latestMessage(accountId: string, chatId: string): DatabaseMessage | null {
+    const row = this.db.query(`
+      SELECT messages.*, outbox.last_error AS send_error, outbox.filename AS outbox_filename
+      FROM messages
+      LEFT JOIN outbox
+        ON outbox.account_id = messages.account_id
+        AND outbox.chat_id = messages.chat_id
+        AND outbox.local_id = messages.id
+      WHERE messages.account_id = ? AND messages.chat_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM hidden_messages h
+          WHERE h.account_id = messages.account_id
+            AND h.chat_id = messages.chat_id
+            AND h.kind = messages.kind
+            AND h.message_id = messages.id
+        )
+      ORDER BY messages.created_time DESC, messages.id DESC
+      LIMIT 1
+    `).get(accountId, chatId) as Record<string, unknown> | null;
+    return row ? this.messageFromRow(row) : null;
+  }
+
+  chatHasOfficialMessages(accountId: string, chatId: string): boolean {
+    const row = this.db.query(`
+      SELECT 1 AS present
+      FROM messages
+      WHERE account_id = ? AND chat_id = ? AND is_official_account = 1
+      LIMIT 1
+    `).get(accountId, chatId) as { present?: unknown } | null;
+    return Boolean(row?.present);
+  }
+
+  listOfficialAccounts(accountId: string): OfficialAccountRow[] {
+    const rows = this.db.query(`
+      SELECT mid, name, avatar_url, business_account, bot_type, updated_at
+      FROM official_accounts
+      WHERE account_id = ?
+      ORDER BY name COLLATE NOCASE ASC
+    `).all(accountId) as Record<string, unknown>[];
+    return rows.map((row) => ({
+      mid: String(row.mid),
+      name: String(row.name ?? ""),
+      avatarUrl: String(row.avatar_url ?? ""),
+      businessAccount: Boolean(row.business_account),
+      botType: String(row.bot_type ?? ""),
+      updatedAt: Number(row.updated_at ?? 0),
+    }));
+  }
+
+  replaceOfficialAccounts(accountId: string, rows: OfficialAccountRow[]): void {
+    if (!rows.length) return;
+    const now = Date.now();
+    const statement = this.db.query(`
+      INSERT INTO official_accounts(account_id, mid, name, avatar_url, business_account, bot_type, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(account_id, mid) DO UPDATE SET
+        name = excluded.name,
+        avatar_url = excluded.avatar_url,
+        business_account = excluded.business_account,
+        bot_type = excluded.bot_type,
+        updated_at = excluded.updated_at
+    `);
+    this.transaction(() => {
+      const mids = rows.map((row) => row.mid);
+      const placeholders = mids.map(() => "?").join(", ");
+      this.db.query(`DELETE FROM official_accounts WHERE account_id = ? AND mid NOT IN (${placeholders})`)
+        .run(accountId, ...mids);
+      for (const row of rows) {
+        statement.run(
+          accountId,
+          row.mid,
+          row.name,
+          row.avatarUrl,
+          row.businessAccount ? 1 : 0,
+          row.botType,
+          now,
+        );
+      }
+    });
   }
 
   getMessageSource(

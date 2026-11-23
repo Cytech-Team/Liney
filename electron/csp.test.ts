@@ -33,6 +33,7 @@ describe("renderer content security policy", () => {
     expect(map.get("img-src")).toContain("blob:");
     expect(map.get("img-src")).toContain("data:");
     expect(map.get("media-src")).toContain("https:");
+    expect(map.get("media-src")).toContain("liney-media:");
     expect(map.get("style-src")).toContain("'unsafe-inline'");
   });
 

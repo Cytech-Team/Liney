@@ -30,6 +30,7 @@ Historical releases: https://github.com/evex-dev/linejs/releases?page=2
 | QR / password login, saved session and Secret Service | Implemented | Needs live regression per LINEJS release |
 | Talk / OpenChat, read/unread, reactions, undo send, stickers, emoji | Implemented/partial by operation | Check account/device capability; server behavior varies |
 | Offline SQLite, outbox, media caching, reconnection and sync | Liney implementation | Test separately from upstream |
+| Chat video playback | **New: click-to-load E2EE/OBS download, private `liney-media://` cache with Range; OA Rich video MP4 plays directly** | Incoming video + duration; outgoing media still capped at 25 MB; live playback needs device validation |
 | Letter Sealing (text/media), key import / recovery | Implemented with guards | Verify on test accounts; do not silently regenerate mismatched keys |
 | Album/Moa listing, photo lists, on-demand still image preview | **New: read-only client UI and RPC** | Synthetic tests pass; live service unverified |
 | VOOM / Timeline feed | Native modal + read RPC | Parses LINEJS `result` payload; live compatibility unverified |
@@ -39,6 +40,7 @@ Historical releases: https://github.com/evex-dev/linejs/releases?page=2
 | Own profile | Native Settings tab: name/status/avatar upload | Uses LINEJS high-level APIs; live upload unverified |
 | E2EE failed-message recovery | SQLite pending lookup + retry after QR keychain import | Best-effort retry of locally retained ciphertext, not guaranteed recoverability |
 | Outgoing 1:1 calls, incoming audio answer | Experimental | Verify actual PLANET/Opus and audio device behavior |
+| Call audio output routing | **New: remembers the chosen speaker and auto-prefers a USB/headset output when no choice exists** | Prevents silent calls when PipeWire's default sink is an HDMI monitor; live device validation pending |
 | Group audio / LiveTalk | Protocol primitives only | No unconditional user capability claim |
 | Video Call / Screen Sharing | Experimental Liney native code | Not guaranteed by upstream LINEJS APIs |
 | LIFF / premium / account management / payments | Not automatically exposed | LIFF requires app-specific consent and context; payments are not generic desktop chat controls |
