@@ -33,7 +33,7 @@
     "build:flatpak": "sh scripts/build-flatpak.sh"
   },
   "dependencies": {
-    "@evex/linejs": "npm:@jsr/evex__linejs@3.6.5",
+    "@evex/linejs": "npm:@jsr/evex__linejs@3.6.9",
     "@tanstack/react-virtual": "^3.14.13",
     "argparse": "^2.0.1",
     "builder-util-runtime": "9.7.0",
